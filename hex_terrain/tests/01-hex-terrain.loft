@@ -1,0 +1,212 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// hex_terrain: hydrology, relief compounding, river attachment + meander,
+// carving, and THE window-independence invariant (samples re-derived from a
+// rebuilt world are identical).
+use hex_terrain;
+
+// Indices into the test's type table.
+SEA = 0;
+LAKE = 1;
+PLAIN = 2;
+HILL = 3;
+ROCK = 4;
+
+fn test_types() -> vector<hex_terrain::TerrainType> {
+  ts: vector<hex_terrain::TerrainType> = [];
+  ts += [hex_terrain::TerrainType { tt_key: "sea", tt_rise: 0.0, tt_steep: 1.5, tt_wet: true }];
+  ts += [hex_terrain::TerrainType { tt_key: "lake", tt_rise: 0.0, tt_steep: 2.0, tt_wet: true }];
+  ts += [hex_terrain::TerrainType { tt_key: "plain", tt_rise: 10.0, tt_steep: 2.5, tt_wet: false }];
+  ts += [hex_terrain::TerrainType { tt_key: "hill", tt_rise: 80.0, tt_steep: 50.0, tt_wet: false }];
+  ts += [hex_terrain::TerrainType { tt_key: "rock", tt_rise: 140.0, tt_steep: 98.0, tt_wet: false }];
+  ts
+}
+
+// A small deterministic island: radial falloff + fbm + one massif, sea rim.
+// The continent recipe is CALLER side (content); the lib provides mechanism.
+fn build_world(seed: integer) -> (hex_terrain::Terrain, hex_terrain::TerrainParams) {
+  p = hex_terrain::terrain_params(seed, 400.0);
+  p.tp_acc_min = 3.0;
+  nx = 16;
+  ny = 13;
+  t = hex_terrain::terrain_new(nx, ny);
+  th = t.tr_h;
+  tmo = t.tr_moist;
+  ww = (nx as float) * 400.0;
+  wh = ((ny as float) * 1.5 * 400.0 / hex_terrain::SQRT3) ?? 0.0;
+  for r in 0..ny {
+    for c in 0..nx {
+      (x, y) = hex_terrain::terrain_center(p, c, r);
+      n = hex_terrain::terrain_fbm(seed, x, y, 3200.0, 4, 7);
+      dx = ((x - ww * 0.45) / (ww * 0.42)) ?? 0.0;
+      dy = ((y - wh * 0.5) / (wh * 0.46)) ?? 0.0;
+      rad = sqrt(dx * dx + dy * dy);
+      gx = ((x - ww * 0.35) / (ww * 0.2)) ?? 0.0;
+      gy = ((y - wh * 0.42) / (wh * 0.3)) ?? 0.0;
+      g = exp(0.0 - gx * gx - gy * gy);
+      i = hex_terrain::terrain_idx(t, c, r);
+      if i < len(th) {
+        th[i] = 170.0 * n + 90.0 - 480.0 * pow(rad, 2.4) + 520.0 * g;
+      }
+      if i < len(tmo) {
+        tmo[i] = 0.5;
+      }
+    }
+  }
+  hex_terrain::terrain_hydrology(t, p, LAKE);
+  // classify land (caller content): sea by height, lakes already set
+  tmat = t.tr_mat;
+  for ci in 0..nx * ny {
+    if ci < len(tmat) {
+      if (th[ci] ?? 0.0) <= p.tp_sea {
+        tmat[ci] = SEA;
+      } else {
+        if (tmat[ci] ?? 0) != LAKE {
+          if (th[ci] ?? 0.0) > 320.0 {
+            tmat[ci] = ROCK;
+          } else {
+            if (th[ci] ?? 0.0) > 160.0 {
+              tmat[ci] = HILL;
+            } else {
+              tmat[ci] = PLAIN;
+            }
+          }
+        }
+      }
+    }
+  }
+  hex_terrain::terrain_relief_pass(t, test_types(), p);
+  (t, p)
+}
+
+fn main() {
+  println("=== hex_terrain package test ===");
+  (t, p) = build_world(1337);
+  types = test_types();
+
+  // 1) HYDROLOGY: after the flood every land cell drains (flow >= 0) and
+  //    following the flow strictly descends to the sea — no pits, no cycles.
+  land = 0;
+  drains = true;
+  descends = true;
+  for r in 0..t.tr_ny {
+    for c in 0..t.tr_nx {
+      i = hex_terrain::terrain_idx(t, c, r);
+      edge = c == 0 || r == 0 || c == t.tr_nx - 1 || r == t.tr_ny - 1;
+      if (t.tr_h[i] ?? 0.0) > p.tp_sea && !edge {
+        land = land + 1;
+        if (t.tr_flow[i] ?? -1) < 0 { drains = false; }
+        if (t.tr_flow[i] ?? -1) >= 0 {
+          (nc, nr) = hex_terrain::terrain_flow_to(t, c, r);
+          if (t.tr_h[nr * t.tr_nx + nc] ?? 0.0) >= (t.tr_h[i] ?? 0.0) { descends = false; }
+        }
+      }
+    }
+  }
+  assert(land > 30, "the island has a real interior ({land} land cells)");
+  assert(drains, "every interior land cell has a flow direction (pits filled)");
+  assert(descends, "flow strictly descends on the filled surface");
+
+  // 2) RELIEF: wet cells contribute zero; some land cell carries real relief.
+  relmax = 0.0;
+  wetzero = true;
+  for wi in 0..t.tr_nx * t.tr_ny {
+    if (t.tr_wet[wi] ?? false) && (t.tr_relief[wi] ?? 0.0) != 0.0 { wetzero = false; }
+    relmax = max(relmax, t.tr_relief[wi] ?? 0.0);
+  }
+  assert(wetzero, "water-flow cells blend ZERO relief (they cut deep for free)");
+  assert(relmax > 40.0, "the massif carries compounded relief ({relmax})");
+
+  // 3) RIVERS exist, never run straight, and ATTACH to the shoreline.
+  rivers = hex_terrain::terrain_rivers(t, types, p);
+  assert(len(rivers) >= 1, "at least one river course ({len(rivers)})");
+  crooked = true;
+  attached = true;
+  for ri in 0..len(rivers) {
+    rv = rivers[ri];
+    n = len(rv.rv_x);
+    pathlen = 0.0;
+    for k in 0..n - 1 {
+      ddx = (rv.rv_x[k + 1] ?? 0.0) - (rv.rv_x[k] ?? 0.0);
+      ddy = (rv.rv_y[k + 1] ?? 0.0) - (rv.rv_y[k] ?? 0.0);
+      pathlen = pathlen + sqrt(ddx * ddx + ddy * ddy);
+    }
+    sx = (rv.rv_x[n - 1] ?? 0.0) - (rv.rv_x[0] ?? 0.0);
+    sy = (rv.rv_y[n - 1] ?? 0.0) - (rv.rv_y[0] ?? 0.0);
+    straight = sqrt(sx * sx + sy * sy);
+    if pathlen < straight * 1.02 { crooked = false; }
+    // the LAST vertex sits ON the water line: just beyond it (extrapolate the
+    // final segment a few meters) is water, while the vertex itself is land.
+    ex = (rv.rv_x[n - 1] ?? 0.0) - (rv.rv_x[n - 2] ?? 0.0);
+    ey = (rv.rv_y[n - 1] ?? 0.0) - (rv.rv_y[n - 2] ?? 0.0);
+    el = sqrt(ex * ex + ey * ey);
+    if el > 0.001 {
+      bx = (rv.rv_x[n - 1] ?? 0.0) + ((ex / el) ?? 0.0) * 4.0;
+      by = (rv.rv_y[n - 1] ?? 0.0) + ((ey / el) ?? 0.0) * 4.0;
+      ax = (rv.rv_x[n - 1] ?? 0.0) - ((ex / el) ?? 0.0) * 4.0;
+      ay = (rv.rv_y[n - 1] ?? 0.0) - ((ey / el) ?? 0.0) * 4.0;
+      if !hex_terrain::terrain_water_at(t, types, p, bx, by) { attached = false; }
+      if hex_terrain::terrain_water_at(t, types, p, ax, ay) { attached = false; }
+    }
+  }
+  assert(crooked, "rivers never go straight (fractal course)");
+  assert(attached, "every course end lies ON the shoreline (trim + bisection)");
+
+  // 4) CARVING: at a mid-course vertex the carved height is below the
+  //    pre-carve surface, and the vertex reads as water (river or flooded).
+  rv0 = rivers[0];
+  mid = (len(rv0.rv_x) / 2) ?? 0;
+  mx = rv0.rv_x[mid] ?? 0.0;
+  my = rv0.rv_y[mid] ?? 0.0;
+  sf = hex_terrain::terrain_surface_at(t, types, p, mx, my);
+  smp = hex_terrain::terrain_sample(t, types, p, rivers, mx, my);
+  assert(smp.ts_h < sf.sf_h, "the course carves its valley ({smp.ts_h} < {sf.sf_h})");
+  assert(smp.ts_water != 0, "the course centerline is water (kind {smp.ts_water})");
+
+  // 5) RISE and STEEP are independent: with both zero the fine height equals
+  //    the coarse blend exactly; steep alone adds detail, rise alone needs relief.
+  flat: vector<hex_terrain::TerrainType> = [];
+  flat += [hex_terrain::TerrainType { tt_key: "sea", tt_rise: 0.0, tt_steep: 1.5, tt_wet: true }];
+  flat += [hex_terrain::TerrainType { tt_key: "lake", tt_rise: 0.0, tt_steep: 2.0, tt_wet: true }];
+  flat += [hex_terrain::TerrainType { tt_key: "plain", tt_rise: 0.0, tt_steep: 0.0, tt_wet: false }];
+  flat += [hex_terrain::TerrainType { tt_key: "hill", tt_rise: 0.0, tt_steep: 0.0, tt_wet: false }];
+  flat += [hex_terrain::TerrainType { tt_key: "rock", tt_rise: 0.0, tt_steep: 0.0, tt_wet: false }];
+  (qx, qy) = hex_terrain::terrain_center(p, 7, 6);
+  sf0 = hex_terrain::terrain_surface_at(t, flat, p, qx + 13.0, qy + 7.0);
+  assert(abs(sf0.sf_h - sf0.sf_blend) < 0.0000001,
+         "rise 0 + steep 0 -> fine height == the coarse blend");
+  sfr = hex_terrain::terrain_surface_at(t, types, p, qx + 13.0, qy + 7.0);
+  assert(sfr.sf_h != sf0.sf_blend || sfr.sf_relief == 0.0,
+         "the tuning numbers shape the surface");
+
+  // 6) THE INVARIANT: rebuild the whole world from the same seed — samples at
+  //    arbitrary points are IDENTICAL (pure functions all the way down).
+  (t2, p2) = build_world(1337);
+  rivers2 = hex_terrain::terrain_rivers(t2, types, p2);
+  same = true;
+  for k in 0..5 {
+    px = 900.0 + (k as float) * 731.0;
+    py = 700.0 + (k as float) * 577.0;
+    a = hex_terrain::terrain_sample(t, types, p, rivers, px, py);
+    b = hex_terrain::terrain_sample(t2, types, p2, rivers2, px, py);
+    if a.ts_h != b.ts_h || a.ts_mat != b.ts_mat || a.ts_water != b.ts_water {
+      same = false;
+    }
+  }
+  assert(same, "window independence: re-derived samples are byte-identical");
+
+  // 7) DIFFERENT SEED -> a different world (the seed actually steers).
+  (t3, p3) = build_world(99);
+  r3 = hex_terrain::terrain_rivers(t3, types, p3);
+  diff = false;
+  for k in 0..5 {
+    px = 900.0 + (k as float) * 731.0;
+    py = 700.0 + (k as float) * 577.0;
+    a = hex_terrain::terrain_sample(t, types, p, rivers, px, py);
+    b = hex_terrain::terrain_sample(t3, types, p3, r3, px, py);
+    if a.ts_h != b.ts_h { diff = true; }
+  }
+  assert(diff, "a different seed builds a different world");
+
+  println("=== HEX_TERRAIN OK ===");
+}

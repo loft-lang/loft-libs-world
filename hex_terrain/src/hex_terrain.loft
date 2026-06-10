@@ -1,0 +1,955 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// hex_terrain — the OVERLAND terrain layer of the hex_* family.
+//
+// A coarse overland hex lattice (one cell ~ hundreds of meters, the moros
+// convention via hex_grid) is the terrain AUTHORITY; the fine, walked world is
+// derived from it by pure functions.  Ported from the user-tuned Python
+// blueprint (crawler: OVERLAND.md + tools/overland_blueprint.py).  The model:
+//
+//  * CELLS carry height / material / moisture / water-flow direction +
+//    accumulation / relief — the same record shape at every scale.
+//  * SEAMLESS MERGE: continuous fields at a fine point are a smooth kernel
+//    blend of the overland cells around it — two adjacent tiles merge by
+//    construction, no stitching anywhere.
+//  * TERRAIN TYPES are content: each has TWO independent numbers — RISE (the
+//    general lift it takes from tile relief) and STEEP (its internal detail
+//    jaggedness, which also decides who WINS a boundary: steeper wins).
+//    Between any two types runs a crisp fractal LINE, not a wide crossfade.
+//  * RELIEF: a cell's relief = its max height delta to neighbors, COMPOUNDED
+//    by how many neighbors are steep; water-flow cells contribute ZERO relief,
+//    so the dry land rises around the rivers and they cut deep for free.
+//  * RIVERS: coarse hydrology (priority-flood fill, steepest descent, flow
+//    accumulation) gives the truth; the geometry is three levels of diversity:
+//    a canonical left/right EDGE BIT per shared edge (never exits mid-side),
+//    a hash-jittered interior CONTROL point per tile (confluences for free),
+//    then fractal midpoint displacement whose amplitude GROWS as the land
+//    flattens toward the sea.  Courses are TRIMMED to attach exactly to the
+//    sea/lake shorelines.  Every course carves its own valley (additive;
+//    slope-shaped: gorges in steep land, wide floodplains on the flats) and a
+//    near-sea-level depth bonus floods the carved mouth: the sea comes inland.
+//
+// THE INVARIANT (window independence): every sampled value is a pure function
+// of (terrain data, params, types, x, y).  No hidden state, no sequential RNG,
+// no raster propagation — the package's tests re-derive samples from scratch
+// and assert equality.
+//
+// Style: globally-unique pub names (terrain_*); pre-allocated vectors with
+// index writes for hot data; no struct-literal comprehensions (loft#319); no
+// capture-append-reassign on struct fields (loft#320).
+
+use hex_grid;
+
+// ── Tuning records ─────────────────────────────────────────────────────────
+
+// One terrain type = content (a bundle row in the consuming game).
+// tt_rise and tt_steep are INDEPENDENT; tt_wet marks water bodies (sea/lake):
+// they take no relief and no boundary contest.
+pub struct TerrainType {
+  tt_key:   text not null,
+  tt_rise:  float not null,   // m of ridge lift at the 100 m reference relief
+  tt_steep: float not null,   // m of detail amplitude; sqrt(steep) wins boundaries
+  tt_wet:   boolean not null,
+}
+
+// Algorithm parameters (engine side).  terrain_params() gives the blueprint's
+// user-tuned defaults; every field is meters unless noted.
+pub struct TerrainParams {
+  tp_seed:        integer not null,
+  tp_tile:        float not null,    // overland hex pitch
+  tp_sea:         float not null,    // sea level
+  tp_lake_fill:   float not null,    // flood-fill raise that makes a cell a lake
+  tp_acc_min:     float not null,    // accumulation (tiles) before a stream is a river
+  tp_meander:     float not null,    // fractal displacement strength K
+  tp_seg_min:     float not null,    // stop subdividing below this segment length
+  tp_nb_base:     float not null,    // relief multiplier with zero steep neighbors
+  tp_nb_boost:    float not null,    // ADDED per steep neighbor (compounding)
+  tp_steep_delta: float not null,    // neighbor height delta that counts as steep
+  tp_carve_max:   float not null,    // max single-course valley depth
+  tp_valley_w:    float not null,    // smallest valley falloff width
+  tp_valley_max:  float not null,    // biggest river's falloff width
+  tp_detail_wl:   float not null,    // detail-noise base wavelength
+  tp_ridge_wl:    float not null,    // ridge-field wavelength (peaks COMBINE)
+  tp_warp:        float not null,    // domain-warp displacement of the detail
+}
+
+pub fn terrain_params(seed: integer, tile: float) -> TerrainParams {
+  TerrainParams { tp_seed: seed, tp_tile: tile, tp_sea: 0.0, tp_lake_fill: 4.0,
+    tp_acc_min: 6.0, tp_meander: 0.34, tp_seg_min: 28.0,
+    tp_nb_base: 0.6, tp_nb_boost: 0.2, tp_steep_delta: 60.0,
+    tp_carve_max: 22.0, tp_valley_w: 46.0, tp_valley_max: 130.0,
+    tp_detail_wl: 420.0, tp_ridge_wl: 950.0, tp_warp: 240.0 }
+}
+
+// ── The overland lattice ───────────────────────────────────────────────────
+
+// Parallel per-cell vectors, index = r * tr_nx + c (odd-r offset coords).
+pub struct Terrain {
+  tr_nx:     integer not null,
+  tr_ny:     integer not null,
+  tr_h:      vector<float> not null,   // height (m); after hydrology = the FILLED surface
+  tr_mat:    vector<integer> not null, // index into the caller's TerrainType vector
+  tr_moist:  vector<float> not null,
+  tr_flow:   vector<integer> not null, // steepest-descent neighbor dir 0..5, -1 = none
+  tr_acc:    vector<float> not null,   // flow accumulation (tiles)
+  tr_relief: vector<float> not null,   // compounded neighbor relief (0 on wet cells)
+  tr_wet:    vector<boolean> not null, // water-flow cell: wet material OR river acc
+}
+
+pub fn terrain_new(nx: integer, ny: integer) -> Terrain {
+  h: vector<float> = [];
+  mat: vector<integer> = [];
+  moist: vector<float> = [];
+  flow: vector<integer> = [];
+  acc: vector<float> = [];
+  relief: vector<float> = [];
+  wet: vector<boolean> = [];
+  for _ in 0..nx * ny {
+    h += [0.0];
+    mat += [0];
+    moist += [0.5];
+    flow += [-1];
+    acc += [1.0];
+    relief += [0.0];
+    wet += [false];
+  }
+  Terrain { tr_nx: nx, tr_ny: ny, tr_h: h, tr_mat: mat, tr_moist: moist,
+            tr_flow: flow, tr_acc: acc, tr_relief: relief, tr_wet: wet }
+}
+
+pub fn terrain_idx(t: Terrain, c: integer, r: integer) -> integer {
+  r * t.tr_nx + c
+}
+
+// Cell center in world meters — hex_grid's odd-r lattice scaled so the
+// horizontal pitch equals tp_tile (hex_grid's unit pitch is SQRT3).
+pub fn terrain_center(p: TerrainParams, c: integer, r: integer) -> (float, float) {
+  (hx, hy) = hex_to_px(c, r);
+  s = p.tp_tile / SQRT3;
+  (hx * s, hy * s)
+}
+
+// The downstream cell of (c, r) — itself when it has no flow direction.
+pub fn terrain_flow_to(t: Terrain, c: integer, r: integer) -> (integer, integer) {
+  d = t.tr_flow[r * t.tr_nx + c] ?? -1;
+  if d < 0 {
+    return (c, r);
+  }
+  hex_neighbor(c, r, d)
+}
+
+// ── Hashed noise (deterministic, overflow-trap-safe) ───────────────────────
+// Every intermediate stays under 2^31 via masks, so products stay < 2^63.
+
+fn th_hash(seed: integer, ix: integer, iy: integer, ch: integer) -> integer {
+  a = (ix * 73856093) & 0x7FFFFFFF;
+  b = (iy * 19349663) & 0x7FFFFFFF;
+  c = (ch * 83492791) & 0x7FFFFFFF;
+  s = (seed * 1597334677) & 0x7FFFFFFF;
+  n = a ^ b ^ c ^ s;
+  n = n ^ (n >> 13);
+  n = (n * 1274126177) & 0x7FFFFFFF;
+  n ^ (n >> 16)
+}
+
+pub fn terrain_hash01(seed: integer, ix: integer, iy: integer, ch: integer) -> float {
+  (th_hash(seed, ix, iy, ch) & 0x7FFFFFFF) as float / 2147483648.0
+}
+
+pub fn terrain_vnoise(seed: integer, x: float, y: float, wl: float, ch: integer) -> float {
+  u = (x / wl) ?? 0.0;
+  v = (y / wl) ?? 0.0;
+  fu = floor(u);
+  fv = floor(v);
+  iu = fu as integer;
+  iv = fv as integer;
+  du = u - fu;
+  dv = v - fv;
+  su = du * du * (3.0 - 2.0 * du);
+  sv = dv * dv * (3.0 - 2.0 * dv);
+  a = terrain_hash01(seed, iu, iv, ch);
+  b = terrain_hash01(seed, iu + 1, iv, ch);
+  c = terrain_hash01(seed, iu, iv + 1, ch);
+  d = terrain_hash01(seed, iu + 1, iv + 1, ch);
+  (a * (1.0 - su) + b * su) * (1.0 - sv) + (c * (1.0 - su) + d * su) * sv
+}
+
+// Fractal sum, roughly in [-1, 1].
+pub fn terrain_fbm(seed: integer, x: float, y: float, wl0: float, octaves: integer, ch: integer) -> float {
+  out = 0.0;
+  amp = 1.0;
+  wl = wl0;
+  tot = 0.0;
+  for o in 0..octaves {
+    out = out + amp * (terrain_vnoise(seed, x, y, wl, ch * 16 + o) * 2.0 - 1.0);
+    tot = tot + amp;
+    amp = amp * 0.5;
+    wl = wl * 0.5;
+  }
+  (out / tot) ?? 0.0
+}
+
+// Detail noise with DOMAIN WARP (the sampling space is swirled by a second
+// noise so the value-noise lattice never reads as a repeating pattern).
+pub fn terrain_detail_at(p: TerrainParams, x: float, y: float) -> float {
+  wx = terrain_fbm(p.tp_seed, x, y, 700.0, 2, 80);
+  wy = terrain_fbm(p.tp_seed, x, y, 700.0, 2, 81);
+  terrain_fbm(p.tp_seed, x + p.tp_warp * wx, y + p.tp_warp * wy, p.tp_detail_wl, 8, 3)
+}
+
+// LOW-frequency ridged field, crest-sharpened: roughly ONE combined crest per
+// steep zone — peaks consolidate into ridgelines instead of speckling.
+pub fn terrain_ridge_at(p: TerrainParams, x: float, y: float) -> float {
+  wx = terrain_fbm(p.tp_seed, x, y, 1500.0, 2, 84);
+  wy = terrain_fbm(p.tp_seed, x, y, 1500.0, 2, 85);
+  r = 1.0 - abs(terrain_fbm(p.tp_seed, x + 300.0 * wx, y + 300.0 * wy, p.tp_ridge_wl, 2, 86));
+  r * r * r
+}
+
+// ── Hydrology on the lattice ───────────────────────────────────────────────
+
+// PRIORITY-FLOOD pit fill + steepest-descent flow + accumulation.  After this
+// every land cell drains to the sea; cells the flood raised by more than
+// tp_lake_fill become lakes (material set to lake_mat).  Selection-based
+// flood (O(n^2)) — overland grids are small and this runs once at gen time.
+pub fn terrain_hydrology(t: Terrain, p: TerrainParams, lake_mat: integer) {
+  nx = t.tr_nx;
+  ny = t.tr_ny;
+  n = nx * ny;
+  th = t.tr_h;        // aliases: index-writes through locals (the checker's idiom)
+  tm = t.tr_mat;
+  tf = t.tr_flow;
+  ta = t.tr_acc;
+  orig: vector<float> = [];
+  level: vector<float> = [];
+  state: vector<integer> = [];   // 0 = untouched, 1 = open, 2 = closed
+  for i in 0..n {
+    orig += [th[i] ?? 0.0];
+    level += [1.0e18];
+    state += [0];
+  }
+  for r in 0..ny {
+    for c in 0..nx {
+      i = r * nx + c;
+      edge = c == 0 || r == 0 || c == nx - 1 || r == ny - 1;
+      seeded = edge;
+      if (th[i] ?? 0.0) <= p.tp_sea {
+        seeded = true;
+      }
+      if seeded {
+        if i < len(level) {
+          level[i] = th[i] ?? 0.0;
+        }
+        if i < len(state) {
+          state[i] = 1;
+        }
+      }
+    }
+  }
+  done = false;
+  while !done {
+    best = -1;
+    bl = 1.0e18;
+    for i in 0..n {
+      if (state[i] ?? 2) == 1 && (level[i] ?? 1.0e18) < bl {
+        bl = level[i] ?? 1.0e18;
+        best = i;
+      }
+    }
+    if best < 0 {
+      done = true;
+    } else {
+      if best < len(state) { state[best] = 2; }
+      bc = (best % nx) ?? 0;
+      br = ((best - bc) / nx) ?? 0;
+      for d in 0..6 {
+        (nc, nr) = hex_neighbor(bc, br, d);
+        if nc >= 0 && nc < nx && nr >= 0 && nr < ny {
+          j = nr * nx + nc;
+          if (state[j] ?? 2) != 2 {
+            nl = max(orig[j] ?? 0.0, bl + 0.05);
+            if nl < (level[j] ?? 1.0e18) {
+              if j < len(level) {
+                level[j] = nl;
+              }
+            }
+            if j < len(state) {
+              state[j] = 1;
+            }
+          }
+        }
+      }
+    }
+  }
+  for i in 0..n {
+    if i < len(th) {
+      th[i] = level[i] ?? 0.0;
+    }
+    raised = (level[i] ?? 0.0) > (orig[i] ?? 0.0) + p.tp_lake_fill;
+    if raised && (level[i] ?? 0.0) > p.tp_sea {
+      if i < len(tm) {
+        tm[i] = lake_mat;
+      }
+    }
+  }
+  // steepest-descent flow on the filled surface — no pits remain
+  for r in 0..ny {
+    for c in 0..nx {
+      i = r * nx + c;
+      if i < len(tf) { tf[i] = -1; }
+      if i < len(ta) { ta[i] = 1.0; }
+      if (th[i] ?? 0.0) > p.tp_sea {
+        bh = th[i] ?? 0.0;
+        bi = -1;
+        for d in 0..6 {
+          (nc, nr) = hex_neighbor(c, r, d);
+          if nc >= 0 && nc < nx && nr >= 0 && nr < ny && (th[nr * nx + nc] ?? 1.0e18) < bh {
+            bh = th[nr * nx + nc] ?? 0.0;
+            bi = d;
+          }
+        }
+        if i < len(tf) { tf[i] = bi; }
+      }
+    }
+  }
+  // accumulation: high cells drain first (selection over a worklist)
+  taken: vector<boolean> = [];
+  for _ in 0..n {
+    taken += [false];
+  }
+  for _ in 0..n {
+    best = -1;
+    bh = 0.0 - 1.0e18;
+    for i in 0..n {
+      if !(taken[i] ?? true) && (th[i] ?? 0.0) > bh {
+        bh = th[i] ?? 0.0;
+        best = i;
+      }
+    }
+    if best >= 0 {
+      if best < len(taken) { taken[best] = true; }
+      bc = (best % nx) ?? 0;
+      br = ((best - bc) / nx) ?? 0;
+      bi = tf[best] ?? -1;
+      if bi >= 0 && (th[best] ?? 0.0) > p.tp_sea {
+        (nc, nr) = hex_neighbor(bc, br, bi);
+        if nc >= 0 && nc < nx && nr >= 0 && nr < ny {
+          j = nr * nx + nc;
+          if j < len(ta) {
+            ta[j] = (ta[j] ?? 1.0) + (ta[best] ?? 1.0);
+          }
+        }
+      }
+    }
+  }
+}
+
+// Wet flags + the compounded neighbor relief.  Call AFTER the caller has
+// classified land materials (relief reads the final wet set).
+pub fn terrain_relief_pass(t: Terrain, types: vector<TerrainType>, p: TerrainParams) {
+  nx = t.tr_nx;
+  ny = t.tr_ny;
+  tw = t.tr_wet;
+  tl = t.tr_relief;
+  for r in 0..ny {
+    for c in 0..nx {
+      i = r * nx + c;
+      wetmat = false;
+      mi = t.tr_mat[i] ?? 0;
+      if mi < len(types) {
+        ty = types[mi];
+        if ty != null {
+          wetmat = ty.tt_wet;
+        }
+      }
+      if i < len(tw) {
+        tw[i] = wetmat || (t.tr_h[i] ?? 0.0) <= p.tp_sea
+             || (t.tr_acc[i] ?? 1.0) >= p.tp_acc_min;
+      }
+    }
+  }
+  for r in 0..ny {
+    for c in 0..nx {
+      i = r * nx + c;
+      if i < len(tl) { tl[i] = 0.0; }
+      if !(t.tr_wet[i] ?? false) {
+        m = 0.0;
+        nsteep = 0;
+        for d in 0..6 {
+          (nc, nr) = hex_neighbor(c, r, d);
+          if nc >= 0 && nc < nx && nr >= 0 && nr < ny {
+            dh = abs((t.tr_h[i] ?? 0.0) - (t.tr_h[nr * nx + nc] ?? 0.0));
+            m = max(m, dh);
+            if dh > p.tp_steep_delta {
+              nsteep = nsteep + 1;
+            }
+          }
+        }
+        if i < len(tl) {
+          tl[i] = m * (p.tp_nb_base + p.tp_nb_boost * (nsteep as float));
+        }
+      }
+    }
+  }
+}
+
+// ── The seamless kernel blend ──────────────────────────────────────────────
+
+// One blended surface record at a fine point.
+pub struct TerrainSurf {
+  sf_h:      float not null,    // fine height BEFORE river carving
+  sf_blend:  float not null,    // the coarse blended height alone
+  sf_mat:    integer not null,  // winning land material (the boundary contest)
+  sf_mix:    float not null,    // 0.5..1: how decisively it wins (edge softness)
+  sf_relief: float not null,
+  sf_moist:  float not null,
+  sf_watery: float not null,    // blended weight of wet-material cells
+  sf_lakey:  float not null,    // blended weight of wet cells ABOVE sea level
+}
+
+// Smooth kernel blend of the overland cells around (x, y) + the boundary-line
+// contest + the fine height.  Pure function — THE seam invariant lives here.
+pub fn terrain_surface_at(t: Terrain, types: vector<TerrainType>, p: TerrainParams, x: float, y: float) -> TerrainSurf {
+  nt = len(types);
+  wm: vector<float> = [];
+  for _ in 0..nt {
+    wm += [0.0];
+  }
+  s = p.tp_tile / SQRT3;
+  vs = 1.5 * s;
+  rk = p.tp_tile * 1.02;
+  rk2 = rk * rk;
+  ry0 = round((y / vs) ?? 0.0) as integer;
+  wsum = 0.0;
+  hsum = 0.0;
+  relsum = 0.0;
+  moisum = 0.0;
+  watsum = 0.0;
+  laksum = 0.0;
+  for dr in 0..3 {
+    r = ry0 + dr - 1;
+    off = 0.5 * ((r & 1) as float);
+    c0 = floor(((x / p.tp_tile) ?? 0.0) - off) as integer;
+    for dc in 0..4 {
+      c = c0 + dc - 1;
+      cx = ((c as float) + off) * p.tp_tile;
+      cy = (r as float) * vs;
+      d2 = (x - cx) * (x - cx) + (y - cy) * (y - cy);
+      if d2 < rk2 {
+        w = 1.0 - ((d2 / rk2) ?? 0.0);
+        w = w * w;
+        ci = min(max(c, 0), t.tr_nx - 1);
+        ri = min(max(r, 0), t.tr_ny - 1);
+        i = ri * t.tr_nx + ci;
+        wsum = wsum + w;
+        hsum = hsum + w * (t.tr_h[i] ?? 0.0);
+        relsum = relsum + w * (t.tr_relief[i] ?? 0.0);
+        moisum = moisum + w * (t.tr_moist[i] ?? 0.5);
+        mi = t.tr_mat[i] ?? 0;
+        if mi < len(wm) {
+          wm[mi] = (wm[mi] ?? 0.0) + w;
+        }
+        wetm = false;
+        if mi < len(types) {
+          tym = types[mi];
+          if tym != null {
+            wetm = tym.tt_wet;
+          }
+        }
+        if wetm || (t.tr_h[i] ?? 0.0) <= p.tp_sea {
+          watsum = watsum + w;
+          if (t.tr_h[i] ?? 0.0) > p.tp_sea {
+            laksum = laksum + w;
+          }
+        }
+      }
+    }
+  }
+  iw = (1.0 / max(wsum, 1.0e-12)) ?? 1.0;
+  hb = hsum * iw;
+  rel = relsum * iw;
+  // the boundary-line contest: per-type weights, fractally jittered scores,
+  // STEEPER WINS the contested band (bias by sqrt of the type's STEEP)
+  m1 = 0;
+  s1 = -1.0;
+  s2 = -1.0;
+  steep1 = 0.0;
+  steep2 = 0.0;
+  rise1 = 0.0;
+  rise2 = 0.0;
+  for cm in 0..nt {
+    tyc = types[cm];
+    if tyc != null && !tyc.tt_wet && (wm[cm] ?? 0.0) > 0.0 {
+      jit = 0.72 + 0.56 * (terrain_fbm(p.tp_seed, x, y, 340.0, 3, 40 + cm) * 0.5 + 0.5);
+      sc = (wm[cm] ?? 0.0) * iw * sqrt(max(tyc.tt_steep, 0.01)) * jit;
+      if sc > s1 {
+        s2 = s1;
+        steep2 = steep1;
+        rise2 = rise1;
+        m1 = cm;
+        s1 = sc;
+        steep1 = tyc.tt_steep;
+        rise1 = tyc.tt_rise;
+      } else {
+        if sc > s2 {
+          s2 = sc;
+          steep2 = tyc.tt_steep;
+          rise2 = tyc.tt_rise;
+        }
+      }
+    }
+  }
+  if s2 < 0.0 {
+    s2 = s1;
+    steep2 = steep1;
+    rise2 = rise1;
+  }
+  tt = 1.0;
+  if s1 > 0.0 {
+    tt = min(max(((s1 - s2) / (s1 * 0.18)) ?? 1.0, 0.0), 1.0);
+  }
+  mt = 0.5 + 0.5 * tt;
+  steep_eff = steep1 * mt + steep2 * (1.0 - mt);
+  rise_eff = rise1 * mt + rise2 * (1.0 - mt);
+  detail = terrain_detail_at(p, x, y);
+  ridge = terrain_ridge_at(p, x, y);
+  hf = hb + steep_eff * detail + rise_eff * (rel / 100.0) * ridge;
+  TerrainSurf { sf_h: hf, sf_blend: hb, sf_mat: m1, sf_mix: mt, sf_relief: rel,
+                sf_moist: moisum * iw, sf_watery: watsum * iw, sf_lakey: laksum * iw }
+}
+
+// Lightweight coarse-blend height only (for slopes along river courses).
+pub fn terrain_blend_h(t: Terrain, p: TerrainParams, x: float, y: float) -> float {
+  s = p.tp_tile / SQRT3;
+  vs = 1.5 * s;
+  rk = p.tp_tile * 1.02;
+  rk2 = rk * rk;
+  ry0 = round((y / vs) ?? 0.0) as integer;
+  wsum = 0.0;
+  hsum = 0.0;
+  for dr in 0..3 {
+    r = ry0 + dr - 1;
+    off = 0.5 * ((r & 1) as float);
+    c0 = floor(((x / p.tp_tile) ?? 0.0) - off) as integer;
+    for dc in 0..4 {
+      c = c0 + dc - 1;
+      cx = ((c as float) + off) * p.tp_tile;
+      cy = (r as float) * vs;
+      d2 = (x - cx) * (x - cx) + (y - cy) * (y - cy);
+      if d2 < rk2 {
+        w = 1.0 - ((d2 / rk2) ?? 0.0);
+        w = w * w;
+        ci = min(max(c, 0), t.tr_nx - 1);
+        ri = min(max(r, 0), t.tr_ny - 1);
+        wsum = wsum + w;
+        hsum = hsum + w * (t.tr_h[ri * t.tr_nx + ci] ?? 0.0);
+      }
+    }
+  }
+  (hsum / max(wsum, 1.0e-12)) ?? 0.0
+}
+
+// The fractally jittered lake contour field (>= 0.5 = lake water).
+pub fn terrain_lake_field(p: TerrainParams, x: float, y: float, lakey: float) -> float {
+  lakey + 0.11 * terrain_fbm(p.tp_seed, x, y, 330.0, 4, 70)
+}
+
+// Is (x, y) open water (sea by the fine height contour, or lake)?  PRE-carve —
+// this is the shoreline rivers attach to.
+pub fn terrain_water_at(t: Terrain, types: vector<TerrainType>, p: TerrainParams, x: float, y: float) -> boolean {
+  sf = terrain_surface_at(t, types, p, x, y);
+  sf.sf_h <= p.tp_sea || terrain_lake_field(p, x, y, sf.sf_lakey) >= 0.5
+}
+
+// ── Rivers ─────────────────────────────────────────────────────────────────
+
+// One river course PIECE: fine polyline (ends ON the shorelines) with
+// per-vertex water width, carve depth and valley falloff width.
+pub struct TerrainRiver {
+  rv_x:  vector<float> not null,
+  rv_y:  vector<float> not null,
+  rv_w:  vector<float> not null,    // water half-width test: dist < rv_w/2
+  rv_d:  vector<float> not null,    // carve depth
+  rv_vw: vector<float> not null,    // carve falloff width
+  rv_x0: float not null,   // bbox (+ tp_valley_max*4 = the influence apron)
+  rv_y0: float not null,
+  rv_x1: float not null,
+  rv_y1: float not null,
+}
+
+fn th_cellhash(seed: integer, a1: integer, a2: integer, b1: integer, b2: integer, ch: integer) -> float {
+  n = (a1 * 73856093) & 0x7FFFFFFF;
+  n = n ^ ((a2 * 19349663) & 0x7FFFFFFF);
+  n = n ^ ((b1 * 83492791) & 0x7FFFFFFF);
+  n = n ^ ((b2 * 1297357571) & 0x7FFFFFFF);
+  n = n ^ ((ch * 668265263) & 0x7FFFFFFF);
+  n = n ^ ((seed * 1597334677) & 0x7FFFFFFF);
+  n = n ^ (n >> 13);
+  n = (n * 1274126177) & 0x7FFFFFFF;
+  ((n ^ (n >> 16)) & 0x7FFFFFFF) as float / 2147483648.0
+}
+
+// THE EDGE BIT (user rule): a river never exits mid-side; each shared edge
+// carries one canonical left/right bit.  Both tiles hash the SORTED cell pair,
+// so they derive the same crossing point — seamless.
+pub fn terrain_edge_cross(p: TerrainParams, ca: integer, ra: integer, cb: integer, rb: integer) -> (float, float) {
+  c1 = ca;
+  r1 = ra;
+  c2 = cb;
+  r2 = rb;
+  if ca > cb || (ca == cb && ra > rb) {
+    c1 = cb;
+    r1 = rb;
+    c2 = ca;
+    r2 = ra;
+  }
+  (x1, y1) = terrain_center(p, c1, r1);
+  (x2, y2) = terrain_center(p, c2, r2);
+  mx = (x1 + x2) * 0.5;
+  my = (y1 + y2) * 0.5;
+  d = sqrt((x2 - x1) * (x2 - x1) + (y2 - y1) * (y2 - y1));
+  px = 0.0 - (((y2 - y1) / d) ?? 0.0);
+  py = ((x2 - x1) / d) ?? 0.0;
+  side = p.tp_tile / SQRT3;          // hex side length = circumradius
+  off = 0.30 * side;
+  if th_cellhash(p.tp_seed, c1, r1, c2, r2, 5) < 0.5 {
+    off = 0.0 - off;
+  }
+  (mx + px * off, my + py * off)
+}
+
+// The interior routing point of a tile (hash-jittered off-center; the natural
+// confluence spot — tributaries entering the tile share it).
+pub fn terrain_control_pt(p: TerrainParams, c: integer, r: integer) -> (float, float) {
+  (cx, cy) = terrain_center(p, c, r);
+  side = p.tp_tile / SQRT3;
+  jx = (th_cellhash(p.tp_seed, c, r, c, r, 6) - 0.5) * 0.8 * side;
+  jy = (th_cellhash(p.tp_seed, c, r, c, r, 7) - 0.5) * 0.8 * side;
+  (cx + jx, cy + jy)
+}
+
+// Meander factor: flat land winds hard, steep land runs straight; extra wind
+// near sea level (the user rule: more curves in the flat lands by the sea).
+fn th_meander(t: Terrain, p: TerrainParams, x: float, y: float) -> float {
+  e = 60.0;
+  hx = terrain_blend_h(t, p, x + e, y) - terrain_blend_h(t, p, x - e, y);
+  hy = terrain_blend_h(t, p, x, y + e) - terrain_blend_h(t, p, x, y - e);
+  sl = (sqrt(hx * hx + hy * hy) / (2.0 * e)) ?? 0.0;
+  f = 0.12 + 0.88 * exp(0.0 - sl / 0.016);
+  h = terrain_blend_h(t, p, x, y);
+  if h > 0.0 && h < 60.0 {
+    f = min(1.25, f * (1.0 + 0.5 * (1.0 - h / 60.0)));
+  }
+  f
+}
+
+// Fractal midpoint displacement, recursive over one anchor segment.  Appends
+// the start point + the displaced interior to (ox, oy, ov) — never the end
+// (the caller closes the chain).  Hashes the QUANTIZED endpoints, no
+// traversal index: window-independent by construction.
+fn th_subdiv(t: Terrain, p: TerrainParams, ax: float, ay: float, av: float, bx: float, by: float, bv: float, lvl: integer, ox: vector<float>, oy: vector<float>, ov: vector<float>) {
+  seg = sqrt((bx - ax) * (bx - ax) + (by - ay) * (by - ay));
+  if lvl > 7 || seg < p.tp_seg_min * 2.0 {
+    ox += [ax];
+    oy += [ay];
+    ov += [av];
+  } else {
+    px = 0.0 - (((by - ay) / seg) ?? 0.0);
+    py = ((bx - ax) / seg) ?? 0.0;
+    mx = (ax + bx) * 0.5;
+    my = (ay + by) * 0.5;
+    hq = th_cellhash(p.tp_seed, round(ax) as integer, round(ay) as integer,
+                     round(bx) as integer, round(by) as integer, 100 + lvl);
+    d = (hq - 0.5) * 2.0 * seg * p.tp_meander * th_meander(t, p, mx, my);
+    mv = (av + bv) * 0.5;
+    th_subdiv(t, p, ax, ay, av, mx + px * d, my + py * d, mv, lvl + 1, ox, oy, ov);
+    th_subdiv(t, p, mx + px * d, my + py * d, mv, bx, by, bv, lvl + 1, ox, oy, ov);
+  }
+}
+
+// Bisect the exact shoreline crossing between a dry and a wet point.
+fn th_shore_cross(t: Terrain, types: vector<TerrainType>, p: TerrainParams, dx0: float, dy0: float, wx0: float, wy0: float) -> (float, float) {
+  ddx = dx0;
+  ddy = dy0;
+  wwx = wx0;
+  wwy = wy0;
+  for _ in 0..9 {
+    mx = (ddx + wwx) * 0.5;
+    my = (ddy + wwy) * 0.5;
+    if terrain_water_at(t, types, p, mx, my) {
+      wwx = mx;
+      wwy = my;
+    } else {
+      ddx = mx;
+      ddy = my;
+    }
+  }
+  ((ddx + wwx) * 0.5, (ddy + wwy) * 0.5)
+}
+
+// Per-vertex shaping: water width from accumulation; carve depth slope-shaped
+// (gorges steep, floodplains flat) + the ESTUARY bonus near sea level (the
+// carved mouth dips below the sea -> the sea floods inland, size-proportional).
+fn th_shape_river(t: Terrain, p: TerrainParams, vx: vector<float>, vy: vector<float>, vv: vector<float>) -> TerrainRiver {
+  ww: vector<float> = [];
+  dd: vector<float> = [];
+  vw: vector<float> = [];
+  x0 = vx[0] ?? 0.0;
+  y0 = vy[0] ?? 0.0;
+  x1 = x0;
+  y1 = y0;
+  e = 60.0;
+  for k in 0..len(vx) {
+    kx = vx[k] ?? 0.0;
+    ky = vy[k] ?? 0.0;
+    kv = vv[k] ?? 1.0;
+    hx = terrain_blend_h(t, p, kx + e, ky) - terrain_blend_h(t, p, kx - e, ky);
+    hy = terrain_blend_h(t, p, kx, ky + e) - terrain_blend_h(t, p, kx, ky - e);
+    sl = (sqrt(hx * hx + hy * hy) / (2.0 * e)) ?? 0.0;
+    fs = min(1.0, sl / 0.05);
+    h0 = terrain_blend_h(t, p, kx, ky);
+    base = 3.0 + 1.7 * sqrt(kv);
+    dep = base * (0.45 + 0.55 * fs) + base * 0.90 * exp(0.0 - max(h0, 0.0) / 14.0);
+    dd += [min(p.tp_carve_max, dep)];
+    vw += [min(p.tp_valley_max, (24.0 + 11.0 * sqrt(kv)) * (1.6 - 0.6 * fs))];
+    ww += [min(26.0, 2.2 + 1.35 * sqrt(kv))];
+    x0 = min(x0, kx);
+    y0 = min(y0, ky);
+    x1 = max(x1, kx);
+    y1 = max(y1, ky);
+  }
+  ap = p.tp_valley_max * 4.0;
+  TerrainRiver { rv_x: vx, rv_y: vy, rv_w: ww, rv_d: dd, rv_vw: vw,
+                 rv_x0: x0 - ap, rv_y0: y0 - ap, rv_x1: x1 + ap, rv_y1: y1 + ap }
+}
+
+// All river course pieces, fully shaped: anchors (edge bits + control points)
+// -> fractal displacement -> corner-cut smoothing -> shoreline trim -> width/
+// depth/valley-width per vertex (slope-shaped + the estuary depth bonus).
+pub fn terrain_rivers(t: Terrain, types: vector<TerrainType>, p: TerrainParams) -> vector<TerrainRiver> {
+  nx = t.tr_nx;
+  ny = t.tr_ny;
+  n = nx * ny;
+  out: vector<TerrainRiver> = [];
+  isr: vector<boolean> = [];
+  feeds: vector<boolean> = [];
+  for i in 0..n {
+    isr += [(t.tr_acc[i] ?? 1.0) >= p.tp_acc_min && (t.tr_h[i] ?? 0.0) > p.tp_sea];
+    feeds += [false];
+  }
+  for r in 0..ny {
+    for c in 0..nx {
+      i = r * nx + c;
+      if (isr[i] ?? false) && (t.tr_flow[i] ?? -1) >= 0 {
+        (nc, nr) = hex_neighbor(c, r, t.tr_flow[i] ?? 0);
+        if nc >= 0 && nc < nx && nr >= 0 && nr < ny && (isr[nr * nx + nc] ?? false) {
+          j = nr * nx + nc;
+          if j < len(feeds) {
+            feeds[j] = true;
+          }
+        }
+      }
+    }
+  }
+  for hr in 0..ny {
+    for hc in 0..nx {
+      hi = hr * nx + hc;
+      if (isr[hi] ?? false) && !(feeds[hi] ?? true) {
+        // 1) the cell chain head -> mouth
+        cells_c: vector<integer> = [];
+        cells_r: vector<integer> = [];
+        wc = hc;
+        wr = hr;
+        walking = true;
+        while walking {
+          cells_c += [wc];
+          cells_r += [wr];
+          bi = t.tr_flow[wr * nx + wc] ?? -1;
+          if bi < 0 {
+            walking = false;        // lake/pit mouth
+          } else {
+            (nc, nr) = hex_neighbor(wc, wr, bi);
+            if nc < 0 || nc >= nx || nr < 0 || nr >= ny {
+              walking = false;
+            } else {
+              if (t.tr_h[nr * nx + nc] ?? 0.0) <= p.tp_sea {
+                cells_c += [nc];     // one step into the sea
+                cells_r += [nr];
+                walking = false;
+              } else {
+                wc = nc;
+                wr = nr;
+              }
+            }
+          }
+        }
+        if len(cells_c) >= 3 {
+          // 2) anchor polyline: control pt -> edge crossing -> control pt ...
+          axs: vector<float> = [];
+          ays: vector<float> = [];
+          avs: vector<float> = [];
+          for k in 0..len(cells_c) {
+            kc = cells_c[k] ?? 0;
+            kr = cells_r[k] ?? 0;
+            if k > 0 {
+              pc = cells_c[k - 1] ?? 0;
+              pr = cells_r[k - 1] ?? 0;
+              (ex, ey) = terrain_edge_cross(p, pc, pr, kc, kr);
+              axs += [ex];
+              ays += [ey];
+              avs += [t.tr_acc[pr * nx + pc] ?? 1.0];
+            }
+            (px2, py2) = terrain_control_pt(p, kc, kr);
+            axs += [px2];
+            ays += [py2];
+            avs += [t.tr_acc[kr * nx + kc] ?? 1.0];
+          }
+          // 3) fractal displacement over the anchors
+          fdx: vector<float> = [];
+          fdy: vector<float> = [];
+          fdv: vector<float> = [];
+          for k in 0..len(axs) - 1 {
+            th_subdiv(t, p, axs[k] ?? 0.0, ays[k] ?? 0.0, avs[k] ?? 1.0,
+                      axs[k + 1] ?? 0.0, ays[k + 1] ?? 0.0, avs[k + 1] ?? 1.0, 0, fdx, fdy, fdv);
+          }
+          fdx += [axs[len(axs) - 1] ?? 0.0];
+          fdy += [ays[len(ays) - 1] ?? 0.0];
+          fdv += [avs[len(avs) - 1] ?? 1.0];
+          // 4) one corner-cut smoothing pass (kills residual sharp corners)
+          smx: vector<float> = [];
+          smy: vector<float> = [];
+          smv: vector<float> = [];
+          smx += [fdx[0] ?? 0.0];
+          smy += [fdy[0] ?? 0.0];
+          smv += [fdv[0] ?? 1.0];
+          for k in 0..len(fdx) - 1 {
+            ka = fdx[k] ?? 0.0;
+            kb = fdx[k + 1] ?? 0.0;
+            la = fdy[k] ?? 0.0;
+            lb = fdy[k + 1] ?? 0.0;
+            va = fdv[k] ?? 1.0;
+            vb = fdv[k + 1] ?? 1.0;
+            smx += [ka * 0.75 + kb * 0.25];
+            smy += [la * 0.75 + lb * 0.25];
+            smv += [va * 0.75 + vb * 0.25];
+            smx += [ka * 0.25 + kb * 0.75];
+            smy += [la * 0.25 + lb * 0.75];
+            smv += [va * 0.25 + vb * 0.75];
+          }
+          smx += [fdx[len(fdx) - 1] ?? 0.0];
+          smy += [fdy[len(fdy) - 1] ?? 0.0];
+          smv += [fdv[len(fdv) - 1] ?? 1.0];
+          // 5) trim to the shorelines: split into land pieces whose ends lie
+          //    exactly ON the sea/lake contour (bisection per crossing)
+          px3: vector<float> = [];
+          py3: vector<float> = [];
+          pv3: vector<float> = [];
+          for k in 0..len(smx) {
+            kx = smx[k] ?? 0.0;
+            ky = smy[k] ?? 0.0;
+            kv = smv[k] ?? 1.0;
+            wetk = terrain_water_at(t, types, p, kx, ky);
+            if !wetk {
+              if len(px3) == 0 && k > 0 {
+                (cx2, cy2) = th_shore_cross(t, types, p, kx, ky,
+                                            smx[k - 1] ?? 0.0, smy[k - 1] ?? 0.0);
+                px3 += [cx2];
+                py3 += [cy2];
+                pv3 += [kv];
+              }
+              px3 += [kx];
+              py3 += [ky];
+              pv3 += [kv];
+            } else {
+              if len(px3) > 0 {
+                (qx2, qy2) = th_shore_cross(t, types, p, smx[k - 1] ?? 0.0, smy[k - 1] ?? 0.0, kx, ky);
+                px3 += [qx2];
+                py3 += [qy2];
+                pv3 += [kv];
+                if len(px3) >= 3 {
+                  out += [th_shape_river(t, p, px3, py3, pv3)];
+                }
+                px3 = [];
+                py3 = [];
+                pv3 = [];
+              }
+            }
+          }
+          if len(px3) >= 3 {
+            out += [th_shape_river(t, p, px3, py3, pv3)];
+          }
+        }
+      }
+    }
+  }
+  out
+}
+
+// ── Fine sampling (the game-facing surface) ────────────────────────────────
+
+pub struct TerrainSample {
+  ts_h:     float not null,    // carved fine height
+  ts_mat:   integer not null,  // winning land material
+  ts_water: integer not null,  // 0 dry, 1 river, 2 sea, 3 lake
+  ts_rdist: float not null,    // distance to the nearest river course (1e9 = none)
+}
+
+// The full sample: surface + ADDITIVE valley carving from every course near
+// the point + the water classification (sea floods the carved mouth).  Pure
+// function of (t, types, p, rivers, x, y) — THE window-independence invariant.
+pub fn terrain_sample(t: Terrain, types: vector<TerrainType>, p: TerrainParams, rivers: vector<TerrainRiver>, x: float, y: float) -> TerrainSample {
+  sf = terrain_surface_at(t, types, p, x, y);
+  carve = 0.0;
+  gdist = 1.0e9;
+  gw = 0.0;
+  for ri in 0..len(rivers) {
+    rv = rivers[ri];
+    if rv != null && x >= rv.rv_x0 && x <= rv.rv_x1 && y >= rv.rv_y0 && y <= rv.rv_y1 {
+      cd = 1.0e9;
+      cdep = 0.0;
+      cvw = p.tp_valley_w;
+      for k in 0..len(rv.rv_x) - 1 {
+        ax = rv.rv_x[k] ?? 0.0;
+        ay = rv.rv_y[k] ?? 0.0;
+        bx = rv.rv_x[k + 1] ?? 0.0;
+        by = rv.rv_y[k + 1] ?? 0.0;
+        ex = bx - ax;
+        ey = by - ay;
+        ee = ex * ex + ey * ey;
+        if ee > 0.000000001 {
+          tt = min(max((((x - ax) * ex + (y - ay) * ey) / ee) ?? 0.0, 0.0), 1.0);
+          ddx = x - (ax + tt * ex);
+          ddy = y - (ay + tt * ey);
+          d = sqrt(ddx * ddx + ddy * ddy);
+          if d < cd {
+            cd = d;
+            cdep = (rv.rv_d[k] ?? 0.0) * (1.0 - tt) + (rv.rv_d[k + 1] ?? 0.0) * tt;
+            cvw = (rv.rv_vw[k] ?? p.tp_valley_w) * (1.0 - tt) + (rv.rv_vw[k + 1] ?? p.tp_valley_w) * tt;
+            if d < gdist {
+              gdist = d;
+              gw = (rv.rv_w[k] ?? 0.0) * (1.0 - tt) + (rv.rv_w[k + 1] ?? 0.0) * tt;
+            }
+          }
+        }
+      }
+      if cd < cvw * 4.0 {
+        carve = carve + cdep * exp(0.0 - ((cd / cvw) ?? 0.0)) * (1.0 - ((cd / (4.0 * cvw)) ?? 0.0));
+      }
+    }
+  }
+  h = sf.sf_h - min(carve, p.tp_carve_max * 1.25);
+  water = 0;
+  if h <= p.tp_sea {
+    water = 2;     // sea — including the flooded estuary
+  } else {
+    if terrain_lake_field(p, x, y, sf.sf_lakey) >= 0.5 {
+      water = 3;   // lake (a FLAT filled surface — render without hillshade)
+    } else {
+      if gdist < gw * 0.5 && sf.sf_h > p.tp_sea && sf.sf_watery < 0.5 {
+        water = 1; // river
+      }
+    }
+  }
+  TerrainSample { ts_h: h, ts_mat: sf.sf_mat, ts_water: water, ts_rdist: gdist }
+}
