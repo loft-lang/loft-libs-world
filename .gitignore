@@ -3,3 +3,4 @@ target/
 *.tar.gz
 .DS_Store
 .loft/
+_tmp_*.bin

@@ -13,7 +13,8 @@
 //   * chunk_idx_32 / hex_idx_32 contract for negative inputs;
 //   * cell_count + neighbour_count aggregates.
 //
-// Round-trip tests write to `tests/_tmp_*.bin`; those names are
+// Round-trip tests write to `_tmp_*.bin` beside this file (relative paths
+// resolve from the test file's directory under `loft test`); those names are
 // gitignored.  Each test re-creates its tmp file, so leftover
 // artefacts from a previous run are harmless.
 
@@ -94,9 +95,9 @@ fn test_neighbour_count_full() {
 
 fn test_save_load_empty_world() {
   w = world_empty();
-  world_save(w, "tests/_tmp_empty.bin");
+  world_save(w, "_tmp_empty.bin");
   loaded = world_empty();
-  n = world_load(loaded, "tests/_tmp_empty.bin");
+  n = world_load(loaded, "_tmp_empty.bin");
   assert(n == 0, "empty world loads 0 cells");
   assert(loaded.tick == 0, "tick preserved (0)");
   assert(cell_count(loaded) == 0, "loaded has 0 cells");
@@ -105,9 +106,9 @@ fn test_save_load_empty_world() {
 fn test_save_load_single_cell() {
   w = world_empty();
   set_cell(w, 5, 7, Cell{c_color: 42, c_height: 9, c_age: 100});
-  world_save(w, "tests/_tmp_single.bin");
+  world_save(w, "_tmp_single.bin");
   loaded = world_empty();
-  n = world_load(loaded, "tests/_tmp_single.bin");
+  n = world_load(loaded, "_tmp_single.bin");
   assert(n == 1, "1 cell loaded, got {n}");
   c = get_cell(loaded, 5, 7);
   assert(c.c_color == 42,  "color preserved, got {c.c_color}");
@@ -123,9 +124,9 @@ fn test_save_load_many_cells_across_chunks() {
   set_cell(w,  35,   0, Cell{c_color: 2, c_height: 0, c_age: 2});
   set_cell(w,   0,  35, Cell{c_color: 3, c_height: 0, c_age: 3});
   set_cell(w, -10, -10, Cell{c_color: 4, c_height: 0, c_age: 4});
-  world_save(w, "tests/_tmp_many.bin");
+  world_save(w, "_tmp_many.bin");
   loaded = world_empty();
-  n = world_load(loaded, "tests/_tmp_many.bin");
+  n = world_load(loaded, "_tmp_many.bin");
   assert(n == 4, "4 cells loaded, got {n}");
   c1 = get_cell(loaded,   0,   0);
   c2 = get_cell(loaded,  35,   0);
@@ -146,9 +147,9 @@ fn test_save_load_tick_preserved() {
   tick_and_decay(w, 1000, 0, 100);
   tick_and_decay(w, 1000, 0, 100);
   assert(w.tick == 3, "tick advanced to 3, got {w.tick}");
-  world_save(w, "tests/_tmp_tick.bin");
+  world_save(w, "_tmp_tick.bin");
   loaded = world_empty();
-  n = world_load(loaded, "tests/_tmp_tick.bin");
+  n = world_load(loaded, "_tmp_tick.bin");
   assert(n == 1, "1 cell loaded after tick");
   assert(loaded.tick == 3, "tick preserved, got {loaded.tick}");
 }
@@ -157,9 +158,9 @@ fn test_save_load_negative_coords() {
   w = world_empty();
   set_cell(w, -50, -50, Cell{c_color: 5, c_height: 0, c_age: 50});
   set_cell(w, -1, -1, Cell{c_color: 6, c_height: 0, c_age: 60});
-  world_save(w, "tests/_tmp_neg.bin");
+  world_save(w, "_tmp_neg.bin");
   loaded = world_empty();
-  n = world_load(loaded, "tests/_tmp_neg.bin");
+  n = world_load(loaded, "_tmp_neg.bin");
   assert(n == 2, "2 cells loaded, got {n}");
   ca = get_cell(loaded, -50, -50);
   cb = get_cell(loaded, -1, -1);
@@ -181,7 +182,7 @@ fn test_load_wrong_magic_returns_zero() {
   // Write a 16-byte garbage header (wrong magic) and confirm
   // world_load bails without panicking.
   {
-    f = file("tests/_tmp_badmagic.bin");
+    f = file("_tmp_badmagic.bin");
     f#format = LittleEndian;
     f.set_file_size(0);
     f += (0xDEADBEEF as i32);   // wrong magic
@@ -191,14 +192,14 @@ fn test_load_wrong_magic_returns_zero() {
     f.sync();
   }
   loaded = world_empty();
-  n = world_load(loaded, "tests/_tmp_badmagic.bin");
+  n = world_load(loaded, "_tmp_badmagic.bin");
   assert(n == 0, "wrong magic returns 0, no panic");
 }
 
 fn test_load_wrong_version_returns_zero() {
   // Correct magic, but unsupported version.
   {
-    f = file("tests/_tmp_badver.bin");
+    f = file("_tmp_badver.bin");
     f#format = LittleEndian;
     f.set_file_size(0);
     f += (0x57524C44 as i32);   // 'WRLD'
@@ -208,6 +209,6 @@ fn test_load_wrong_version_returns_zero() {
     f.sync();
   }
   loaded = world_empty();
-  n = world_load(loaded, "tests/_tmp_badver.bin");
+  n = world_load(loaded, "_tmp_badver.bin");
   assert(n == 0, "wrong version returns 0, no panic");
 }
