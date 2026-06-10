@@ -1,0 +1,107 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// hexgrid: the hex lattice + the square local basis.
+use hex_grid;
+
+fn main() {
+  (x, y) = hex_grid::hex_to_px(3, 5);
+  assert(y == 7.5, "odd-r y: 1.5 * row");
+}
+
+fn test_hex_roundtrip() {
+  ok = true;
+  for r in 0..9 {
+    for q in 0..9 {
+      (x, y) = hex_grid::hex_to_px(q, r);
+      (q2, r2) = hex_grid::px_to_hex(x, y);
+      if q2 != q || r2 != r { ok = false; }
+    }
+  }
+  assert(ok, "hex_to_px / px_to_hex round-trip = identity");
+}
+
+fn test_hex_neighbors_ring() {
+  // all 6 neighbors are at lattice distance 1 and one hex step in world space
+  ok = true;
+  for d in 0..6 {
+    (nq, nr) = hex_grid::hex_neighbor(7, 6, d);
+    if hex_grid::hex_distance(7, 6, nq, nr) != 1 { ok = false; }
+    (ax, ay) = hex_grid::hex_to_px(7, 6);
+    (bx, by) = hex_grid::hex_to_px(nq, nr);
+    dx = bx - ax;
+    dy = by - ay;
+    step = sqrt(dx * dx + dy * dy);
+    if step < hex_grid::HEX_LEN - 0.001 || step > hex_grid::HEX_LEN + 0.001 { ok = false; }
+  }
+  assert(ok, "every neighbor: distance 1, one HEX_LEN step");
+}
+
+fn test_hex_neighbor_dir_inverse() {
+  ok = true;
+  for d in 0..6 {
+    (nq, nr) = hex_grid::hex_neighbor(4, 4, d);
+    if hex_grid::hex_neighbor_dir(4, 4, nq, nr) != d { ok = false; }
+  }
+  assert(ok, "hex_neighbor_dir inverts hex_neighbor");
+}
+
+fn test_hex_distance_metric() {
+  assert(hex_grid::hex_distance(0, 0, 0, 0) == 0, "identity");
+  assert(hex_grid::hex_distance(2, 3, 2, 3) == 0, "identity 2");
+  assert(hex_grid::hex_distance(0, 0, 3, 0) == 3, "straight row");
+  a = hex_grid::hex_distance(1, 1, 6, 5);
+  b = hex_grid::hex_distance(6, 5, 1, 1);
+  assert(a == b, "symmetric");
+}
+
+fn test_hex_canon_edge_shared() {
+  // an edge seen from both sides canonicalizes to the same id
+  (q1, r1, e1) = hex_grid::hex_canon_edge(5, 5, 0);
+  (nq, nr) = hex_grid::hex_neighbor(5, 5, 0);
+  back = hex_grid::hex_neighbor_dir(nq, nr, 5, 5);
+  (q2, r2, e2) = hex_grid::hex_canon_edge(nq, nr, back);
+  assert(q1 == q2 && r1 == r2 && e1 == e2, "shared edge canonicalizes identically");
+}
+
+fn test_hex_corners_hexagon() {
+  // 6 corners, all at HEX_SIZE from the centre
+  ok = true;
+  (cx, cy) = hex_grid::hex_to_px(2, 2);
+  for i in 0..6 {
+    (px, py) = hex_grid::hex_corner_px(2, 2, i);
+    dx = px - cx;
+    dy = py - cy;
+    d = sqrt(dx * dx + dy * dy);
+    if d < hex_grid::HEX_SIZE - 0.001 || d > hex_grid::HEX_SIZE + 0.001 { ok = false; }
+  }
+  assert(ok, "corners lie on the circumradius");
+}
+
+fn test_cell_roundtrip() {
+  ok = true;
+  for r in 0..6 {
+    for q in 0..6 {
+      (x, y) = hex_grid::cell_to_px(q, r);
+      (q2, r2) = hex_grid::px_to_cell(x, y);
+      if q2 != q || r2 != r { ok = false; }
+    }
+  }
+  assert(ok, "cell_to_px / px_to_cell round-trip = identity");
+}
+
+fn test_cell_neighbor_dir_inverse() {
+  ok = true;
+  for d in 0..4 {
+    (nq, nr) = hex_grid::cell_neighbor(3, 3, d);
+    if hex_grid::cell_neighbor_dir(3, 3, nq, nr) != d { ok = false; }
+  }
+  assert(ok, "cell_neighbor_dir inverts cell_neighbor");
+}
+
+fn test_cell_canon_edge_shared() {
+  (q1, r1, e1) = hex_grid::cell_canon_edge(2, 2, 1);
+  (nq, nr) = hex_grid::cell_neighbor(2, 2, 1);
+  back = hex_grid::cell_neighbor_dir(nq, nr, 2, 2);
+  (q2, r2, e2) = hex_grid::cell_canon_edge(nq, nr, back);
+  assert(q1 == q2 && r1 == r2 && e1 == e2, "shared cell edge canonicalizes identically");
+}

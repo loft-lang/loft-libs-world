@@ -43,3 +43,11 @@ chunk and consume hex_world types via dep.
 ## License
 
 LGPL-3.0-or-later for every package in this chunk.  See `LICENSE`.
+
+## hex_grid
+
+The GEOMETRY axis: the canonical hex-grid math every other `hex_*` library builds on —
+pointy-top, odd-r offset, `L = sqrt(3)` (the moros convention, executable): lattice<->world
+conversions, neighbors, distance, corners, canonical edges, plus the 12-orientation square
+(`cell_*`) local basis for right-angled structures placed ON the hex world. Pure functions,
+no state, no deps. Extracted from the crawler roguelike.
