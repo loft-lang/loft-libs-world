@@ -141,13 +141,34 @@ primitive" against its segment+arc sets; `physics_2body` (loft-libs-game) suppli
 dynamics where a game wants them. crawler's `pos_blocked` becomes a consumer of the
 shared queries; dryopea's 3D collision consumes the same primitives extruded.
 
+**Line of sight.** crawler's `hex_los` lives in its sim today (it takes a `Sim`). The
+family form: `hex_grid` provides the HEX LINE (the traversal order of hexes between two
+hexes — pure geometry); LOS = folding an OCCLUSION PREDICATE over that line. The
+predicate is where the games differ and the stack stays shared: solid cells (crawler
+today), wall/arc primitives from `hex_walls` (peeking around a round tower works because
+the collision queries and the sight queries are the SAME arc math), height fields from
+`hex_terrain` (a sightline over cliffs — the dryopea/moros 3D case). Directional
+POLICIES (crawler's forward light-cone) stay game-side, on top.
+
+**Hearing ranges.** crawler's hearing is a radius today (`HEAR_RADIUS`); the coherent
+form is a COST-FIELD SPREAD: sound floods outward over open cells, attenuated or blocked
+by walls — so noise carries down a corridor, around a corner, and not through stone.
+That spread primitive ALREADY exists in the family's shapes: crawler's flow-field
+pathing is the same breadth-first cost spread, and water routing is its gravity-biased
+cousin. Home ONE spread engine (over `hex_world` cells, `hex_grid` neighbors, predicate
+costs) and perception, pathing and water all consume it. Perception CHANNELS
+(see > feel > hear) and per-monster acuity stay game-side policies.
+
 The enabling rules (these are what "coherent" MEANS here):
 1. one shared wall/structure primitive list (segments + arcs + their gaps) consumed by
    every renderer and the collision layer alike;
 2. boundary generation is predicate-parameterized (solid, height-delta, material, ...);
 3. orientation is one vocabulary (the 24 steps) defined once in `hex_grid`;
 4. simulation routines (water, decay, growth) compute over `hex_world` cells with
-   `hex_grid` math — never private neighbor tables.
+   `hex_grid` math — never private neighbor tables;
+5. ONE cost-field spread engine serves pathing flow-fields, hearing fields and water
+   routing (predicate-parameterized costs); LOS folds occlusion predicates over
+   `hex_grid`'s hex line — sight and collision share the same wall/arc queries.
 
 ## Invariants that lock coherence (test-enforced, not promised)
 
