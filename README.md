@@ -51,3 +51,7 @@ pointy-top, odd-r offset, `L = sqrt(3)` (the moros convention, executable): latt
 conversions, neighbors, distance, corners, canonical edges, plus the 12-orientation square
 (`cell_*`) local basis for right-angled structures placed ON the hex world. Pure functions,
 no state, no deps. Extracted from the crawler roguelike.
+
+Family convergence (one hex basis for crawler / dryopea / moros — the
+coordinate-convention rule, the bridge, the hex_walls/hex_terrain merge plans):
+**[CONVERGENCE.md](CONVERGENCE.md)**.
