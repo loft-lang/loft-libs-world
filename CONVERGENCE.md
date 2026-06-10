@@ -101,6 +101,54 @@ wallgeo decoupling, then the hex_walls core merge (4) -> hex_terrain when laviti
 extracts it (5). Each step lands through its repo's own gate (branch -> local gate ->
 PR with trace -> CI -> squash-merge), registry releases per REGISTRY_SUBMIT.md.
 
+## The capability roadmap — what the coherent stack buys
+
+The point of convergence is that ADDITIONS FLOW FREELY: a capability built for one game
+drops into the others because the representations are shared. The target capabilities,
+each homed in the layering:
+
+**Exactly-round towers.** Round structures must be ANALYTIC (centre + radius arcs), not
+polygon approximations — "exactly round" survives every zoom and the 3D build. Home: the
+shared wall REPRESENTATION in `hex_walls` generalizes from straight segments to
+*segment + arc* primitives (a tower wall = arcs anchored to a hex centre; a doorway = an
+arc gap). Renderers tessellate as they wish; geometry stays exact. crawler's `WallSeg`
+emit and dryopea's 3D wall build both consume the same primitive list.
+
+**24-direction walls.** The `cell_*` square basis carries 12 orientations (k x 30 deg)
+today; structures want k x 15 deg (the moros placement primitive already anticipates
+12/24-dir rotation). Home: `hex_grid` extends the orientation vocabulary to 24
+(direction tables + basis rotation); `hex_walls` places wall pieces at any of them.
+One vocabulary — every game's structures, props and sprites rotate on the same 24 steps.
+
+**Cliff sides.** A cliff is a wall whose cause is a HEIGHT DELTA instead of a
+solid/floor flip. Home: the `hex_walls` boundary core takes a *boundary predicate*
+(today: solid-vs-open; cliffs: `|height(a) - height(b)| > threshold` against
+`hex_terrain` height cells). The same boundary->corner-graph->outline machinery then
+emits cliff faces for free — in 2D as outline bands, in 3D as vertical faces. One core,
+two faces of the same idea.
+
+**Water-flow calculations.** dryopea's `overland.loft` already stores water + 3 bits of
+flow direction per cell. The FLOW ALGORITHM (downhill routing over the height field,
+accumulation, pooling) is game-agnostic: home it beside the terrain data (`hex_terrain`,
+or a `hex_water` axis if it grows simulation state of its own), computing over
+`hex_world` storage with `hex_grid` neighbor math. crawler rivers, dryopea irrigation,
+moros oceans — one solver.
+
+**Collision detection.** Layered, not monolithic: `hex_grid` provides the pure geometry
+queries (point-in-hex, circle-vs-segment, circle-vs-arc — the arc case is what makes
+round towers WALKABLE); `hex_walls` answers "does this move cross a wall/cliff
+primitive" against its segment+arc sets; `physics_2body` (loft-libs-game) supplies
+dynamics where a game wants them. crawler's `pos_blocked` becomes a consumer of the
+shared queries; dryopea's 3D collision consumes the same primitives extruded.
+
+The enabling rules (these are what "coherent" MEANS here):
+1. one shared wall/structure primitive list (segments + arcs + their gaps) consumed by
+   every renderer and the collision layer alike;
+2. boundary generation is predicate-parameterized (solid, height-delta, material, ...);
+3. orientation is one vocabulary (the 24 steps) defined once in `hex_grid`;
+4. simulation routines (water, decay, growth) compute over `hex_world` cells with
+   `hex_grid` math — never private neighbor tables.
+
 ## Invariants that lock coherence (test-enforced, not promised)
 
 - ONE px formula: axial and offset forms produce bit-identical world positions
