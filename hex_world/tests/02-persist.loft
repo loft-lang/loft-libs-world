@@ -185,7 +185,7 @@ fn test_load_wrong_magic_returns_zero() {
     f = file("_tmp_badmagic.bin");
     f#format = LittleEndian;
     f.set_file_size(0);
-    f += (0xDEADBEEF as i32);   // wrong magic
+    f += (-559038737 as i32);   // wrong magic (0xDEADBEEF bit pattern, signed form fits i32)
     f += (1 as i32);
     f += (0 as i32);
     f += (0 as i32);
