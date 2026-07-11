@@ -129,7 +129,7 @@ fn main() {
     for k in 0..n - 1 {
       ddx = (rv.rv_x[k + 1] ?? 0.0) - (rv.rv_x[k] ?? 0.0);
       ddy = (rv.rv_y[k + 1] ?? 0.0) - (rv.rv_y[k] ?? 0.0);
-      pathlen = pathlen + sqrt(ddx * ddx + ddy * ddy);
+      pathlen = pathlen + (sqrt(ddx * ddx + ddy * ddy) ?? 0.0);
     }
     sx = (rv.rv_x[n - 1] ?? 0.0) - (rv.rv_x[0] ?? 0.0);
     sy = (rv.rv_y[n - 1] ?? 0.0) - (rv.rv_y[0] ?? 0.0);

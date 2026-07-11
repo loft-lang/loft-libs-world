@@ -482,7 +482,7 @@ pub fn terrain_surface_at(t: Terrain, types: vector<TerrainType>, p: TerrainPara
     tyc = types[cm];
     if tyc != null && !tyc.tt_wet && (wm[cm] ?? 0.0) > 0.0 {
       jit = 0.72 + 0.56 * (terrain_fbm(p.tp_seed, x, y, 340.0, 3, 40 + cm) * 0.5 + 0.5);
-      sc = (wm[cm] ?? 0.0) * iw * sqrt(max(tyc.tt_steep, 0.01)) * jit;
+      sc = (wm[cm] ?? 0.0) * iw * (sqrt(max(tyc.tt_steep, 0.01)) ?? 0.0) * jit;
       if sc > s1 {
         s2 = s1;
         steep2 = steep1;
@@ -921,7 +921,7 @@ pub fn terrain_sample(t: Terrain, types: vector<TerrainType>, p: TerrainParams, 
           tt = min(max((((x - ax) * ex + (y - ay) * ey) / ee) ?? 0.0, 0.0), 1.0);
           ddx = x - (ax + tt * ex);
           ddy = y - (ay + tt * ey);
-          d = sqrt(ddx * ddx + ddy * ddy);
+          d = sqrt(ddx * ddx + ddy * ddy) ?? 0.0;
           if d < cd {
             cd = d;
             cdep = (rv.rv_d[k] ?? 0.0) * (1.0 - tt) + (rv.rv_d[k + 1] ?? 0.0) * tt;
