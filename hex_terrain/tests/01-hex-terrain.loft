@@ -30,8 +30,8 @@ fn build_world(seed: integer) -> (hex_terrain::Terrain, hex_terrain::TerrainPara
   nx = 16;
   ny = 13;
   t = hex_terrain::terrain_new(nx, ny);
-  th = t.tr_h;
-  tmo = t.tr_moist;
+  th = &t.tr_h;
+  tmo = &t.tr_moist;
   ww = (nx as float) * 400.0;
   wh = ((ny as float) * 1.5 * 400.0 / hex_terrain::SQRT3) ?? 0.0;
   for r in 0..ny {
@@ -55,7 +55,7 @@ fn build_world(seed: integer) -> (hex_terrain::Terrain, hex_terrain::TerrainPara
   }
   hex_terrain::terrain_hydrology(t, p, LAKE);
   // classify land (caller content): sea by height, lakes already set
-  tmat = t.tr_mat;
+  tmat = &t.tr_mat;
   for ci in 0..nx * ny {
     if ci < len(tmat) {
       if (th[ci] ?? 0.0) <= p.tp_sea {

@@ -217,10 +217,10 @@ pub fn terrain_hydrology(t: Terrain, p: TerrainParams, lake_mat: integer) {
   nx = t.tr_nx;
   ny = t.tr_ny;
   n = nx * ny;
-  th = t.tr_h;        // aliases: index-writes through locals (the checker's idiom)
-  tm = t.tr_mat;
-  tf = t.tr_flow;
-  ta = t.tr_acc;
+  th = &t.tr_h;        // & = writable alias: index-writes reach the Terrain fields (C86 shared-mutation)
+  tm = &t.tr_mat;
+  tf = &t.tr_flow;
+  ta = &t.tr_acc;
   orig: vector<float> = [];
   level: vector<float> = [];
   state: vector<integer> = [];   // 0 = untouched, 1 = open, 2 = closed
@@ -350,8 +350,8 @@ pub fn terrain_hydrology(t: Terrain, p: TerrainParams, lake_mat: integer) {
 pub fn terrain_relief_pass(t: Terrain, types: vector<TerrainType>, p: TerrainParams) {
   nx = t.tr_nx;
   ny = t.tr_ny;
-  tw = t.tr_wet;
-  tl = t.tr_relief;
+  tw = &t.tr_wet;
+  tl = &t.tr_relief;
   for r in 0..ny {
     for c in 0..nx {
       i = r * nx + c;
