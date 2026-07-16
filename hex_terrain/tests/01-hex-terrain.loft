@@ -30,8 +30,8 @@ fn build_world(seed: integer) -> (hex_terrain::Terrain, hex_terrain::TerrainPara
   nx = 16;
   ny = 13;
   t = hex_terrain::terrain_new(nx, ny);
-  th = t.tr_h;
-  tmo = t.tr_moist;
+  th = &t.tr_h;
+  tmo = &t.tr_moist;
   ww = (nx as float) * 400.0;
   wh = ((ny as float) * 1.5 * 400.0 / hex_terrain::SQRT3) ?? 0.0;
   for r in 0..ny {
@@ -46,7 +46,7 @@ fn build_world(seed: integer) -> (hex_terrain::Terrain, hex_terrain::TerrainPara
       g = exp(0.0 - gx * gx - gy * gy);
       i = hex_terrain::terrain_idx(t, c, r);
       if i < len(th) {
-        th[i] = 170.0 * n + 90.0 - 480.0 * pow(rad, 2.4) + 520.0 * g;
+        th[i] = 170.0 * n + 90.0 - 480.0 * (pow(rad, 2.4) ?? 0.0) + 520.0 * g;
       }
       if i < len(tmo) {
         tmo[i] = 0.5;
@@ -55,7 +55,7 @@ fn build_world(seed: integer) -> (hex_terrain::Terrain, hex_terrain::TerrainPara
   }
   hex_terrain::terrain_hydrology(t, p, LAKE);
   // classify land (caller content): sea by height, lakes already set
-  tmat = t.tr_mat;
+  tmat = &t.tr_mat;
   for ci in 0..nx * ny {
     if ci < len(tmat) {
       if (th[ci] ?? 0.0) <= p.tp_sea {
@@ -129,7 +129,7 @@ fn main() {
     for k in 0..n - 1 {
       ddx = (rv.rv_x[k + 1] ?? 0.0) - (rv.rv_x[k] ?? 0.0);
       ddy = (rv.rv_y[k + 1] ?? 0.0) - (rv.rv_y[k] ?? 0.0);
-      pathlen = pathlen + sqrt(ddx * ddx + ddy * ddy);
+      pathlen = pathlen + (sqrt(ddx * ddx + ddy * ddy) ?? 0.0);
     }
     sx = (rv.rv_x[n - 1] ?? 0.0) - (rv.rv_x[0] ?? 0.0);
     sy = (rv.rv_y[n - 1] ?? 0.0) - (rv.rv_y[0] ?? 0.0);
