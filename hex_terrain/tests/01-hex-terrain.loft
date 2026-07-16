@@ -39,8 +39,12 @@ fn build_world(seed: integer) -> (hex_terrain::Terrain, hex_terrain::TerrainPara
   nx = 16;
   ny = 13;
   t = hex_terrain::terrain_new(nx, ny);
-  th = t.tr_h;
-  tmo = t.tr_moist;
+  // Borrow (`&`) the fields we fill: since @PLN85 #415 a struct vector-field read
+  // COPIES on bind (`th = t.tr_h` would give an independent vector whose element
+  // writes never reach `t`), so an explicit `&` is required to write THROUGH to the
+  // field — the hydrology/land passes below read `t.tr_*` directly.
+  th = &t.tr_h;
+  tmo = &t.tr_moist;
   ww = (nx as float) * 400.0;
   wh = ((ny as float) * 1.5 * 400.0 / hex_terrain::SQRT3) ?? 0.0;
   for r in 0..ny {
@@ -64,7 +68,7 @@ fn build_world(seed: integer) -> (hex_terrain::Terrain, hex_terrain::TerrainPara
   }
   hex_terrain::terrain_hydrology(t, p, LAKE);
   // classify land (caller content): sea by height, lakes already set
-  tmat = t.tr_mat;
+  tmat = &t.tr_mat;
   for ci in 0..nx * ny {
     if ci < len(tmat) {
       if (th[ci] ?? 0.0) <= p.tp_sea {
