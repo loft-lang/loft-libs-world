@@ -41,8 +41,8 @@ pub struct Cell {
 // hx * 32 + hz where hx, hz ∈ [0, 31].  Same shape as moros_map's
 // Chunk minus the cy layer (this world is single-layer).
 pub struct Chunk {
-  const ck_cx:    integer not null,
-  const ck_cz:    integer not null,
+  const ck_cx:    integer,
+  const ck_cz:    integer,
   ck_cells: vector<Cell>,
 }
 
@@ -50,8 +50,8 @@ pub struct Chunk {
 // non-empty cell live in `chunks`; empty chunks are removed by the
 // tick loop's GC pass.  `tick` is monotonic per server lifetime.
 pub struct World {
-  const chunks: vector<Chunk> not null,
-  tick:   integer not null,
+  const chunks: vector<Chunk>,
+  tick:   integer,
 }
 
 // ── Addressing helpers ────────────────────────────────────────────
