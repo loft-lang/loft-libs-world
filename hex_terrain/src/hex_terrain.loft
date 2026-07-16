@@ -704,16 +704,20 @@ fn th_shape_river(t: Terrain, p: TerrainParams, vx: vector<float>, vy: vector<fl
     kx = vx[k] ?? 0.0;
     ky = vy[k] ?? 0.0;
     kv = vv[k] ?? 1.0;
+    // `sqrt` returns `float?` (negative-domain → null); `kv` is a valley weight
+    // (≥ 0), so discharge ONCE at the source with `?? 0.0` and reuse `skv` in the
+    // three carve/valley/width terms below rather than coalescing each call site.
+    skv = sqrt(kv) ?? 0.0;
     hx = terrain_blend_h(t, p, kx + e, ky) - terrain_blend_h(t, p, kx - e, ky);
     hy = terrain_blend_h(t, p, kx, ky + e) - terrain_blend_h(t, p, kx, ky - e);
     sl = (sqrt(hx * hx + hy * hy) / (2.0 * e)) ?? 0.0;
     fs = min(1.0, sl / 0.05);
     h0 = terrain_blend_h(t, p, kx, ky);
-    base = 3.0 + 1.7 * sqrt(kv);
+    base = 3.0 + 1.7 * skv;
     dep = base * (0.45 + 0.55 * fs) + base * 0.90 * exp(0.0 - max(h0, 0.0) / 14.0);
     dd += [min(p.tp_carve_max, dep)];
-    vw += [min(p.tp_valley_max, (24.0 + 11.0 * sqrt(kv)) * (1.6 - 0.6 * fs))];
-    ww += [min(26.0, 2.2 + 1.35 * sqrt(kv))];
+    vw += [min(p.tp_valley_max, (24.0 + 11.0 * skv) * (1.6 - 0.6 * fs))];
+    ww += [min(26.0, 2.2 + 1.35 * skv)];
     x0 = min(x0, kx);
     y0 = min(y0, ky);
     x1 = max(x1, kx);

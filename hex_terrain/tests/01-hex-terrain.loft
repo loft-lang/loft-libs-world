@@ -59,7 +59,10 @@ fn build_world(seed: integer) -> (hex_terrain::Terrain, hex_terrain::TerrainPara
       g = exp(0.0 - gx * gx - gy * gy);
       i = hex_terrain::terrain_idx(t, c, r);
       if i < len(th) {
-        th[i] = 170.0 * n + 90.0 - 480.0 * pow(rad, 2.4) + 520.0 * g;
+        // `pow` returns `float?` (domain edge); discharge the stored VALUE at its
+        // source (can't `??` the write target `th[i]`).  `?? 0.0` never fires for
+        // the in-range heightmap inputs here.
+        th[i] = (170.0 * n + 90.0 - 480.0 * pow(rad, 2.4) + 520.0 * g) ?? 0.0;
       }
       if i < len(tmo) {
         tmo[i] = 0.5;
