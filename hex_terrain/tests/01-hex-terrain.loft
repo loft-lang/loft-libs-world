@@ -25,8 +25,17 @@ fn test_types() -> vector<hex_terrain::TerrainType> {
 // A small deterministic island: radial falloff + fbm + one massif, sea rim.
 // The continent recipe is CALLER side (content); the lib provides mechanism.
 fn build_world(seed: integer) -> (hex_terrain::Terrain, hex_terrain::TerrainParams) {
-  p = hex_terrain::terrain_params(seed, 400.0);
-  p.tp_acc_min = 3.0;
+  // tp_acc_min is now a const field (write-once), so tweak the blueprint by
+  // constructing a fresh TerrainParams from terrain_params()' defaults with
+  // the one override, rather than reassigning the field in place.
+  base = hex_terrain::terrain_params(seed, 400.0);
+  p = hex_terrain::TerrainParams {
+    tp_seed: base.tp_seed, tp_tile: base.tp_tile, tp_sea: base.tp_sea,
+    tp_lake_fill: base.tp_lake_fill, tp_acc_min: 3.0, tp_meander: base.tp_meander,
+    tp_seg_min: base.tp_seg_min, tp_nb_base: base.tp_nb_base, tp_nb_boost: base.tp_nb_boost,
+    tp_steep_delta: base.tp_steep_delta, tp_carve_max: base.tp_carve_max,
+    tp_valley_w: base.tp_valley_w, tp_valley_max: base.tp_valley_max,
+    tp_detail_wl: base.tp_detail_wl, tp_ridge_wl: base.tp_ridge_wl, tp_warp: base.tp_warp };
   nx = 16;
   ny = 13;
   t = hex_terrain::terrain_new(nx, ny);
