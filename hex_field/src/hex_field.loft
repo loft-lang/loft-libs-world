@@ -1143,6 +1143,21 @@ pub fn stencil_stamp_edges(
 // through a struct parameter.  u8 and i32 are safe. The material is u8 because
 // that is the widest safe SMALL type, not because 255 materials is a design.
 
+// TWO SLOTS, TWO OWNERS.  `eg_mat` is the PHYSICS of an edge — what it is made of — and
+// is authored: a stencil carries materials, a document round-trips them.  `eg_surf` is the
+// GEOMETRY — WHICH exact surface blocks here — and is derived at build time.
+//
+// The surface slot exists because a hex edge has only 6 possible normals, and measured
+// against the true wall normal across 24 headings, using the edge's own normal is wrong by
+// up to 90 degrees: a bounce that sends you sideways.  So the edge stores an id and the
+// surface carries the exact geometry.  That makes the grid a SPATIAL INDEX — it says THAT
+// you hit something and WHICH thing — while the normal stays exact and mesh-free.
+//
+// `eg_surf` is DELIBERATELY NOT SERIALIZED by the document format, and that is not an
+// omission to fix later: a surface id points into a `Surfaces` table this library does not
+// own, so writing ids to a file would persist dangling references.  Materials are ids into
+// a closed enumeration of mechanisms and travel fine; surfaces are not.  The TAG_EDGE
+// section stays exactly `(w+2)*(h+2)*3` material bytes, so existing documents keep loading.
 pub struct EdgeSet {
   eg_q0:  integer,
   eg_r0:  integer,
@@ -1150,16 +1165,20 @@ pub struct EdgeSet {
   eg_h:   integer,
   eg_gw:  integer,          // grid width  = w + 2, a one-cell halo
   eg_gh:  integer,
-  eg_mat: vector<u8>,       // 0 = open
+  eg_mat: vector<u8>,       // material (PHYSICS); 0 = open       — authored, serialized
+  eg_surf: vector<i32>,     // surface id (GEOMETRY); 0 = passable — derived, not serialized
+  eg_count: integer,        // blocked edges, maintained O(1) rather than counted by walking
 }
 
 pub fn edgeset_new(q0: integer, r0: integer, w: integer, h: integer) -> EdgeSet {
   gw = w + 2;
   gh = h + 2;
   m: vector<u8> = [];
+  sf: vector<i32> = [];
   n = gw * gh * 3;
-  for i in 0..n { m += [(0 as u8?) ?? 0]; }
-  EdgeSet { eg_q0: q0, eg_r0: r0, eg_w: w, eg_h: h, eg_gw: gw, eg_gh: gh, eg_mat: m }
+  for i in 0..n { m += [(0 as u8?) ?? 0]; sf += [(0 as i32?) ?? 0]; }
+  EdgeSet { eg_q0: q0, eg_r0: r0, eg_w: w, eg_h: h, eg_gw: gw, eg_gh: gh,
+            eg_mat: m, eg_surf: sf, eg_count: 0 }
 }
 
 // The doubled midpoint — an edge's identity, independent of which cell names it.
@@ -1191,6 +1210,13 @@ fn eg_index(e: EdgeSet, qa: integer, ra: integer, qb: integer, rb: integer) -> i
   (dr * e.eg_gw + dq) * 3 + slot
 }
 
+// The storage slot for an edge, or -1.  PUBLIC because a consumer building its
+// own accessors on this layer cannot address storage it cannot index — crawler's
+// apply_features and its junction arbitration write by index.  Exposing the slot
+// is cheaper than exporting a get/set pair for every access pattern they have.
+// Unconditional write — the last writer wins.  The write POLICY is deliberately the
+// caller's: first-writer-wins is `if edge_mat(...) == 0 { edge_set_mat(...) }` at the call
+// site, where the reader can see which rule is in force.
 pub fn edge_set_mat(e: EdgeSet, qa: integer, ra: integer, qb: integer, rb: integer, mat: integer) {
   i = eg_index(e, qa, ra, qb, rb);
   if i < 0 { return; }
@@ -1202,6 +1228,88 @@ pub fn edge_mat(e: EdgeSet, qa: integer, ra: integer, qb: integer, rb: integer) 
   if i < 0 { return 0; }
   (e.eg_mat[i] ?? 0) as integer
 }
+
+// ── THE SURFACE SLOT ────────────────────────────────────────────────────────
+//
+// WHY THESE ARE ACCESSORS AND `eg_index` STAYS PRIVATE.  The obvious alternative is to
+// publish the index so a consumer can write `e.eg_surf[i]` in its own loops, which is what
+// crawler's collision layer does today over its own copy of this storage.  Publishing it
+// would freeze `(cell, canonical direction, slot)` into the contract, and with two
+// consumers on this library that layout could then never change.  The cost of accessors is
+// one extra index computation per write in a build-time loop; the cost of the alternative
+// is permanent.  Correctness of the seam outranks a small constant here.
+
+// Write the surface blocking this edge, maintaining the blocked count exactly.
+// Unconditional — the WRITE POLICY belongs to the caller, because there is more than one:
+// crawler's collision layer wants first-writer-wins for plain construction and
+// nearest-surface arbitration where two parts meet.  A policy baked in here would silently
+// decide which surface owns a junction, which is a physics question, not a storage one.
+pub fn edge_set_surf(e: EdgeSet, qa: integer, ra: integer, qb: integer, rb: integer,
+                     surf: integer) {
+  i = eg_index(e, qa, ra, qb, rb);
+  if i < 0 { return; }
+  was = (e.eg_surf[i] ?? 0) as integer;
+  if was == 0 && surf != 0 { e.eg_count = e.eg_count + 1; }
+  if was != 0 && surf == 0 { e.eg_count = e.eg_count - 1; }
+  e.eg_surf[i] = (surf as i32?) ?? 0;
+}
+
+pub fn edge_surf(e: EdgeSet, qa: integer, ra: integer, qb: integer, rb: integer) -> integer {
+  i = eg_index(e, qa, ra, qb, rb);
+  if i < 0 { return 0; }
+  (e.eg_surf[i] ?? 0) as integer
+}
+
+// Both halves of an edge in one call, so a caller cannot set geometry and forget physics.
+pub fn edge_set_both(e: EdgeSet, qa: integer, ra: integer, qb: integer, rb: integer,
+                     surf: integer, mat: integer) {
+  edge_set_surf(e, qa, ra, qb, rb, surf);
+  edge_set_mat(e, qa, ra, qb, rb, mat);
+}
+
+// Blocked edges, O(1).  `edgeset_count` walks the grid and counts MATERIALS; this is the
+// derived-geometry count and is maintained on write, so it is free to call every frame.
+pub fn edgeset_surf_count(e: EdgeSet) -> integer { e.eg_count }
+
+// Exact element-wise equality over BOTH slots and the whole grid, halo included.
+//
+// Exists because the obvious consumer test — "is the cached layer identical to a freshly
+// derived one?" — otherwise has to read the vectors directly, which would make the field
+// layout contract.  Compares the halo too: `edgeset_count` walks only in-chunk cells, so a
+// corruption in the 74-of-75 halo slots of a small layer round-trips faithfully and no
+// assertion sees it.  That is not hypothetical here — it is how a negative control in this
+// package failed to fail.
+pub fn edgeset_equal(a: EdgeSet, b: EdgeSet) -> boolean {
+  if a.eg_gw != b.eg_gw || a.eg_gh != b.eg_gh { return false; }
+  n = a.eg_gw * a.eg_gh * 3;
+  same = true;
+  for i in 0..n {
+    if ((a.eg_mat[i] ?? 0) as integer) != ((b.eg_mat[i] ?? 0) as integer) { same = false; }
+    if ((a.eg_surf[i] ?? 0) as integer) != ((b.eg_surf[i] ?? 0) as integer) { same = false; }
+  }
+  same
+}
+
+// An order-sensitive checksum of the whole layer — the cheap "did anything change at all?"
+// for a test that operates on a layer and asserts it was left alone.  Use `edgeset_equal`
+// when the answer must be exact; a digest can collide, and for a correctness gate that
+// matters.
+pub fn edgeset_digest(e: EdgeSet) -> integer {
+  h = 1469598103;
+  n = e.eg_gw * e.eg_gh * 3;
+  for i in 0..n {
+    h = (h * 31 + ((e.eg_mat[i] ?? 0) as integer)) % 1000000007 ?? 0;
+    h = (h * 31 + ((e.eg_surf[i] ?? 0) as integer)) % 1000000007 ?? 0;
+  }
+  h
+}
+
+// Actual bytes held, so a consumer can GATE the footprint instead of reasoning about it.
+// An edge layer is a per-region cache in at least one consumer, which makes its size a
+// real cost; `size` reports what is truly allocated, so an assertion on it is what stops
+// the structure quietly growing back.  Exposed as a function rather than leaving consumers
+// to read the vectors, which would make the field layout contract.
+pub fn edgeset_bytes(e: EdgeSet) -> integer { size(e.eg_mat) + size(e.eg_surf) }
 
 pub fn edgeset_q0(e: EdgeSet) -> integer { e.eg_q0 }
 pub fn edgeset_r0(e: EdgeSet) -> integer { e.eg_r0 }
