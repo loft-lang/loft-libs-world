@@ -689,7 +689,7 @@ pub fn doc_read(path: text) -> HexDoc {
   d.doc_labels  = labels_new(q0, r0, w, h);
   seen_occu = false;
 
-  for si in 0..nsec {
+  for _ in 0..nsec {
     if f#next + 8 > total { d.doc_code = HXF_TRUNCATED; return d; }
     tag = f#read as i32;
     blen = f#read as i32;
