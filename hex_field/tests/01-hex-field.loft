@@ -1,0 +1,74 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// hex_field: the exact-integer contract, asserted standalone.
+//
+// These are the CONTRACT tests — the guarantees a consumer (the game, the in-world
+// editor) is entitled to rely on. They are deliberately self-contained: crawler keeps
+// its own golden-JSON diff against the Python oracle, because that is a CONSUMER's
+// check of this package, not this package's check of itself.
+use hex_field;
+
+fn main() {
+  s = hexset_new(16);
+  hexdisk_into(s, 8, 8, 2);
+  assert(hexset_count(s) == 19, "hexdisk N=2 is 19 cells");
+}
+
+// I-ROUNDTRIP: outline and cell set can never disagree.
+//   sum of the integer shoelace over all loops == 12 * (number of hexes)
+fn test_area_roundtrip_is_exact() {
+  ok = true;
+  for n in 0..5 {
+    s = hexset_new(32);
+    hexdisk_into(s, 16, 16, n);
+    v = trace(s);
+    if shoelace_total(v) != 12 * hexset_count(s) { ok = false; }
+  }
+  assert(ok, "shoelace total == 12 * cell count, for every hexdisk radius");
+}
+
+// The validator must pass every traced form it produced itself.
+fn test_validator_accepts_traced_forms() {
+  ok = true;
+  for n in 1..5 {
+    s = hexset_new(32);
+    hexdisk_into(s, 16, 16, n);
+    v = trace(s);
+    if validate(v, hexset_count(s)) != 0 { ok = false; }
+  }
+  assert(ok, "validate() == 0 on forms this package traced");
+}
+
+// Vertices are INTEGER lattice points — the property the whole design rests on.
+// Cell centres satisfy k == m (mod 2); no float, no epsilon, no drift.
+fn test_lattice_is_integral() {
+  ok = true;
+  for r in 0..12 {
+    for q in 0..12 {
+      k = lattice_k(q, r);
+      m = lattice_m(q, r);
+      if ((k - m) % 2) != 0 { ok = false; }
+    }
+  }
+  assert(ok, "every cell centre satisfies k == m (mod 2)");
+}
+
+// Occupancy round-trips, and out-of-chunk reads are false rather than a crash.
+fn test_hexset_setget_and_bounds() {
+  s = hexset_new(8);
+  hexset_set(s, 3, 4, true);
+  assert(hexset_get(s, 3, 4), "set then get");
+  assert(!hexset_get(s, 4, 4), "an untouched cell is empty");
+  assert(!hexset_get(s, 99, 99), "out of chunk reads false, not a crash");
+}
+
+// NEGATIVE CONTROL: the area invariant must FAIL when the set is corrupted by one
+// cell without re-tracing. A gate that cannot go red is not a gate.
+fn test_negative_control_detects_one_cell() {
+  s = hexset_new(32);
+  hexdisk_into(s, 16, 16, 3);
+  v = trace(s);
+  hexset_set(s, 16, 16 + 9, true);          // a detached cell, outline NOT re-traced
+  assert(shoelace_total(v) != 12 * hexset_count(s),
+         "one added cell must break the area round-trip");
+}

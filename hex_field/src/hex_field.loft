@@ -1,0 +1,534 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// hex_field — hex cell sets -> an EXACT integer vector map (plan #5 / FORMS.md).
+//
+// The loft port of plans/5-geometry/hexforms.py.  The Python stays as the oracle; this
+// must reproduce its golden JSON byte-for-byte, which is possible because the whole
+// representation is INTEGER:
+//
+//   every hex centre AND corner lies on the lattice  x = k*sqrt(3)/2 , y = m/2
+//   with centre(q,r) = (2q + (r&1), 3r) and corners at (0,+-2), (+-1,+-1).
+//
+// So there is no float anywhere in the geometry, no epsilon compare, and the area
+// round-trip is exact integer arithmetic:
+//
+//   sum of the integer shoelace over all loops  ==  12 * (number of hexes)
+//
+// A single hex shoelaces to exactly 12; holes contribute negative.  Cell count and traced
+// outline therefore cannot disagree — that is what makes the emitted vector map safe to
+// hand to a 2D renderer or a mesh routine.
+//
+// Storage follows the survival guide: a flat pre-allocated vector indexed by a packed
+// key (no tuple-keyed sets, no capture-append-reassign), and loops are held as flat
+// coordinate arrays plus a start index, not vector<vector<>>.
+
+// Occupancy over a BOUNDED CHUNK of hex coords: q in [hs_q0 .. hs_q0+hs_w),
+// r in [hs_r0 .. hs_r0+hs_h).  Deliberately a chunk, not a global graph — every
+// routine here is O(chunk) and never walks an unbounded neighbourhood, so the same
+// code serves a 32x32 world chunk (plan #2) as serves a one-off tower window.
+// Anything spanning chunks is traced per chunk (with a halo) and stitched; nothing
+// here assumes the form is centred, or that the world is reachable.
+pub struct HexSet {
+  hs_q0:    integer,
+  hs_r0:    integer,
+  hs_w:     integer,
+  hs_h:     integer,
+  hs_cells: vector<boolean>,
+  hs_count: integer,
+}
+
+// A vector map: loops concatenated, loop i occupying [vm_start[i], vm_start[i+1]).
+pub struct VecMap {
+  vm_k:     vector<integer>,
+  vm_m:     vector<integer>,
+  vm_start: vector<integer>,
+  vm_loops: integer,
+}
+
+// A chunk anchored at (q0,r0), w x h cells.  THE primitive — everything else builds
+// on it, so no routine can accidentally depend on a global frame.
+pub fn hexset_chunk(q0: integer, r0: integer, w: integer, h: integer) -> HexSet {
+  cells: vector<boolean> = [];
+  n = w * h;
+  for _ in 0..n { cells += [false]; }
+  HexSet { hs_q0: q0, hs_r0: r0, hs_w: w, hs_h: h, hs_cells: cells, hs_count: 0 }
+}
+
+// Convenience: a window centred on the origin, radius `w`.
+pub fn hexset_new(w: integer) -> HexSet {
+  hexset_chunk(0 - w, 0 - w, 2 * w + 1, 2 * w + 1)
+}
+
+pub fn hexset_q0(s: HexSet) -> integer { s.hs_q0 }
+pub fn hexset_r0(s: HexSet) -> integer { s.hs_r0 }
+pub fn hexset_w(s: HexSet) -> integer { s.hs_w }
+pub fn hexset_h(s: HexSet) -> integer { s.hs_h }
+
+fn hs_index(s: HexSet, q: integer, r: integer) -> integer {
+  dq = q - s.hs_q0;
+  dr = r - s.hs_r0;
+  if dq < 0 || dq >= s.hs_w || dr < 0 || dr >= s.hs_h { return -1; }
+  dr * s.hs_w + dq
+}
+
+pub fn hexset_get(s: HexSet, q: integer, r: integer) -> boolean {
+  i = hs_index(s, q, r);
+  if i < 0 { return false; }
+  s.hs_cells[i] ?? false
+}
+
+pub fn hexset_set(s: HexSet, q: integer, r: integer, on: boolean) {
+  i = hs_index(s, q, r);
+  if i < 0 { return; }
+  had = s.hs_cells[i] ?? false;
+  s.hs_cells[i] = on;
+  if on && !had { s.hs_count = s.hs_count + 1; }
+  if !on && had { s.hs_count = s.hs_count - 1; }
+}
+
+pub fn hexset_count(s: HexSet) -> integer { s.hs_count }
+
+// ── lattice + adjacency (integers only) ──────────────────────────────────────
+
+// Hex (q,r) -> exact integer lattice centre.  Matches hex_grid::hex_to_px scaled by
+// (sqrt(3)/2, 1/2) — verified against the library before porting.
+pub fn lattice_k(q: integer, r: integer) -> integer { 2 * q + (r & 1) }
+pub fn lattice_m(q: integer, r: integer) -> integer { 3 * r }
+
+// Neighbour (q,r) in direction d, odd-r offset.  Same SET as hex_grid::hex_neighbor.
+pub fn nb_q(q: integer, r: integer, d: integer) -> integer {
+  odd = r & 1;
+  if d == 0 { return q + 1; }
+  if d == 1 { return q - 1; }
+  if d == 2 { if odd == 1 { return q + 1; } return q; }
+  if d == 3 { if odd == 1 { return q; } return q - 1; }
+  if d == 4 { if odd == 1 { return q + 1; } return q; }
+  if odd == 1 { return q; }
+  q - 1
+}
+
+pub fn nb_r(q: integer, r: integer, d: integer) -> integer {
+  if d == 0 { return r; }
+  if d == 1 { return r; }
+  if d == 2 { return r - 1; }
+  if d == 3 { return r - 1; }
+  if d == 4 { return r + 1; }
+  r + 1
+}
+
+// ── HEIGHTS ─────────────────────────────────────────────────────────────────
+//
+// A per-CELL height, chunk-indexed exactly like a HexSet.  Everything before stairs got by
+// with height on the material (how tall a wall is); a staircase is the first thing that
+// needs the GROUND itself to have a z, because each step is a different floor.
+//
+// It is deliberately a separate structure rather than a field on HexSet: most of the world
+// is flat and should not pay for a height it never reads, and a height field is derived
+// (from a way, a contour, a terrace) exactly as the edge field is.
+pub struct Heights {
+  hz_q0: integer,
+  hz_r0: integer,
+  hz_w:  integer,
+  hz_h:  integer,
+  hz_z:  vector<float>,
+}
+
+pub fn heights_new(q0: integer, r0: integer, w: integer, h: integer) -> Heights {
+  z: vector<float> = [];
+  for _ in 0..w * h { z += [0.0]; }
+  Heights { hz_q0: q0, hz_r0: r0, hz_w: w, hz_h: h, hz_z: z }
+}
+
+fn hz_index(f: Heights, q: integer, r: integer) -> integer {
+  dq = q - f.hz_q0;
+  dr = r - f.hz_r0;
+  if dq < 0 || dr < 0 || dq >= f.hz_w || dr >= f.hz_h { return -1; }
+  dr * f.hz_w + dq
+}
+
+pub fn height_set(f: Heights, q: integer, r: integer, z: float) {
+  i = hz_index(f, q, r);
+  if i >= 0 { f.hz_z[i] = z; }
+}
+
+pub fn height_get(f: Heights, q: integer, r: integer) -> float {
+  i = hz_index(f, q, r);
+  if i < 0 { return 0.0; }
+  f.hz_z[i] ?? 0.0
+}
+
+// ── LABELS ──────────────────────────────────────────────────────────────────
+//
+// A per-CELL integer, chunk-indexed exactly like Heights.  Heights answers "how high is
+// this cell"; Labels answers "whose is it".  Plan #9 (canopy-first trees) needs the second
+// because a canopy is a PARTITION under competition rather than a stamped footprint — the
+// assignment is the output, not a tie-break.
+//
+// -1 means unowned, which is a real state: a cell no crown reaches belongs to nobody.
+pub struct Labels {
+  lb_q0: integer,
+  lb_r0: integer,
+  lb_w:  integer,
+  lb_h:  integer,
+  lb_v:  vector<integer>,
+}
+
+pub fn labels_new(q0: integer, r0: integer, w: integer, h: integer) -> Labels {
+  v: vector<integer> = [];
+  for _ in 0..w * h { v += [-1]; }
+  Labels { lb_q0: q0, lb_r0: r0, lb_w: w, lb_h: h, lb_v: v }
+}
+
+fn lb_index(f: Labels, q: integer, r: integer) -> integer {
+  dq = q - f.lb_q0;
+  dr = r - f.lb_r0;
+  if dq < 0 || dr < 0 || dq >= f.lb_w || dr >= f.lb_h { return -1; }
+  dr * f.lb_w + dq
+}
+
+pub fn label_set(f: Labels, q: integer, r: integer, v: integer) {
+  i = lb_index(f, q, r);
+  if i >= 0 { f.lb_v[i] = v; }
+}
+
+pub fn label_get(f: Labels, q: integer, r: integer) -> integer {
+  i = lb_index(f, q, r);
+  if i < 0 { return -1; }
+  f.lb_v[i] ?? -1
+}
+
+// World point -> the cell that contains it.  The exact inverse of the centre map
+// (lattice_k / lattice_m), by the standard axial-fractional + cube-round route.  Gated two
+// ways in sighttest: it must round-trip every cell of a chunk, and it must agree cell for
+// cell with hex_grid::px_to_hex, which is the canonical convention this whole plan follows.
+pub fn hex_at(px: float, py: float) -> (integer, integer) {
+  qf = 0.5773502691896258 * px - 0.3333333333333333 * py;
+  rf = 0.6666666666666666 * py;
+  cx = qf;
+  cz = rf;
+  cy = 0.0 - cx - cz;
+  rx = round(cx);
+  ry = round(cy);
+  rz = round(cz);
+  dx = abs(rx - cx);
+  dy = abs(ry - cy);
+  dz = abs(rz - cz);
+  if dx > dy && dx > dz {
+    rx = 0.0 - ry - rz;
+  } else if dy > dz {
+    ry = 0.0 - rx - rz;
+  } else {
+    rz = 0.0 - rx - ry;
+  }
+  aq = rx as integer;
+  ar = rz as integer;
+  (aq + ((ar - (ar & 1)) / 2 ?? 0), ar)
+}
+
+// Corner i of a cell, as an offset from its lattice centre.  Ordered so consecutive
+// corners bound one edge; index matches the Python CORNER table exactly.
+// CANONICAL corner order — this is hex_grid::hex_corner_offset / worldmesh.loft's
+// hex_lat_offset (the watertight instanced floor depends on it), in exact lattice
+// units.  Do NOT invent another ordering: downstream code reads corner i by index.
+pub fn corner_k(i: integer) -> integer {
+  if i == 0 { return 0; }
+  if i == 1 { return -1; }
+  if i == 2 { return -1; }
+  if i == 3 { return 0; }
+  if i == 4 { return 1; }
+  1
+}
+
+pub fn corner_m(i: integer) -> integer {
+  if i == 0 { return 2; }
+  if i == 1 { return 1; }
+  if i == 2 { return -1; }
+  if i == 3 { return -2; }
+  if i == 4 { return -1; }
+  1
+}
+
+// Which corner pair (i, i+1) is the edge shared with the neighbour at lattice delta?
+fn edge_of(dk: integer, dm: integer) -> integer {
+  if dk == -1 && dm == 3 { return 0; }
+  if dk == -2 && dm == 0 { return 1; }
+  if dk == -1 && dm == -3 { return 2; }
+  if dk == 1 && dm == -3 { return 3; }
+  if dk == 2 && dm == 0 { return 4; }
+  if dk == 1 && dm == 3 { return 5; }
+  -1
+}
+
+// ── candidate placement routines ─────────────────────────────────────────────
+
+pub fn form_hexdisk(w: integer, n: integer) -> HexSet {
+  s = hexset_new(w);
+  for r in s.hs_r0..s.hs_r0 + s.hs_h {
+    for q in s.hs_q0..s.hs_q0 + s.hs_w {
+      if hex_dist(0, 0, q, r) <= n { hexset_set(s, q, r, true); }
+    }
+  }
+  s
+}
+
+// Fill a hex-distance disk centred anywhere INTO an existing chunk.  Cells outside the
+// chunk are simply not written — the caller decides the halo.  This is the chunk-local
+// form of form_hexdisk and the one a world chunk actually uses.
+pub fn hexdisk_into(s: HexSet, cq: integer, cr: integer, n: integer) {
+  for r in s.hs_r0..s.hs_r0 + s.hs_h {
+    for q in s.hs_q0..s.hs_q0 + s.hs_w {
+      if hex_dist(cq, cr, q, r) <= n { hexset_set(s, q, r, true); }
+    }
+  }
+}
+
+// Hex distance on odd-r offset, via cube coords.
+pub fn hex_dist(q1: integer, r1: integer, q2: integer, r2: integer) -> integer {
+  x1 = q1 - ((r1 - (r1 & 1)) / 2 ?? 0);
+  z1 = r1;
+  y1 = 0 - x1 - z1;
+  x2 = q2 - ((r2 - (r2 & 1)) / 2 ?? 0);
+  z2 = r2;
+  y2 = 0 - x2 - z2;
+  dx = x1 - x2; if dx < 0 { dx = 0 - dx; }
+  dy = y1 - y2; if dy < 0 { dy = 0 - dy; }
+  dz = z1 - z2; if dz < 0 { dz = 0 - dz; }
+  m = dx;
+  if dy > m { m = dy; }
+  if dz > m { m = dz; }
+  m
+}
+
+// Euclidean disk: the hex CENTRE must lie within `radius` world units of the origin.
+// Compared in squared lattice units to keep it integer until the final test.
+pub fn form_circle(w: integer, radius: float) -> HexSet {
+  s = hexset_new(w);
+  lim = radius * radius;
+  for r in s.hs_r0..s.hs_r0 + s.hs_h {
+    for q in s.hs_q0..s.hs_q0 + s.hs_w {
+      k = lattice_k(q, r);
+      m = lattice_m(q, r);
+      x = (k as float) * 0.8660254037844386;
+      y = (m as float) * 0.5;
+      if x * x + y * y <= lim + 0.000000001 { hexset_set(s, q, r, true); }
+    }
+  }
+  s
+}
+
+// Regular octagon, apothem `a`, one flat side on the world x-axis (canonical
+// orientation — an octagon is 8-fold symmetric and the grid is 6-fold, so the
+// orientation is FROZEN, not free).
+pub fn form_octagon(w: integer, apothem: float) -> HexSet {
+  s = hexset_new(w);
+  for r in s.hs_r0..s.hs_r0 + s.hs_h {
+    for q in s.hs_q0..s.hs_q0 + s.hs_w {
+      x = (lattice_k(q, r) as float) * 0.8660254037844386;
+      y = (lattice_m(q, r) as float) * 0.5;
+      if x < 0.0 { x = 0.0 - x; }
+      if y < 0.0 { y = 0.0 - y; }
+      d = x;
+      if y > d { d = y; }
+      e = (x + y) * 0.7071067811865476;
+      if e > d { d = e; }
+      if d <= apothem + 0.000000001 { hexset_set(s, q, r, true); }
+    }
+  }
+  s
+}
+
+// ── the tracer: cells -> exact integer loops ─────────────────────────────────
+
+pub fn wall_count(s: HexSet) -> integer {
+  n = 0;
+  for r in s.hs_r0..s.hs_r0 + s.hs_h {
+    for q in s.hs_q0..s.hs_q0 + s.hs_w {
+      if hexset_get(s, q, r) {
+        edge = false;
+        for d in 0..6 {
+          if !hexset_get(s, nb_q(q, r, d), nb_r(q, r, d)) { edge = true; }
+        }
+        if edge { n = n + 1; }
+      }
+    }
+  }
+  n
+}
+
+// Trace the boundary into ordered closed loops.  Each boundary edge is emitted directed
+// corner_i -> corner_i+1, which gives every loop a consistent orientation (outer one
+// way, enclosed holes the other) — what a fill rule and a triangulator both need.
+pub fn trace(s: HexSet) -> VecMap {
+  // collect directed edges as parallel arrays
+  ak: vector<integer> = [];
+  am: vector<integer> = [];
+  bk: vector<integer> = [];
+  bm: vector<integer> = [];
+  used: vector<boolean> = [];
+  ne = 0;
+  for r in s.hs_r0..s.hs_r0 + s.hs_h {
+    for q in s.hs_q0..s.hs_q0 + s.hs_w {
+      if hexset_get(s, q, r) {
+        k0 = lattice_k(q, r);
+        m0 = lattice_m(q, r);
+        for d in 0..6 {
+          nq = nb_q(q, r, d);
+          nr = nb_r(q, r, d);
+          if !hexset_get(s, nq, nr) {
+            i = edge_of(lattice_k(nq, nr) - k0, lattice_m(nq, nr) - m0);
+            if i >= 0 {
+              j = i + 1; if j > 5 { j = 0; }
+              ak += [k0 + corner_k(i)];
+              am += [m0 + corner_m(i)];
+              bk += [k0 + corner_k(j)];
+              bm += [m0 + corner_m(j)];
+              used += [false];
+              ne = ne + 1;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // TERMINATION.  The walk below is unambiguous only because every boundary vertex has
+  // exactly ONE outgoing edge — a real property of hex grids (each vertex touches 3
+  // MUTUALLY ADJACENT cells, so a boundary cannot pinch at a vertex the way it can on a
+  // square grid).  Relying on that silently means a bad input HANGS instead of failing,
+  // so the walk carries an explicit budget: every edge is consumed at most once, so no
+  // more than `ne` steps can ever be legitimate.
+  vk: vector<integer> = [];
+  vm: vector<integer> = [];
+  st: vector<integer> = [];
+  nloops = 0;
+  done = 0;
+  budget = ne + 1;
+  while done < ne {
+    // find an unused edge to start a loop
+    seed = -1;
+    for e in 0..ne { if seed < 0 && !(used[e] ?? true) { seed = e; } }
+    if seed < 0 { done = ne; }
+    if seed >= 0 {
+      st += [len(vk)];
+      nloops = nloops + 1;
+      sk = ak[seed] ?? 0;
+      sm = am[seed] ?? 0;
+      ck = sk;
+      cm = sm;
+      going = true;
+      while going {
+        budget = budget - 1;
+        if budget < 0 { going = false; done = ne; }
+        // find the unused edge leaving (ck,cm)
+        pick = -1;
+        for e in 0..ne {
+          if pick < 0 && !(used[e] ?? true) && (ak[e] ?? 0) == ck && (am[e] ?? 0) == cm {
+            pick = e;
+          }
+        }
+        if pick < 0 { going = false; }
+        if pick >= 0 && budget >= 0 {
+          used[pick] = true;
+          done = done + 1;
+          vk += [ck];
+          vm += [cm];
+          ck = bk[pick] ?? 0;
+          cm = bm[pick] ?? 0;
+          if ck == sk && cm == sm { going = false; }
+        }
+      }
+    }
+  }
+  st += [len(vk)];
+  // CANONICAL START: rotate each loop to begin at its lexicographically smallest
+  // vertex.  A traced cycle is the same shape whichever edge seeded it, so the raw
+  // start is an artefact of iteration order and two correct implementations disagree
+  // on it.  Canonicalising makes the vector map UNIQUE — which is what lets the golden
+  // JSON act as a language-neutral contract.  (Found by this port disagreeing with the
+  // python oracle on the start vertex while every point and the area matched.)
+  for li in 0..nloops {
+    a = st[li] ?? 0;
+    b = st[li + 1] ?? 0;
+    n = b - a;
+    if n > 1 {
+      best = 0;
+      for cj in 1..n {
+        bk2 = vk[a + best] ?? 0;
+        bm2 = vm[a + best] ?? 0;
+        jk = vk[a + cj] ?? 0;
+        jm = vm[a + cj] ?? 0;
+        if jk < bk2 || (jk == bk2 && jm < bm2) { best = cj; }
+      }
+      if best > 0 {
+        rk: vector<integer> = [];
+        rm: vector<integer> = [];
+        for rj in 0..n {
+          idx = best + rj; if idx >= n { idx = idx - n; }
+          rk += [vk[a + idx] ?? 0];
+          rm += [vm[a + idx] ?? 0];
+        }
+        for wj in 0..n {
+          vk[a + wj] = rk[wj] ?? 0;
+          vm[a + wj] = rm[wj] ?? 0;
+        }
+      }
+    }
+  }
+  VecMap { vm_k: vk, vm_m: vm, vm_start: st, vm_loops: nloops }
+}
+
+// Twice the signed area of loop i, in integer lattice units.  Exact.
+pub fn shoelace2(v: VecMap, i: integer) -> integer {
+  a = v.vm_start[i] ?? 0;
+  b = v.vm_start[i + 1] ?? 0;
+  n = b - a;
+  s = 0;
+  for j in 0..n {
+    j2 = j + 1; if j2 >= n { j2 = 0; }
+    k1 = v.vm_k[a + j] ?? 0;
+    m1 = v.vm_m[a + j] ?? 0;
+    k2 = v.vm_k[a + j2] ?? 0;
+    m2 = v.vm_m[a + j2] ?? 0;
+    s = s + k1 * m2 - k2 * m1;
+  }
+  s
+}
+
+pub fn shoelace_total(v: VecMap) -> integer {
+  t = 0;
+  for i in 0..v.vm_loops { t = t + shoelace2(v, i); }
+  t
+}
+
+// ── the validator — what must hold before a renderer/mesh may consume it ─────
+
+// Returns 0 when the vector map is safe to consume; otherwise a failure code:
+//   1 no loops   2 degenerate loop   3 segment is not a hex edge
+//   4 area round-trip failed         5 wrong number of outer loops
+pub fn validate(v: VecMap, cells: integer) -> integer {
+  if v.vm_loops <= 0 { return 1; }
+  for i in 0..v.vm_loops {
+    a = v.vm_start[i] ?? 0;
+    b = v.vm_start[i + 1] ?? 0;
+    n = b - a;
+    if n < 3 { return 2; }
+    for j in 0..n {
+      j2 = j + 1; if j2 >= n { j2 = 0; }
+      dk = (v.vm_k[a + j2] ?? 0) - (v.vm_k[a + j] ?? 0);
+      dm = (v.vm_m[a + j2] ?? 0) - (v.vm_m[a + j] ?? 0);
+      ok = false;
+      if dk == 0 && dm == 2 { ok = true; }
+      if dk == 0 && dm == -2 { ok = true; }
+      if dk == 1 && dm == 1 { ok = true; }
+      if dk == 1 && dm == -1 { ok = true; }
+      if dk == -1 && dm == 1 { ok = true; }
+      if dk == -1 && dm == -1 { ok = true; }
+      if !ok { return 3; }
+    }
+  }
+  if shoelace_total(v) != 12 * cells { return 4; }
+  outer = 0;
+  for i in 0..v.vm_loops { if shoelace2(v, i) > 0 { outer = outer + 1; } }
+  if outer != 1 { return 5; }
+  0
+}
