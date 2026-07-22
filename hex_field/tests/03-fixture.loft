@@ -1,0 +1,56 @@
+// The interface gate.  `tests/fixtures/canonical.hxf` is ONE committed file that
+// both consumers read.  If either side's writer or reader drifts, one of them
+// stops agreeing with a file neither of them can quietly regenerate.
+//
+// Its values are chosen to exercise the format's decisions, not to look tidy:
+// a NEGATIVE extent origin, labels past u8 (301), and heights that are both
+// negative and fractional (-3.5) — the three things moros#1 measured the dense
+// model could not express.
+use hex_field;
+
+// Relative paths resolve from the TEST FILEs directory under `loft test`,
+// not the package root — a doubled `tests/` is the classic way to get this wrong.
+const FIXTURE = "fixtures/canonical.hxf";
+
+fn test_canonical_fixture_loads() {
+  d = doc_read(FIXTURE);
+  assert(d.doc_code == HXF_OK, "the committed fixture no longer loads: code {d.doc_code}");
+  assert(hexset_q0(d.doc_cells) == -2, "q0 is {hexset_q0(d.doc_cells)}, want -2");
+  assert(hexset_r0(d.doc_cells) == -1, "r0 is {hexset_r0(d.doc_cells)}, want -1");
+  assert(hexset_w(d.doc_cells) == 4, "w is {hexset_w(d.doc_cells)}");
+  assert(hexset_h(d.doc_cells) == 3, "h is {hexset_h(d.doc_cells)}");
+  assert(hexset_count(d.doc_cells) == 8, "cells is {hexset_count(d.doc_cells)}, want 8");
+  assert(d.doc_has_h, "heights section lost");
+  assert(d.doc_has_l, "labels section lost");
+}
+
+fn test_canonical_fixture_values_survive() {
+  d = doc_read(FIXTURE);
+  assert(d.doc_code == HXF_OK, "fixture refused {d.doc_code}");
+  // a label past u8 — the format is i32 on purpose
+  assert(label_get(d.doc_labels, 1, -1) == 301, "label at (1,-1) is {label_get(d.doc_labels, 1, -1)}, want 301");
+  // a height that is negative AND fractional — the format is f64 on purpose
+  assert(height_get(d.doc_heights, -2, -1) == 0.0 - 3.5,
+         "height at (-2,-1) is {height_get(d.doc_heights, -2, -1)}, want -3.5");
+  assert(height_get(d.doc_heights, 1, 0) == 9.5,
+         "height at (1,0) is {height_get(d.doc_heights, 1, 0)}, want 9.5");
+}
+
+// Read it, write it back, and the bytes must match the committed file.  This is
+// what stops a writer from drifting while its own reader drifts with it.
+fn test_rewriting_the_fixture_reproduces_it() {
+  d = doc_read(FIXTURE);
+  assert(d.doc_code == HXF_OK, "fixture refused {d.doc_code}");
+  tmp = "fixture_rewrite.bin";
+  doc_write(tmp, d.doc_cells, d.doc_heights, d.doc_labels, d.doc_has_h, d.doc_has_l);
+  fa = file(FIXTURE); fa#format = LittleEndian;
+  fb = file(tmp);     fb#format = LittleEndian;
+  na = fa#size; nb = fb#size;
+  assert(na == nb, "rewrite is {nb} bytes, committed fixture is {na}");
+  for i in 0..na {
+    x = fa#read as u8;
+    y = fb#read as u8;
+    assert(x == y, "byte {i} differs: {x} vs {y} — the writer has drifted from the fixture");
+  }
+  delete(tmp);
+}
