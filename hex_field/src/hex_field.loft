@@ -689,7 +689,7 @@ pub fn doc_read(path: text) -> HexDoc {
   d.doc_labels  = labels_new(q0, r0, w, h);
   seen_occu = false;
 
-  for _ in 0..nsec {
+  for sx in 0..nsec {
     if f#next + 8 > total { d.doc_code = HXF_TRUNCATED; return d; }
     tag = f#read as i32;
     blen = f#read as i32;
@@ -733,4 +733,159 @@ pub fn doc_read(path: text) -> HexDoc {
 
   if !seen_occu { d.doc_code = HXF_MISSING_OCCU; return d; }
   d
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// stencils — a reusable piece of authored field, stamped at an orientation.
+//
+// A stencil is a SMALL FIELD, not a bitmap: the same structures a world holds,
+// at a smaller extent.  So stamping is MERGING TWO FIELDS, and needs no new
+// conflict rule.
+//
+// Rotation is why this is cheap.  On the exact-integer lattice a 60° turn is an
+// integer map — k' = (k − m)/2, m' = (3k + m)/2 — and both halves divide evenly
+// for every cell centre, because centres satisfy k ≡ m (mod 2).  So a stencil
+// rotates with NO resampling and NO drift: a house stamped at 300° is the same
+// house as at 0°, cell for cell, not a filtered approximation of it.  Reflection
+// (k → −k) is exact too, giving 12 orientations.
+//
+// Translation happens in LATTICE space, never in (q, r).  Adding (dq, dr) to an
+// odd-r offset coordinate is NOT a translation — it changes the row stagger, so
+// a stencil stamped on an odd row would come out sheared.  Adding lattice
+// vectors is exact, and closed: k₁≡m₁ and k₂≡m₂ give k₁+k₂ ≡ m₁+m₂.
+
+pub const ROT_OK           = 0;
+pub const ROT_NOT_MULTIPLE = 1;
+
+// Inverse of (lattice_k, lattice_m).  m is always 3r and k − (r&1) always even,
+// so both divisions are exact rather than truncating.
+pub fn lattice_to_cell(k: integer, m: integer) -> (integer, integer) {
+  lr = (m / 3) ?? 0;
+  lq = ((k - (lr & 1)) / 2) ?? 0;
+  (lq, lr)
+}
+
+// One 60° step counter-clockwise about the lattice origin.
+pub fn lattice_rot60(k: integer, m: integer) -> (integer, integer) {
+  (((k - m) / 2) ?? 0, ((3 * k + m) / 2) ?? 0)
+}
+
+// Rotate a cell n × 60° about cell (0,0).  n may be any integer; six steps are
+// the identity, so it wraps.
+pub fn cell_rot(q: integer, r: integer, n: integer) -> (integer, integer) {
+  rk = lattice_k(q, r);
+  rm = lattice_m(q, r);
+  steps = n % 6;
+  if steps < 0 { steps = steps + 6; }
+  for rs in 0..steps {
+    (nk, nm) = lattice_rot60(rk, rm);
+    rk = nk;
+    rm = nm;
+  }
+  lattice_to_cell(rk, rm)
+}
+
+// Reflect a cell in the vertical axis (k → −k).  With the six rotations this
+// gives the 12 orientations handed content needs — an L-shaped house, a stair.
+pub fn cell_mirror(q: integer, r: integer) -> (integer, integer) {
+  lattice_to_cell(0 - lattice_k(q, r), lattice_m(q, r))
+}
+
+pub struct Stencil {
+  sn_cells:   HexSet,
+  sn_heights: Heights,
+  sn_labels:  Labels,
+  sn_has_h:   boolean,
+  sn_has_l:   boolean,
+  sn_code:    integer,
+}
+
+pub fn stencil_from(s: HexSet, hz: Heights, lb: Labels, has_h: boolean, has_l: boolean) -> Stencil {
+  Stencil {
+    sn_cells: s, sn_heights: hz, sn_labels: lb,
+    sn_has_h: has_h, sn_has_l: has_l, sn_code: ROT_OK,
+  }
+}
+
+// Rotate a whole stencil n × 60° about its own (0,0), re-fitting the extent to
+// whatever the rotated cells need.
+pub fn stencil_rotate(st: Stencil, n: integer) -> Stencil {
+  q0 = hexset_q0(st.sn_cells); r0 = hexset_r0(st.sn_cells);
+  w  = hexset_w(st.sn_cells);  h  = hexset_h(st.sn_cells);
+  // pass 1 — where do the occupied cells land?
+  seen = false;
+  mnq = 0; mxq = 0; mnr = 0; mxr = 0;
+  for iq in 0..w {
+    for ir in 0..h {
+      if hexset_get(st.sn_cells, q0 + iq, r0 + ir) {
+        (tq, tr) = cell_rot(q0 + iq, r0 + ir, n);
+        if !seen { mnq = tq; mxq = tq; mnr = tr; mxr = tr; seen = true; }
+        if tq < mnq { mnq = tq; }
+        if tq > mxq { mxq = tq; }
+        if tr < mnr { mnr = tr; }
+        if tr > mxr { mxr = tr; }
+      }
+    }
+  }
+  if !seen { return st; }
+  nw = mxq - mnq + 1;
+  nh = mxr - mnr + 1;
+  out = stencil_from(
+    hexset_chunk(mnq, mnr, nw, nh),
+    heights_new(mnq, mnr, nw, nh),
+    labels_new(mnq, mnr, nw, nh),
+    st.sn_has_h, st.sn_has_l
+  );
+  // pass 2 — carry the payload across
+  for iq in 0..w {
+    for ir in 0..h {
+      if hexset_get(st.sn_cells, q0 + iq, r0 + ir) {
+        (tq, tr) = cell_rot(q0 + iq, r0 + ir, n);
+        hexset_set(out.sn_cells, tq, tr, true);
+        if st.sn_has_h { height_set(out.sn_heights, tq, tr, height_get(st.sn_heights, q0 + iq, r0 + ir)); }
+        if st.sn_has_l { label_set(out.sn_labels, tq, tr, label_get(st.sn_labels, q0 + iq, r0 + ir)); }
+      }
+    }
+  }
+  out
+}
+
+// Degrees, refused rather than rounded when they are not a multiple of 60.
+// A rotation that silently rounds is how an exact lattice quietly becomes an
+// approximate one, so this returns an EMPTY stencil carrying ROT_NOT_MULTIPLE.
+pub fn stencil_rotate_deg(st: Stencil, deg: integer) -> Stencil {
+  if deg % 60 != 0 {
+    bad = stencil_from(
+      hexset_chunk(0, 0, 1, 1), heights_new(0, 0, 1, 1), labels_new(0, 0, 1, 1),
+      false, false
+    );
+    bad.sn_code = ROT_NOT_MULTIPLE;
+    return bad;
+  }
+  stencil_rotate(st, (deg / 60) ?? 0)
+}
+
+// Stamp `st` so its (0,0) lands on target cell (aq, ar).  Occupied stencil
+// cells win; everything else in the target is untouched, which is what makes
+// two stamps at different places order-free.
+pub fn stencil_stamp(
+  dst: HexSet, dst_h: Heights, dst_l: Labels,
+  st: Stencil, aq: integer, ar: integer
+) {
+  dk = lattice_k(aq, ar);
+  dm = lattice_m(aq, ar);
+  q0 = hexset_q0(st.sn_cells); r0 = hexset_r0(st.sn_cells);
+  w  = hexset_w(st.sn_cells);  h  = hexset_h(st.sn_cells);
+  for iq in 0..w {
+    for ir in 0..h {
+      sq = q0 + iq;
+      sr = r0 + ir;
+      if hexset_get(st.sn_cells, sq, sr) {
+        (tq, tr) = lattice_to_cell(lattice_k(sq, sr) + dk, lattice_m(sq, sr) + dm);
+        hexset_set(dst, tq, tr, true);
+        if st.sn_has_h { height_set(dst_h, tq, tr, height_get(st.sn_heights, sq, sr)); }
+        if st.sn_has_l { label_set(dst_l, tq, tr, label_get(st.sn_labels, sq, sr)); }
+      }
+    }
+  }
 }

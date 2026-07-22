@@ -1,0 +1,144 @@
+// The stencil contract.  Every assertion here is exact — no tolerance appears in
+// this file, because the whole claim is that the lattice makes rotation exact.
+use hex_field;
+
+// An L-shape: handed, so a mirror is distinguishable from a rotation.
+fn ell() -> Stencil {
+  s  = hexset_chunk(0, 0, 3, 3);
+  hz = heights_new(0, 0, 3, 3);
+  lb = labels_new(0, 0, 3, 3);
+  for r in 0..3 { hexset_set(s, 0, r, true); label_set(lb, 0, r, 10 + r); height_set(hz, 0, r, r as float + 0.5); }
+  for q in 1..3 { hexset_set(s, q, 0, true); label_set(lb, q, 0, 20 + q); height_set(hz, q, 0, q as float + 0.5); }
+  stencil_from(s, hz, lb, true, true)
+}
+
+fn shoelace_of(s: HexSet) -> integer { shoelace_total(trace(s)) }
+
+// ── the load-bearing invariant ───────────────────────────────────────────
+
+// SIX 60° STEPS ARE THE IDENTITY — asserted at the lattice level, because
+// cell_rot reduces n modulo 6, so "rotate by 6" short-circuits to doing nothing
+// and would pass no matter how wrong the rotation was.  A control that perturbed
+// lattice_rot60 by (+1,+1) left an earlier version of this test green; composing
+// the primitive six times is what actually pins it.
+fn test_six_lattice_steps_are_the_identity() {
+  for qi in 0..9 {
+    for ri in 0..9 {
+      q = qi - 4;
+      r = ri - 4;
+      k0 = lattice_k(q, r);
+      m0 = lattice_m(q, r);
+      k = k0; m = m0;
+      for s in 0..6 {
+        (nk, nm) = lattice_rot60(k, m);
+        k = nk; m = nm;
+        // every intermediate image must still be a legal cell centre
+        assert(m % 3 == 0, "step {s} from {q},{r}: m={m} is not a multiple of 3");
+        assert((k - m) % 2 == 0, "step {s} from {q},{r}: k={k} m={m} breaks k = m (mod 2)");
+      }
+      assert(k == k0 && m == m0,
+             "six steps from cell {q},{r}: ({k},{m}) != ({k0},{m0})");
+    }
+  }
+}
+
+// And each single step must actually MOVE a non-origin cell — otherwise the
+// identity above is satisfied by a rotation that does nothing at all.
+fn test_a_single_step_is_not_a_no_op() {
+  for n in 1..6 {
+    (rq, rr) = cell_rot(2, 1, n);
+    assert(rq != 2 || rr != 1, "rotating (2,1) by {n} steps left it in place");
+  }
+  (bq, br) = cell_rot(2, 1, 6);
+  assert(bq == 2 && br == 1, "rotating (2,1) by 6 steps did not return it");
+}
+
+fn test_rotation_preserves_count_and_area() {
+  st = ell();
+  n0 = hexset_count(st.sn_cells);
+  a0 = shoelace_of(st.sn_cells);
+  assert(a0 == 12 * n0, "the source itself breaks the area identity");
+  for step in 1..6 {
+    rot = stencil_rotate(st, step);
+    n = hexset_count(rot.sn_cells);
+    a = shoelace_of(rot.sn_cells);
+    assert(n == n0, "step {step}: cell count {n}, want {n0}");
+    assert(a == a0, "step {step}: shoelace {a}, want {a0}");
+    assert(a == 12 * n, "step {step}: area identity broken");
+  }
+}
+
+fn test_mirror_is_exact_and_self_inverse() {
+  for q in 0..5 {
+    for r in 0..5 {
+      (mq, mr) = cell_mirror(q - 2, r - 2);
+      (bq, br) = cell_mirror(mq, mr);
+      assert(bq == q - 2 && br == r - 2, "mirror is not self-inverse at {q-2},{r-2}");
+    }
+  }
+}
+
+// ── stamping ─────────────────────────────────────────────────────────────
+
+fn test_stamp_lands_where_asked_on_an_odd_row() {
+  // An ODD anchor row is the case that a naive (q,r) translation shears.
+  st = ell();
+  dst  = hexset_chunk(-5, -5, 20, 20);
+  dh   = heights_new(-5, -5, 20, 20);
+  dl   = labels_new(-5, -5, 20, 20);
+  stencil_stamp(dst, dh, dl, st, 4, 3);
+  assert(hexset_count(dst) == hexset_count(st.sn_cells),
+         "stamped {hexset_count(dst)} cells, stencil has {hexset_count(st.sn_cells)}");
+  // the stamped shape must still trace to the same area
+  assert(shoelace_of(dst) == 12 * hexset_count(dst), "stamped shape breaks the area identity");
+}
+
+fn test_two_stamps_at_different_places_are_order_free() {
+  st = ell();
+  a1 = hexset_chunk(-8, -8, 30, 30); h1 = heights_new(-8, -8, 30, 30); l1 = labels_new(-8, -8, 30, 30);
+  a2 = hexset_chunk(-8, -8, 30, 30); h2 = heights_new(-8, -8, 30, 30); l2 = labels_new(-8, -8, 30, 30);
+  stencil_stamp(a1, h1, l1, st, 1, 1);
+  stencil_stamp(a1, h1, l1, st, 6, 5);
+  stencil_stamp(a2, h2, l2, st, 6, 5);
+  stencil_stamp(a2, h2, l2, st, 1, 1);
+  for q in 0..30 {
+    for r in 0..30 {
+      assert(hexset_get(a1, -8 + q, -8 + r) == hexset_get(a2, -8 + q, -8 + r),
+             "stamp order changed cell {q},{r}");
+    }
+  }
+  assert(hexset_count(a1) == 2 * hexset_count(st.sn_cells), "the two stamps overlapped");
+}
+
+fn test_stamp_leaves_the_rest_of_the_target_alone() {
+  st = ell();
+  dst = hexset_chunk(0, 0, 20, 20); dh = heights_new(0, 0, 20, 20); dl = labels_new(0, 0, 20, 20);
+  hexset_set(dst, 15, 15, true);          // a pre-existing cell far away
+  label_set(dl, 15, 15, 999);
+  stencil_stamp(dst, dh, dl, st, 2, 2);
+  assert(hexset_get(dst, 15, 15), "an unrelated cell was cleared by a stamp");
+  assert(label_get(dl, 15, 15) == 999, "an unrelated label was overwritten");
+}
+
+// ── the negative control the issue asks for ──────────────────────────────
+
+fn test_rotation_by_a_non_multiple_of_60_is_refused() {
+  st = ell();
+  bad = stencil_rotate_deg(st, 45);
+  assert(bad.sn_code == ROT_NOT_MULTIPLE, "45° was accepted, code {bad.sn_code}");
+  assert(hexset_count(bad.sn_cells) == 0, "a refused rotation still produced cells");
+  bad2 = stencil_rotate_deg(st, 1);
+  assert(bad2.sn_code == ROT_NOT_MULTIPLE, "1° was accepted");
+}
+
+fn test_rotation_by_multiples_of_60_is_accepted() {
+  st = ell();
+  for i in 0..7 {
+    ok = stencil_rotate_deg(st, i * 60);
+    assert(ok.sn_code == ROT_OK, "{i * 60}° was refused");
+    assert(hexset_count(ok.sn_cells) == hexset_count(st.sn_cells), "{i * 60}° lost cells");
+  }
+  neg = stencil_rotate_deg(st, 0 - 120);
+  assert(neg.sn_code == ROT_OK, "-120° was refused");
+  assert(hexset_count(neg.sn_cells) == hexset_count(st.sn_cells), "-120° lost cells");
+}
