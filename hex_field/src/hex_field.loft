@@ -575,6 +575,13 @@ pub const TAG_OCCU = 0x5543434F;      // 'OCCU'
 pub const TAG_HGHT = 0x54484748;      // 'HGHT'
 pub const TAG_LABL = 0x4C42414C;      // 'LABL'
 pub const TAG_EDGE = 0x45474445;      // 'EDGE' — the wall layer
+// 'LAYR' — one NAMED integer layer.  Payload: name_len i32, the name's bytes,
+// then w*h i32 values.  One section per layer, so a file carries as many as the
+// author made and a reader that wants none skips them all by their lengths.
+// TAG_LABL predates this and is the unnamed primary layer; it stays because the
+// committed fixtures are written with it, and because "the material" needing no
+// name is the common case.
+pub const TAG_LAYR = 0x5259414C;
 
 // Refusal codes.  0 = loaded.  Every one of these is a REFUSAL, never a
 // partial parse: a half-read field is worse than no field.
@@ -594,6 +601,7 @@ pub struct HexDoc {
   doc_heights: Heights,
   doc_labels:  Labels,
   doc_edges:   EdgeSet,
+  doc_layers:  Layers,
   doc_has_h:   boolean,
   doc_has_l:   boolean,
   doc_has_e:   boolean,
@@ -620,6 +628,17 @@ pub fn doc_write_edges(
   path: text, s: HexSet, hz: Heights, lb: Labels, eg: EdgeSet,
   has_h: boolean, has_l: boolean, has_e: boolean
 ) {
+  doc_write_all(path, s, hz, lb, eg,
+                layers_new(hexset_q0(s), hexset_r0(s), hexset_w(s), hexset_h(s)),
+                has_h, has_l, has_e);
+}
+
+// The full form: cells, optional heights/labels/edges, and any number of NAMED
+// integer layers.
+pub fn doc_write_all(
+  path: text, s: HexSet, hz: Heights, lb: Labels, eg: EdgeSet, ly: Layers,
+  has_h: boolean, has_l: boolean, has_e: boolean
+) {
   w = hexset_w(s);
   h = hexset_h(s);
   n = w * h;
@@ -627,6 +646,7 @@ pub fn doc_write_edges(
   if has_h { sections = sections + 1; }
   if has_l { sections = sections + 1; }
   if has_e { sections = sections + 1; }
+  sections = sections + layer_count(ly);
 
   f = file(path);
   f#format = LittleEndian;
@@ -676,6 +696,20 @@ pub fn doc_write_edges(
     f += (egn as i32);
     for i in 0..egn { f += ((eg.eg_mat[i] ?? 0) as u8); }
   }
+
+  for li in 0..layer_count(ly) {
+    nm = layer_name(ly, li);
+    nlen = size(nm);
+    f += (TAG_LAYR as i32);
+    f += ((4 + nlen + n * 4) as i32);
+    f += (nlen as i32);
+    f += nm;
+    for q in 0..w {
+      for r in 0..h {
+        f += (layer_get_at(ly, li, hexset_q0(s) + q, hexset_r0(s) + r) as i32);
+      }
+    }
+  }
 }
 
 // ── reading ──────────────────────────────────────────────────────────────
@@ -687,6 +721,7 @@ pub fn doc_read(path: text) -> HexDoc {
     doc_heights: heights_new(0, 0, 1, 1),
     doc_labels: labels_new(0, 0, 1, 1),
     doc_edges: edgeset_new(0, 0, 1, 1),
+    doc_layers: layers_new(0, 0, 1, 1),
     doc_has_h: false, doc_has_l: false, doc_has_e: false, doc_skipped: 0,
   };
   f = file(path);
@@ -711,6 +746,7 @@ pub fn doc_read(path: text) -> HexDoc {
   d.doc_heights = heights_new(q0, r0, w, h);
   d.doc_labels  = labels_new(q0, r0, w, h);
   d.doc_edges   = edgeset_new(q0, r0, w, h);
+  d.doc_layers  = layers_new(q0, r0, w, h);
   seen_occu = false;
 
   for sx in 0..nsec {
@@ -754,6 +790,19 @@ pub fn doc_read(path: text) -> HexDoc {
         d.doc_edges.eg_mat[i] = ev;
       }
       d.doc_has_e = true;
+    } else if tag == TAG_LAYR {
+      nlen = f#read as i32;
+      // the declared section length must account for the name AND the values —
+      // a name length that disagrees with it is a corrupt file, not a short read
+      if blen != 4 + nlen + n * 4 { d.doc_code = HXF_BAD_SECTION; return d; }
+      nm = f#read(nlen) as text;
+      li = layer_add(d.doc_layers, nm);
+      for q in 0..w {
+        for r in 0..h {
+          lv = f#read as i32;
+          layer_set_at(d.doc_layers, li, q0 + q, r0 + r, lv);
+        }
+      }
     } else {
       // Unknown section: skip it by its declared length.  This is the whole
       // reason sections carry a length, and why a newer writer does not break
@@ -828,16 +877,22 @@ pub struct Stencil {
   sn_heights: Heights,
   sn_labels:  Labels,
   sn_edges:   EdgeSet,
+  sn_layers:  Layers,
   sn_has_h:   boolean,
   sn_has_l:   boolean,
   sn_has_e:   boolean,
   sn_code:    integer,
 }
 
+// Build the field FIRST, then construct the stencil: these take their arguments
+// by value, so cells set on the HexSet afterwards do not reach the stencil.  The
+// failure is quiet — the stencil reports the right layer count and extent, and
+// only the contents are missing.
 pub fn stencil_from(s: HexSet, hz: Heights, lb: Labels, has_h: boolean, has_l: boolean) -> Stencil {
   Stencil {
     sn_cells: s, sn_heights: hz, sn_labels: lb,
     sn_edges: edgeset_new(hexset_q0(s), hexset_r0(s), hexset_w(s), hexset_h(s)),
+    sn_layers: layers_new(hexset_q0(s), hexset_r0(s), hexset_w(s), hexset_h(s)),
     sn_has_h: has_h, sn_has_l: has_l, sn_has_e: false, sn_code: ROT_OK,
   }
 }
@@ -848,6 +903,7 @@ pub fn stencil_with_edges(s: HexSet, hz: Heights, lb: Labels, eg: EdgeSet,
                           has_h: boolean, has_l: boolean) -> Stencil {
   Stencil {
     sn_cells: s, sn_heights: hz, sn_labels: lb, sn_edges: eg,
+    sn_layers: layers_new(hexset_q0(s), hexset_r0(s), hexset_w(s), hexset_h(s)),
     sn_has_h: has_h, sn_has_l: has_l, sn_has_e: true, sn_code: ROT_OK,
   }
 }
@@ -883,6 +939,8 @@ pub fn stencil_rotate(st: Stencil, n: integer) -> Stencil {
     st.sn_has_h, st.sn_has_l
   );
   out.sn_has_e = st.sn_has_e;
+  out.sn_layers = layers_new(mnq, mnr, nw, nh);
+  for li in 0..layer_count(st.sn_layers) { layer_add(out.sn_layers, layer_name(st.sn_layers, li)); }
   // pass 2 — carry the payload across
   for iq in 0..w {
     for ir in 0..h {
@@ -891,6 +949,9 @@ pub fn stencil_rotate(st: Stencil, n: integer) -> Stencil {
         hexset_set(out.sn_cells, tq, tr, true);
         if st.sn_has_h { height_set(out.sn_heights, tq, tr, height_get(st.sn_heights, q0 + iq, r0 + ir)); }
         if st.sn_has_l { label_set(out.sn_labels, tq, tr, label_get(st.sn_labels, q0 + iq, r0 + ir)); }
+        for li in 0..layer_count(st.sn_layers) {
+          layer_set_at(out.sn_layers, li, tq, tr, layer_get_at(st.sn_layers, li, q0 + iq, r0 + ir));
+        }
       }
     }
   }
@@ -956,6 +1017,33 @@ pub fn stencil_stamp(
         hexset_set(dst, tq, tr, true);
         if st.sn_has_h { height_set(dst_h, tq, tr, height_get(st.sn_heights, sq, sr)); }
         if st.sn_has_l { label_set(dst_l, tq, tr, label_get(st.sn_labels, sq, sr)); }
+      }
+    }
+  }
+}
+
+// Stamp the named layers too.  Separate from stencil_stamp so a consumer that
+// uses no layers pays nothing for them.
+pub fn stencil_stamp_layers(
+  dst: HexSet, dst_h: Heights, dst_l: Labels, dst_y: Layers,
+  st: Stencil, aq: integer, ar: integer
+) {
+  stencil_stamp(dst, dst_h, dst_l, st, aq, ar);
+  dk = lattice_k(aq, ar);
+  dm = lattice_m(aq, ar);
+  q0 = hexset_q0(st.sn_cells); r0 = hexset_r0(st.sn_cells);
+  w  = hexset_w(st.sn_cells);  h  = hexset_h(st.sn_cells);
+  for li in 0..layer_count(st.sn_layers) { layer_add(dst_y, layer_name(st.sn_layers, li)); }
+  for iq in 0..w {
+    for ir in 0..h {
+      sq = q0 + iq;
+      sr = r0 + ir;
+      if hexset_get(st.sn_cells, sq, sr) {
+        (tq, tr) = lattice_to_cell(lattice_k(sq, sr) + dk, lattice_m(sq, sr) + dm);
+        for li in 0..layer_count(st.sn_layers) {
+          nm = layer_name(st.sn_layers, li);
+          layer_set(dst_y, nm, tq, tr, layer_get(st.sn_layers, nm, sq, sr));
+        }
       }
     }
   }
@@ -1115,4 +1203,91 @@ pub fn edgeset_count(e: EdgeSet) -> integer {
     }
   }
   n
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// named integer layers.
+//
+// `Labels` is one integer per cell.  A consumer generally needs several — moros
+// carries a material, an item and that item's rotation — and which ones exist is
+// CONTENT, not mechanism.  So the library holds "a named integer field over the
+// chunk" and the consumer names them.
+//
+// One flat vector rather than a vector of Labels: layer i, cell (q,r) lives at
+// i*w*h + r*w + q.  Adding a layer appends w*h slots, so a stencil with one layer
+// costs one layer's worth of storage.
+
+pub struct Layers {
+  ly_q0:    integer,
+  ly_r0:    integer,
+  ly_w:     integer,
+  ly_h:     integer,
+  ly_names: vector<text>,
+  ly_vals:  vector<integer>,
+}
+
+pub fn layers_new(q0: integer, r0: integer, w: integer, h: integer) -> Layers {
+  ns: vector<text> = [];
+  vs: vector<integer> = [];
+  Layers { ly_q0: q0, ly_r0: r0, ly_w: w, ly_h: h, ly_names: ns, ly_vals: vs }
+}
+
+pub fn layer_count(ls: Layers) -> integer { len(ls.ly_names) }
+pub fn layer_name(ls: Layers, i: integer) -> text { ls.ly_names[i] ?? "" }
+pub fn layers_q0(ls: Layers) -> integer { ls.ly_q0 }
+pub fn layers_r0(ls: Layers) -> integer { ls.ly_r0 }
+pub fn layers_w(ls: Layers) -> integer { ls.ly_w }
+pub fn layers_h(ls: Layers) -> integer { ls.ly_h }
+
+// Index of a named layer, or -1.  Names are the consumer's vocabulary; the
+// library never interprets them.
+pub fn layer_index(ls: Layers, name: text) -> integer {
+  found = -1;
+  for i in 0..len(ls.ly_names) {
+    if (ls.ly_names[i] ?? "") == name { found = i; }
+  }
+  found
+}
+
+// Add a layer, zero-filled.  Adding one that exists is a no-op, so a consumer
+// can call it defensively without checking first.
+pub fn layer_add(ls: Layers, name: text) -> integer {
+  had = layer_index(ls, name);
+  if had >= 0 { return had; }
+  ls.ly_names += [name];
+  n = ls.ly_w * ls.ly_h;
+  for i in 0..n { ls.ly_vals += [0]; }
+  len(ls.ly_names) - 1
+}
+
+fn ly_slot(ls: Layers, li: integer, q: integer, r: integer) -> integer {
+  dq = q - ls.ly_q0;
+  dr = r - ls.ly_r0;
+  if li < 0 || dq < 0 || dq >= ls.ly_w || dr < 0 || dr >= ls.ly_h { return -1; }
+  li * ls.ly_w * ls.ly_h + dr * ls.ly_w + dq
+}
+
+pub fn layer_set(ls: Layers, name: text, q: integer, r: integer, v: integer) {
+  i = ly_slot(ls, layer_index(ls, name), q, r);
+  if i < 0 { return; }
+  ls.ly_vals[i] = v;
+}
+
+pub fn layer_get(ls: Layers, name: text, q: integer, r: integer) -> integer {
+  i = ly_slot(ls, layer_index(ls, name), q, r);
+  if i < 0 { return 0; }
+  ls.ly_vals[i] ?? 0
+}
+
+// By index, for the writer and for iterating without knowing the names.
+pub fn layer_get_at(ls: Layers, li: integer, q: integer, r: integer) -> integer {
+  i = ly_slot(ls, li, q, r);
+  if i < 0 { return 0; }
+  ls.ly_vals[i] ?? 0
+}
+
+pub fn layer_set_at(ls: Layers, li: integer, q: integer, r: integer, v: integer) {
+  i = ly_slot(ls, li, q, r);
+  if i < 0 { return; }
+  ls.ly_vals[i] = v;
 }

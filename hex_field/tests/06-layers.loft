@@ -1,0 +1,117 @@
+// Named integer layers.  The library holds "a named integer field over the
+// chunk"; WHICH layers exist is the consumer's vocabulary — moros carries an
+// item and its rotation, another game would carry something else.
+use hex_field;
+
+fn test_layers_are_independent_and_named() {
+  ls = layers_new(0, 0, 4, 4);
+  layer_add(ls, "item");
+  layer_add(ls, "rotation");
+  assert(layer_count(ls) == 2, "expected 2 layers, got {layer_count(ls)}");
+  layer_set(ls, "item", 1, 1, 7);
+  layer_set(ls, "rotation", 1, 1, 9);
+  assert(layer_get(ls, "item", 1, 1) == 7, "item layer lost its value");
+  assert(layer_get(ls, "rotation", 1, 1) == 9, "rotation layer lost its value");
+  assert(layer_get(ls, "item", 2, 2) == 0, "an unset cell is not zero");
+  // an unknown name reads 0 and writes nowhere, rather than aliasing layer 0
+  assert(layer_get(ls, "nonesuch", 1, 1) == 0, "an unknown layer aliased a real one");
+  layer_set(ls, "nonesuch", 1, 1, 42);
+  assert(layer_get(ls, "item", 1, 1) == 7, "writing an unknown layer corrupted a real one");
+}
+
+fn test_adding_an_existing_layer_is_a_no_op() {
+  ls = layers_new(0, 0, 3, 3);
+  a = layer_add(ls, "item");
+  layer_set(ls, "item", 0, 0, 5);
+  b = layer_add(ls, "item");
+  assert(a == b, "re-adding returned a different index");
+  assert(layer_count(ls) == 1, "re-adding created a second layer");
+  assert(layer_get(ls, "item", 0, 0) == 5, "re-adding cleared the layer");
+}
+
+fn withlayers() -> Stencil {
+  s  = hexset_chunk(0, 0, 3, 3);
+  // Populate the field BEFORE constructing the stencil — stencil_from takes the
+  // field by value, so cells added afterwards do not reach it.  An earlier
+  // version of this helper did it the other way round and produced an empty
+  // stencil that still reported the right layer COUNT, so only the values failed.
+  for q in 0..3 { hexset_set(s, q, 0, true); }
+  hexset_set(s, 0, 1, true);
+  st = stencil_from(s, heights_new(0, 0, 3, 3), labels_new(0, 0, 3, 3), false, false);
+  layer_add(st.sn_layers, "item");
+  layer_add(st.sn_layers, "rotation");
+  layer_set(st.sn_layers, "item", 2, 0, 31);
+  layer_set(st.sn_layers, "rotation", 2, 0, 9);
+  st
+}
+
+fn test_rotation_carries_named_layers() {
+  st = withlayers();
+  for n in 1..6 {
+    rot = stencil_rotate(st, n);
+    assert(layer_count(rot.sn_layers) == 2, "turn {n} lost a layer");
+    (tq, tr) = cell_rot(2, 0, n);
+    assert(layer_get(rot.sn_layers, "item", tq, tr) == 31,
+           "turn {n}: item did not follow its cell to {tq},{tr}");
+    assert(layer_get(rot.sn_layers, "rotation", tq, tr) == 9,
+           "turn {n}: rotation value did not follow its cell");
+  }
+}
+
+fn test_stamping_carries_named_layers_onto_an_odd_row() {
+  st = withlayers();
+  dc = hexset_chunk(-6, -6, 24, 24);
+  dh = heights_new(-6, -6, 24, 24);
+  dl = labels_new(-6, -6, 24, 24);
+  dy = layers_new(-6, -6, 24, 24);
+  stencil_stamp_layers(dc, dh, dl, dy, st, 5, 3);
+  dk = lattice_k(5, 3); dm = lattice_m(5, 3);
+  (tq, tr) = lattice_to_cell(lattice_k(2, 0) + dk, lattice_m(2, 0) + dm);
+  assert(layer_get(dy, "item", tq, tr) == 31, "item did not land at {tq},{tr}");
+  assert(layer_get(dy, "rotation", tq, tr) == 9, "rotation did not land");
+}
+
+fn test_named_layers_survive_the_document_format() {
+  st = withlayers();
+  p = "layers_rt.bin";
+  doc_write_all(p, st.sn_cells, st.sn_heights, st.sn_labels, st.sn_edges, st.sn_layers,
+                false, false, false);
+  d = doc_read(p);
+  assert(d.doc_code == HXF_OK, "refused {d.doc_code}");
+  assert(layer_count(d.doc_layers) == 2, "read back {layer_count(d.doc_layers)} layers, want 2");
+  assert(layer_index(d.doc_layers, "item") >= 0, "the layer NAME was lost");
+  assert(layer_index(d.doc_layers, "rotation") >= 0, "the second layer name was lost");
+  assert(layer_get(d.doc_layers, "item", 2, 0) == 31, "item value lost in the round-trip");
+  assert(layer_get(d.doc_layers, "rotation", 2, 0) == 9, "rotation value lost");
+  delete(p);
+}
+
+// A LAYR whose declared length disagrees with its name length is corrupt, and
+// must be refused rather than read short.
+fn test_refuses_a_layer_section_of_the_wrong_length() {
+  p = "layers_badlen.bin";
+  {
+    f = file(p); f#format = LittleEndian;
+    f += (HXF_MAGIC as i32); f += (HXF_SCHEMA as i32);
+    f += (0 as i32); f += (0 as i32);
+    f += (2 as i32); f += (2 as i32);
+    f += (2 as i32); f += (0 as i32);
+    f += (TAG_OCCU as i32); f += (4 as i32);
+    for i in 0..4 { f += ((1 as u8?) ?? 0); }
+    f += (TAG_LAYR as i32);
+    f += (20 as i32);          // claims 20; a 4-byte name + 4 cells needs 4+4+16 = 24
+    f += (4 as i32); f += "item";
+    for i in 0..4 { f += (0 as i32); }
+  }
+  d = doc_read(p);
+  assert(d.doc_code == HXF_BAD_SECTION, "a short LAYR section gave {d.doc_code}");
+  delete(p);
+}
+
+// The old fixtures use TAG_LABL and no layers; they must still load untouched.
+fn test_the_committed_fixtures_still_load_without_layers() {
+  d = doc_read("fixtures/canonical.hxf");
+  assert(d.doc_code == HXF_OK, "canonical.hxf broke: {d.doc_code}");
+  assert(layer_count(d.doc_layers) == 0, "it grew {layer_count(d.doc_layers)} layers from nowhere");
+  assert(d.doc_has_l, "its unnamed label layer was lost");
+}
