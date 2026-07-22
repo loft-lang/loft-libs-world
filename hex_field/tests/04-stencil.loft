@@ -142,3 +142,92 @@ fn test_rotation_by_multiples_of_60_is_accepted() {
   assert(neg.sn_code == ROT_OK, "-120° was refused");
   assert(hexset_count(neg.sn_cells) == hexset_count(st.sn_cells), "-120° lost cells");
 }
+
+// ── a stencil must never lose data ───────────────────────────────────────
+//
+// Not "the cells survive" — EVERYTHING survives.  A stencil is cells plus
+// labels, heights, edge materials and named layers, and an orientation change
+// is a relabelling of the lattice, so nothing has anywhere to go.
+//
+// This is stated over edgeset_count_all, which walks the halo too: rim edges are
+// stored against a cell OUTSIDE the extent, so an implementation that iterates
+// occupied cells drops them and every in-chunk count still looks plausible.
+// That is exactly what happened — 18 slots became 10 and the cell count never
+// moved.
+
+fn walled_ring() -> Stencil {
+  c  = hexset_chunk(-1, -1, 3, 3);
+  hz = heights_new(-1, -1, 3, 3);
+  lb = labels_new(-1, -1, 3, 3);
+  eg = edgeset_new(-1, -1, 3, 3);
+  hexset_set(c, 0, 0, true);
+  label_set(lb, 0, 0, 2);
+  for d in 0..6 {
+    rq = nb_q(0, 0, d);
+    rr = nb_r(0, 0, d);
+    hexset_set(c, rq, rr, true);
+    label_set(lb, rq, rr, 1);
+    height_set(hz, rq, rr, 3.5);
+  }
+  for d in 0..6 {
+    rq = nb_q(0, 0, d);
+    rr = nb_r(0, 0, d);
+    for e2 in 0..6 {
+      oq = nb_q(rq, rr, e2);
+      orr = nb_r(rq, rr, e2);
+      if !hexset_get(c, oq, orr) { edge_set_mat(eg, rq, rr, oq, orr, 1); }
+    }
+  }
+  st = stencil_with_edges(c, hz, lb, eg, true, true);
+  layer_add(st.sn_layers, "item");
+  layer_set(st.sn_layers, "item", 0, 0, 44);
+  st
+}
+
+fn test_rotation_loses_nothing_at_all() {
+  st = walled_ring();
+  n0 = hexset_count(st.sn_cells);
+  e0 = edgeset_count_all(st.sn_edges);
+  assert(e0 > 0, "the fixture has no walls");
+  for n in 1..6 {
+    rot = stencil_rotate(st, n);
+    assert(hexset_count(rot.sn_cells) == n0, "turn {n}: cells {hexset_count(rot.sn_cells)}, want {n0}");
+    assert(edgeset_count_all(rot.sn_edges) == e0,
+           "turn {n}: {edgeset_count_all(rot.sn_edges)} edge slots, want {e0} — a rotation lost walls");
+    assert(layer_count(rot.sn_layers) == 1, "turn {n}: lost the named layer");
+    (tq, tr) = cell_rot(0, 0, n);
+    assert(layer_get(rot.sn_layers, "item", tq, tr) == 44, "turn {n}: lost the item value");
+  }
+}
+
+fn test_mirror_loses_nothing_and_is_self_inverse() {
+  st = walled_ring();
+  m1 = stencil_mirror(st);
+  assert(hexset_count(m1.sn_cells) == hexset_count(st.sn_cells), "mirror lost cells");
+  assert(edgeset_count_all(m1.sn_edges) == edgeset_count_all(st.sn_edges),
+         "mirror lost walls: {edgeset_count_all(m1.sn_edges)} vs {edgeset_count_all(st.sn_edges)}");
+  m2 = stencil_mirror(m1);
+  assert(hexset_count(m2.sn_cells) == hexset_count(st.sn_cells), "mirroring twice lost cells");
+  for q in 0..3 {
+    for r in 0..3 {
+      assert(hexset_get(m2.sn_cells, q - 1, r - 1) == hexset_get(st.sn_cells, q - 1, r - 1),
+             "mirroring twice is not the identity at {q-1},{r-1}");
+    }
+  }
+}
+
+// Six rotations, and the other six by flipping — the twelve the design promises.
+fn test_twelve_orientations_all_keep_the_whole_stencil() {
+  st = walled_ring();
+  n0 = hexset_count(st.sn_cells);
+  e0 = edgeset_count_all(st.sn_edges);
+  flipped = stencil_mirror(st);
+  for n in 0..6 {
+    a = stencil_rotate(st, n);
+    b = stencil_rotate(flipped, n);
+    assert(hexset_count(a.sn_cells) == n0, "orientation {n}: cells lost");
+    assert(edgeset_count_all(a.sn_edges) == e0, "orientation {n}: walls lost");
+    assert(hexset_count(b.sn_cells) == n0, "flipped orientation {n}: cells lost");
+    assert(edgeset_count_all(b.sn_edges) == e0, "flipped orientation {n}: walls lost");
+  }
+}

@@ -935,7 +935,7 @@ pub fn stencil_rotate(st: Stencil, n: integer) -> Stencil {
     hexset_chunk(mnq, mnr, nw, nh),
     heights_new(mnq, mnr, nw, nh),
     labels_new(mnq, mnr, nw, nh),
-    edgeset_new(mnq, mnr, nw, nh),
+    edgeset_new(mnq - 1, mnr - 1, nw + 2, nh + 2),
     st.sn_has_h, st.sn_has_l
   );
   out.sn_has_e = st.sn_has_e;
@@ -959,8 +959,12 @@ pub fn stencil_rotate(st: Stencil, n: integer) -> Stencil {
   // the midpoint of two rotated centres is the rotation of the midpoint.  So
   // rotating both endpoints and re-keying is exact — no resampling, no drift.
   if st.sn_has_e {
-    for iq in 0..w {
-      for ir in 0..h {
+    // Walk the HALO grid, not the cell extent.  An edge is stored against one of
+    // its two cells, and for a rim edge that owner is OUTSIDE the extent — so a
+    // loop over the extent silently drops it.  A stencil must never lose data,
+    // so this iterates every stored slot rather than every occupied cell.
+    for iq in -1..(w + 1) {
+      for ir in -1..(h + 1) {
         cq = q0 + iq;
         cr = r0 + ir;
         for sl in 0..3 {
@@ -973,6 +977,77 @@ pub fn stencil_rotate(st: Stencil, n: integer) -> Stencil {
           if mv != 0 {
             (aq, ar) = cell_rot(cq, cr, n);
             (bq, br) = cell_rot(nq, nr, n);
+            edge_set_mat(out.sn_edges, aq, ar, bq, br, mv);
+          }
+        }
+      }
+    }
+  }
+  out
+}
+
+// Reflect a whole stencil (k -> -k).  With the six rotations this is the other
+// half of the TWELVE orientations: six placements, and the remaining six reached
+// by flipping.  Handed content — an L-shaped house, a staircase — needs it, and
+// it is exact for the same reason the rotation is.
+pub fn stencil_mirror(st: Stencil) -> Stencil {
+  q0 = hexset_q0(st.sn_cells); r0 = hexset_r0(st.sn_cells);
+  w  = hexset_w(st.sn_cells);  h  = hexset_h(st.sn_cells);
+  seen = false;
+  mnq = 0; mxq = 0; mnr = 0; mxr = 0;
+  for iq in 0..w {
+    for ir in 0..h {
+      if hexset_get(st.sn_cells, q0 + iq, r0 + ir) {
+        (tq, tr) = cell_mirror(q0 + iq, r0 + ir);
+        if !seen { mnq = tq; mxq = tq; mnr = tr; mxr = tr; seen = true; }
+        if tq < mnq { mnq = tq; }
+        if tq > mxq { mxq = tq; }
+        if tr < mnr { mnr = tr; }
+        if tr > mxr { mxr = tr; }
+      }
+    }
+  }
+  if !seen { return st; }
+  nw = mxq - mnq + 1;
+  nh = mxr - mnr + 1;
+  out = stencil_with_edges(
+    hexset_chunk(mnq, mnr, nw, nh),
+    heights_new(mnq, mnr, nw, nh),
+    labels_new(mnq, mnr, nw, nh),
+    edgeset_new(mnq - 1, mnr - 1, nw + 2, nh + 2),
+    st.sn_has_h, st.sn_has_l
+  );
+  out.sn_has_e = st.sn_has_e;
+  out.sn_layers = layers_new(mnq, mnr, nw, nh);
+  for li in 0..layer_count(st.sn_layers) { layer_add(out.sn_layers, layer_name(st.sn_layers, li)); }
+  for iq in 0..w {
+    for ir in 0..h {
+      if hexset_get(st.sn_cells, q0 + iq, r0 + ir) {
+        (tq, tr) = cell_mirror(q0 + iq, r0 + ir);
+        hexset_set(out.sn_cells, tq, tr, true);
+        if st.sn_has_h { height_set(out.sn_heights, tq, tr, height_get(st.sn_heights, q0 + iq, r0 + ir)); }
+        if st.sn_has_l { label_set(out.sn_labels, tq, tr, label_get(st.sn_labels, q0 + iq, r0 + ir)); }
+        for li in 0..layer_count(st.sn_layers) {
+          layer_set_at(out.sn_layers, li, tq, tr, layer_get_at(st.sn_layers, li, q0 + iq, r0 + ir));
+        }
+      }
+    }
+  }
+  if st.sn_has_e {
+    for iq in -1..(w + 1) {
+      for ir in -1..(h + 1) {
+        cq = q0 + iq;
+        cr = r0 + ir;
+        for sl in 0..3 {
+          d = 0;
+          if sl == 1 { d = 2; }
+          if sl == 2 { d = 3; }
+          nq = nb_q(cq, cr, d);
+          nr = nb_r(cq, cr, d);
+          mv = edge_mat(st.sn_edges, cq, cr, nq, nr);
+          if mv != 0 {
+            (aq, ar) = cell_mirror(cq, cr);
+            (bq, br) = cell_mirror(nq, nr);
             edge_set_mat(out.sn_edges, aq, ar, bq, br, mv);
           }
         }
@@ -1062,8 +1137,9 @@ pub fn stencil_stamp_all(
   dm = lattice_m(aq, ar);
   q0 = hexset_q0(st.sn_cells); r0 = hexset_r0(st.sn_cells);
   w  = hexset_w(st.sn_cells);  h  = hexset_h(st.sn_cells);
-  for iq in 0..w {
-    for ir in 0..h {
+  // the halo, for the same reason as stencil_rotate
+  for iq in -1..(w + 1) {
+    for ir in -1..(h + 1) {
       cq = q0 + iq;
       cr = r0 + ir;
       for sl in 0..3 {
@@ -1096,8 +1172,9 @@ pub fn stencil_stamp_edges(
   dm = lattice_m(aq, ar);
   q0 = hexset_q0(st.sn_cells); r0 = hexset_r0(st.sn_cells);
   w  = hexset_w(st.sn_cells);  h  = hexset_h(st.sn_cells);
-  for iq in 0..w {
-    for ir in 0..h {
+  // the halo, for the same reason as stencil_rotate
+  for iq in -1..(w + 1) {
+    for ir in -1..(h + 1) {
       cq = q0 + iq;
       cr = r0 + ir;
       for sl in 0..3 {
