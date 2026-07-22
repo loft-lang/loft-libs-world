@@ -1049,6 +1049,40 @@ pub fn stencil_stamp_layers(
   }
 }
 
+// Everything at once: cells, heights, labels, named layers and walls.  Exists so
+// a consumer does not stamp cells three times by calling the three narrower
+// forms, and so there is ONE place that knows the full payload.
+pub fn stencil_stamp_all(
+  dst: HexSet, dst_h: Heights, dst_l: Labels, dst_y: Layers, dst_e: EdgeSet,
+  st: Stencil, aq: integer, ar: integer
+) {
+  stencil_stamp_layers(dst, dst_h, dst_l, dst_y, st, aq, ar);
+  if !st.sn_has_e { return; }
+  dk = lattice_k(aq, ar);
+  dm = lattice_m(aq, ar);
+  q0 = hexset_q0(st.sn_cells); r0 = hexset_r0(st.sn_cells);
+  w  = hexset_w(st.sn_cells);  h  = hexset_h(st.sn_cells);
+  for iq in 0..w {
+    for ir in 0..h {
+      cq = q0 + iq;
+      cr = r0 + ir;
+      for sl in 0..3 {
+        d = 0;
+        if sl == 1 { d = 2; }
+        if sl == 2 { d = 3; }
+        nq = nb_q(cq, cr, d);
+        nr = nb_r(cq, cr, d);
+        mv = edge_mat(st.sn_edges, cq, cr, nq, nr);
+        if mv != 0 {
+          (tq, tr) = lattice_to_cell(lattice_k(cq, cr) + dk, lattice_m(cq, cr) + dm);
+          (uq, ur) = lattice_to_cell(lattice_k(nq, nr) + dk, lattice_m(nq, nr) + dm);
+          edge_set_mat(dst_e, tq, tr, uq, ur, mv);
+        }
+      }
+    }
+  }
+}
+
 // Stamp including the wall layer.  Edges translate the same way cells do — in
 // lattice space — so a wall stamped on an odd row stays on the edge it was
 // authored on.
