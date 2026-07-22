@@ -4,3 +4,4 @@ target/
 .DS_Store
 .loft/
 _tmp_*.bin
+native-auto/

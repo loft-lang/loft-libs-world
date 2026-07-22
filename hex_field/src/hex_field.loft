@@ -532,3 +532,205 @@ pub fn validate(v: VecMap, cells: integer) -> integer {
   if outer != 1 { return 5; }
   0
 }
+
+// ═══════════════════════════════════════════════════════════════════════
+// hex_doc — the interchange format for a hex field: a world, or a stencil.
+//
+// The SHARED artifact.  A field written by one consumer must load in another
+// bit-for-bit, so `load(save(x)) == x` is not a private test — it is the
+// interface, and both sides gate it.
+//
+//     offset  size  field           type  notes
+//     -------------------------------------------------------------------
+//     0       4     magic           i32   'HXF1'
+//     4       4     schema_version  i32   1
+//     8       4     q0              i32   extent origin
+//     12      4     r0              i32
+//     16      4     w               i32   extent size, cells
+//     20      4     h               i32
+//     24      4     section_count   i32
+//     28      4     reserved        i32   must be 0
+//
+//     then section_count sections, each:
+//     0       4     tag             i32   'OCCU' | 'HGHT' | 'LABL' | …
+//     4       4     byte_len        i32   payload size
+//     8       byte_len              payload
+//
+// SECTIONS, not a flags word.  A reader that meets a tag it does not know
+// SKIPS it by byte_len and keeps going, so a field written by a newer consumer
+// still loads in an older one.  A flags word cannot do that: an unknown bit
+// means an array of unknown length, which is unskippable, so the only correct
+// response would be to refuse the whole file.  That difference is testable, and
+// hex_doctest tests it.
+//
+// Explicit dimensions are load-bearing.  A format that infers its extent from
+// its payload cannot detect truncation; this one checks every section's length
+// against w·h and refuses a mismatch.
+
+pub const HXF_MAGIC   = 0x31465848;   // 'HXF1' little-endian
+pub const HXF_SCHEMA  = 1;
+pub const HXF_HEADER  = 32;
+
+pub const TAG_OCCU = 0x5543434F;      // 'OCCU'
+pub const TAG_HGHT = 0x54484748;      // 'HGHT'
+pub const TAG_LABL = 0x4C42414C;      // 'LABL'
+
+// Refusal codes.  0 = loaded.  Every one of these is a REFUSAL, never a
+// partial parse: a half-read field is worse than no field.
+pub const HXF_OK            = 0;
+pub const HXF_BAD_MAGIC     = 1;
+pub const HXF_BAD_SCHEMA    = 2;
+pub const HXF_BAD_RESERVED  = 3;
+pub const HXF_BAD_SECTION   = 4;   // section length disagrees with w·h
+pub const HXF_TRUNCATED     = 5;
+pub const HXF_MISSING_OCCU  = 6;
+
+// What a load produced.  `doc_code` is the refusal code; the field members are
+// meaningful only when it is HXF_OK.
+pub struct HexDoc {
+  doc_code:    integer,
+  doc_cells:   HexSet,
+  doc_heights: Heights,
+  doc_labels:  Labels,
+  doc_has_h:   boolean,
+  doc_has_l:   boolean,
+  doc_skipped: integer,   // unknown sections skipped — the forward-compat count
+}
+
+// ── writing ──────────────────────────────────────────────────────────────
+
+// Write a field.  `heights` / `labels` are optional: pass has_h/has_l false to
+// leave the section out entirely rather than writing a zero-filled one, so a
+// stencil that only carries occupancy costs only occupancy.
+pub fn doc_write(
+  path: text, s: HexSet, hz: Heights, lb: Labels,
+  has_h: boolean, has_l: boolean
+) {
+  w = hexset_w(s);
+  h = hexset_h(s);
+  n = w * h;
+  sections = 1;
+  if has_h { sections = sections + 1; }
+  if has_l { sections = sections + 1; }
+
+  f = file(path);
+  f#format = LittleEndian;
+  f += (HXF_MAGIC as i32);
+  f += (HXF_SCHEMA as i32);
+  f += (hexset_q0(s) as i32);
+  f += (hexset_r0(s) as i32);
+  f += (w as i32);
+  f += (h as i32);
+  f += (sections as i32);
+  f += (0 as i32);
+
+  f += (TAG_OCCU as i32);
+  f += (n as i32);
+  for q in 0..w {
+    for r in 0..h {
+      // `on` is 0 or 1 by construction, but the cast is checked anyway —
+      // a narrowing cast that "cannot fail" is exactly the kind that does.
+      on = if hexset_get(s, hexset_q0(s) + q, hexset_r0(s) + r) { 1 } else { 0 };
+      f += ((on as u8?) ?? 0 as u8);
+    }
+  }
+
+  if has_h {
+    f += (TAG_HGHT as i32);
+    f += ((n * 8) as i32);
+    for q in 0..w {
+      for r in 0..h {
+        f += height_get(hz, hexset_q0(s) + q, hexset_r0(s) + r);
+      }
+    }
+  }
+
+  if has_l {
+    f += (TAG_LABL as i32);
+    f += ((n * 4) as i32);
+    for q in 0..w {
+      for r in 0..h {
+        f += (label_get(lb, hexset_q0(s) + q, hexset_r0(s) + r) as i32);
+      }
+    }
+  }
+}
+
+// ── reading ──────────────────────────────────────────────────────────────
+
+pub fn doc_read(path: text) -> HexDoc {
+  d = HexDoc {
+    doc_code: HXF_OK,
+    doc_cells: hexset_chunk(0, 0, 1, 1),
+    doc_heights: heights_new(0, 0, 1, 1),
+    doc_labels: labels_new(0, 0, 1, 1),
+    doc_has_h: false, doc_has_l: false, doc_skipped: 0,
+  };
+  f = file(path);
+  f#format = LittleEndian;
+  total = f#size;
+  if total < HXF_HEADER { d.doc_code = HXF_TRUNCATED; return d; }
+
+  magic = f#read as i32;
+  if magic != HXF_MAGIC { d.doc_code = HXF_BAD_MAGIC; return d; }
+  schema = f#read as i32;
+  if schema != HXF_SCHEMA { d.doc_code = HXF_BAD_SCHEMA; return d; }
+  q0 = f#read as i32;
+  r0 = f#read as i32;
+  w  = f#read as i32;
+  h  = f#read as i32;
+  nsec = f#read as i32;
+  rsv = f#read as i32;
+  if rsv != 0 { d.doc_code = HXF_BAD_RESERVED; return d; }
+
+  n = w * h;
+  d.doc_cells   = hexset_chunk(q0, r0, w, h);
+  d.doc_heights = heights_new(q0, r0, w, h);
+  d.doc_labels  = labels_new(q0, r0, w, h);
+  seen_occu = false;
+
+  for si in 0..nsec {
+    if f#next + 8 > total { d.doc_code = HXF_TRUNCATED; return d; }
+    tag = f#read as i32;
+    blen = f#read as i32;
+    if f#next + blen > total { d.doc_code = HXF_TRUNCATED; return d; }
+
+    if tag == TAG_OCCU {
+      if blen != n { d.doc_code = HXF_BAD_SECTION; return d; }
+      for q in 0..w {
+        for r in 0..h {
+          v = f#read as u8;
+          hexset_set(d.doc_cells, q0 + q, r0 + r, v != 0);
+        }
+      }
+      seen_occu = true;
+    } else if tag == TAG_HGHT {
+      if blen != n * 8 { d.doc_code = HXF_BAD_SECTION; return d; }
+      for q in 0..w {
+        for r in 0..h {
+          hv = f#read as float;
+          height_set(d.doc_heights, q0 + q, r0 + r, hv);
+        }
+      }
+      d.doc_has_h = true;
+    } else if tag == TAG_LABL {
+      if blen != n * 4 { d.doc_code = HXF_BAD_SECTION; return d; }
+      for q in 0..w {
+        for r in 0..h {
+          lv = f#read as i32;
+          label_set(d.doc_labels, q0 + q, r0 + r, lv);
+        }
+      }
+      d.doc_has_l = true;
+    } else {
+      // Unknown section: skip it by its declared length.  This is the whole
+      // reason sections carry a length, and why a newer writer does not break
+      // an older reader.
+      f#next = f#next + blen;
+      d.doc_skipped = d.doc_skipped + 1;
+    }
+  }
+
+  if !seen_occu { d.doc_code = HXF_MISSING_OCCU; return d; }
+  d
+}

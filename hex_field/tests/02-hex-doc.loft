@@ -1,0 +1,188 @@
+// The document format's contract.  `load(save(x)) == x` is the interface
+// between consumers, so it is gated here, in the package, not in either game.
+use hex_field;
+
+fn tmp(name: text) -> text { "hexdoc_{name}.bin" }
+
+fn build(w: integer, h: integer) -> HexSet {
+  s = hexset_chunk(2, 3, w, h);
+  for q in 0..w {
+    for r in 0..h {
+      if (q + r) % 3 != 0 { hexset_set(s, 2 + q, 3 + r, true); }
+    }
+  }
+  s
+}
+
+fn test_round_trip_is_identity() {
+  s = build(5, 4);
+  hz = heights_new(2, 3, 5, 4);
+  lb = labels_new(2, 3, 5, 4);
+  for q in 0..5 {
+    for r in 0..4 {
+      height_set(hz, 2 + q, 3 + r, (q * 10 + r) as float + 0.5);
+      label_set(lb, 2 + q, 3 + r, q * 7 + r);
+    }
+  }
+  p = tmp("rt");
+  doc_write(p, s, hz, lb, true, true);
+  d = doc_read(p);
+  assert(d.doc_code == HXF_OK, "load refused with {d.doc_code}");
+  assert(d.doc_has_h, "heights section missing");
+  assert(d.doc_has_l, "labels section missing");
+  assert(hexset_count(d.doc_cells) == hexset_count(s), "cell count changed");
+  for q in 0..5 {
+    for r in 0..4 {
+      assert(hexset_get(d.doc_cells, 2 + q, 3 + r) == hexset_get(s, 2 + q, 3 + r),
+             "occupancy differs at {q},{r}");
+      // fractional heights survive: the format carries f64, so 12.5 is NOT 12
+      assert(height_get(d.doc_heights, 2 + q, 3 + r) == height_get(hz, 2 + q, 3 + r),
+             "height differs at {q},{r}");
+      assert(label_get(d.doc_labels, 2 + q, 3 + r) == label_get(lb, 2 + q, 3 + r),
+             "label differs at {q},{r}");
+    }
+  }
+  delete(p);
+}
+
+// Writing what was read must produce the SAME BYTES.  Structural equality
+// hides field-ordering and default-value drift, which is how two consumers
+// stop agreeing without either noticing.
+fn test_rewrite_is_byte_identical() {
+  s = build(4, 4);
+  hz = heights_new(2, 3, 4, 4);
+  lb = labels_new(2, 3, 4, 4);
+  for q in 0..4 { for r in 0..4 { height_set(hz, 2 + q, 3 + r, 1.25); label_set(lb, 2 + q, 3 + r, 9); } }
+  a = tmp("b1"); b = tmp("b2");
+  doc_write(a, s, hz, lb, true, true);
+  d = doc_read(a);
+  assert(d.doc_code == HXF_OK, "first load refused {d.doc_code}");
+  doc_write(b, d.doc_cells, d.doc_heights, d.doc_labels, d.doc_has_h, d.doc_has_l);
+  fa = file(a); fa#format = LittleEndian;
+  fb = file(b); fb#format = LittleEndian;
+  na = fa#size; nb = fb#size;
+  assert(na == nb, "sizes differ: {na} vs {nb}");
+  for i in 0..na {
+    x = fa#read as u8;
+    y = fb#read as u8;
+    assert(x == y, "byte {i} differs: {x} vs {y}");
+  }
+  delete(a); delete(b);
+}
+
+// An occupancy-only field must not carry empty height/label sections.
+fn test_absent_sections_are_absent() {
+  s = build(3, 3);
+  hz = heights_new(2, 3, 3, 3);
+  lb = labels_new(2, 3, 3, 3);
+  p = tmp("occ");
+  doc_write(p, s, hz, lb, false, false);
+  d = doc_read(p);
+  assert(d.doc_code == HXF_OK, "refused {d.doc_code}");
+  assert(!d.doc_has_h, "heights present when not written");
+  assert(!d.doc_has_l, "labels present when not written");
+  f = file(p); f#format = LittleEndian;
+  assert(f#size == 32 + 8 + 9, "occupancy-only file is {f#size} bytes, want 49");
+  delete(p);
+}
+
+// THE reason sections carry a length: a field written by a newer consumer,
+// with a section this reader has never heard of, still loads.
+fn test_unknown_section_is_skipped() {
+  p = tmp("fwd");
+  {
+    f = file(p);
+    f#format = LittleEndian;
+    f += (HXF_MAGIC as i32);
+    f += (HXF_SCHEMA as i32);
+    f += (0 as i32); f += (0 as i32);      // q0, r0
+    f += (2 as i32); f += (2 as i32);      // w, h
+    f += (2 as i32);                        // two sections
+    f += (0 as i32);                        // reserved
+    f += (0x5A5A5A5A as i32);               // a tag from the future
+    f += (6 as i32);
+    for i in 0..6 { f += (0xEE as u8); }
+    f += (TAG_OCCU as i32);
+    f += (4 as i32);
+    for i in 0..4 { f += (1 as u8); }
+  }
+  d = doc_read(p);
+  assert(d.doc_code == HXF_OK, "a future section made the load fail: {d.doc_code}");
+  assert(d.doc_skipped == 1, "expected 1 skipped section, got {d.doc_skipped}");
+  assert(hexset_count(d.doc_cells) == 4, "occupancy after the unknown section was lost");
+  delete(p);
+}
+
+// ── refusals: each must fail LOUDLY, never parse half a field ────────────
+
+fn test_refuses_bad_magic() {
+  p = tmp("magic");
+  { f = file(p); f#format = LittleEndian; f += ((0xDEADBEEF as i32?) ?? 0 as i32); }
+  assert(doc_read(p).doc_code != HXF_OK, "bad magic accepted");
+  delete(p);
+}
+
+fn test_refuses_future_schema() {
+  p = tmp("schema");
+  {
+    f = file(p); f#format = LittleEndian;
+    f += (HXF_MAGIC as i32); f += (99 as i32);
+    for i in 0..6 { f += (0 as i32); }
+  }
+  d = doc_read(p);
+  assert(d.doc_code == HXF_BAD_SCHEMA, "future schema gave {d.doc_code}");
+  delete(p);
+}
+
+fn test_refuses_nonzero_reserved() {
+  p = tmp("rsv");
+  {
+    f = file(p); f#format = LittleEndian;
+    f += (HXF_MAGIC as i32); f += (HXF_SCHEMA as i32);
+    f += (0 as i32); f += (0 as i32); f += (2 as i32); f += (2 as i32);
+    f += (1 as i32); f += (7 as i32);
+  }
+  d = doc_read(p);
+  assert(d.doc_code == HXF_BAD_RESERVED, "non-zero reserved gave {d.doc_code}");
+  delete(p);
+}
+
+// Explicit dimensions exist to catch exactly this.
+fn test_refuses_section_length_disagreeing_with_dimensions() {
+  p = tmp("dims");
+  {
+    f = file(p); f#format = LittleEndian;
+    f += (HXF_MAGIC as i32); f += (HXF_SCHEMA as i32);
+    f += (0 as i32); f += (0 as i32);
+    f += (4 as i32); f += (4 as i32);      // claims 16 cells
+    f += (1 as i32); f += (0 as i32);
+    f += (TAG_OCCU as i32); f += (9 as i32);   // but ships 9 bytes
+    for i in 0..9 { f += (1 as u8); }
+  }
+  d = doc_read(p);
+  assert(d.doc_code == HXF_BAD_SECTION, "dimension mismatch gave {d.doc_code}");
+  delete(p);
+}
+
+fn test_refuses_truncated_file() {
+  s = build(4, 4);
+  hz = heights_new(2, 3, 4, 4);
+  lb = labels_new(2, 3, 4, 4);
+  full = tmp("full");
+  doc_write(full, s, hz, lb, true, true);
+  ff = file(full); ff#format = LittleEndian;
+  keep = ff#size - 20;
+  cut = tmp("cut");
+  { g = file(cut); g#format = LittleEndian;
+    for i in 0..keep { g += (ff#read as u8); } }
+  d = doc_read(cut);
+  assert(d.doc_code == HXF_TRUNCATED, "truncated file gave {d.doc_code}");
+  delete(full); delete(cut);
+}
+
+fn test_refuses_header_only_stub() {
+  p = tmp("stub");
+  { f = file(p); f#format = LittleEndian; f += (HXF_MAGIC as i32); }
+  assert(doc_read(p).doc_code == HXF_TRUNCATED, "8-byte stub accepted");
+  delete(p);
+}
