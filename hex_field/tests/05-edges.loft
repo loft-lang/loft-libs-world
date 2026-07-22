@@ -107,3 +107,42 @@ fn test_refuses_an_edge_section_of_the_wrong_length() {
          "an EDGE section sized w*h*3 instead of the halo grid gave {d.doc_code}");
   delete(p);
 }
+
+// The second shared fixture: one committed file with a WALL in it, read by both
+// consumers.  `canonical.hxf` proved the cell layers were an interface rather
+// than two implementations that happened to agree; this does the same for edges,
+// which is the layer most likely to drift because its indexing is subtle.
+const WALL_FIXTURE = "fixtures/walled.hxf";
+
+fn test_committed_wall_fixture_loads() {
+  d = doc_read(WALL_FIXTURE);
+  assert(d.doc_code == HXF_OK, "the committed wall fixture no longer loads: {d.doc_code}");
+  assert(hexset_count(d.doc_cells) == 9, "cells: {hexset_count(d.doc_cells)}, want 9");
+  assert(d.doc_has_e, "the EDGE section is gone");
+  assert(edgeset_count(d.doc_edges) == 1, "walls: {edgeset_count(d.doc_edges)}, want 1");
+  // the wall sits on the E edge of (0,1) — an ODD row, at a negative-origin extent
+  assert(edge_mat(d.doc_edges, 0, 1, nb_q(0, 1, 0), nb_r(0, 1, 0)) == 12,
+         "the wall is not on the edge it was authored on");
+  // and NOTHING else is set anywhere in the layer, halo included — otherwise a
+  // corrupted halo slot rides along unnoticed
+  assert(edgeset_count_all(d.doc_edges) == 1,
+         "the layer carries {edgeset_count_all(d.doc_edges)} non-zero slots, want exactly 1");
+}
+
+fn test_rewriting_the_wall_fixture_reproduces_it() {
+  d = doc_read(WALL_FIXTURE);
+  assert(d.doc_code == HXF_OK, "refused {d.doc_code}");
+  tmp = "wall_rewrite.bin";
+  doc_write_edges(tmp, d.doc_cells, d.doc_heights, d.doc_labels, d.doc_edges,
+                  d.doc_has_h, d.doc_has_l, d.doc_has_e);
+  fa = file(WALL_FIXTURE); fa#format = LittleEndian;
+  fb = file(tmp);          fb#format = LittleEndian;
+  na = fa#size; nb = fb#size;
+  assert(na == nb, "rewrite is {nb} bytes, fixture is {na}");
+  for i in 0..na {
+    x = fa#read as u8;
+    y = fb#read as u8;
+    assert(x == y, "byte {i} differs — the edge writer has drifted from the fixture");
+  }
+  delete(tmp);
+}

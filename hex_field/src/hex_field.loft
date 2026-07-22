@@ -1086,6 +1086,18 @@ pub fn edgeset_r0(e: EdgeSet) -> integer { e.eg_r0 }
 pub fn edgeset_w(e: EdgeSet) -> integer { e.eg_w }
 pub fn edgeset_h(e: EdgeSet) -> integer { e.eg_h }
 
+// Every non-zero slot in the layer, INCLUDING the halo.  edgeset_count walks
+// only in-chunk cells, which leaves the halo — 74 of a 3x3 layer's 75 slots —
+// unverified: a corruption there round-trips faithfully and no assertion sees
+// it.  Found by a negative control that failed to fail.
+pub fn edgeset_count_all(e: EdgeSet) -> integer {
+  n = 0;
+  for i in 0..(e.eg_gw * e.eg_gh * 3) {
+    if (e.eg_mat[i] ?? 0) != 0 { n = n + 1; }
+  }
+  n
+}
+
 // How many edges carry a material.  Walks the canonical slots only, so each
 // edge is counted once however many cells touch it.
 pub fn edgeset_count(e: EdgeSet) -> integer {
