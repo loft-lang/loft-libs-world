@@ -1,0 +1,109 @@
+// Walls in stencils.  An edge's identity is the doubled midpoint of its two cell
+// centres, so it survives rotation and translation for the same reason a cell
+// does — exactly, on the integer lattice.
+use hex_field;
+
+// A room: a 3x3 block with a wall on one specific edge.
+fn walled() -> Stencil {
+  s  = hexset_chunk(0, 0, 3, 3);
+  hz = heights_new(0, 0, 3, 3);
+  lb = labels_new(0, 0, 3, 3);
+  eg = edgeset_new(0, 0, 3, 3);
+  for q in 0..3 { for r in 0..3 { hexset_set(s, q, r, true); label_set(lb, q, r, 5); } }
+  // wall between (1,1) and its E neighbour
+  edge_set_mat(eg, 1, 1, nb_q(1, 1, 0), nb_r(1, 1, 0), 7);
+  stencil_with_edges(s, hz, lb, eg, false, true)
+}
+
+fn test_edge_key_is_symmetric() {
+  (ka, ma) = edge_key(1, 1, 2, 1);
+  (kb, mb) = edge_key(2, 1, 1, 1);
+  assert(ka == kb && ma == mb, "an edge has two identities depending on who names it");
+}
+
+fn test_a_wall_is_stored_once_and_read_from_either_side() {
+  eg = edgeset_new(0, 0, 4, 4);
+  nq = nb_q(1, 1, 0); nr = nb_r(1, 1, 0);
+  edge_set_mat(eg, 1, 1, nq, nr, 9);
+  assert(edge_mat(eg, 1, 1, nq, nr) == 9, "wall not readable from the near side");
+  assert(edge_mat(eg, nq, nr, 1, 1) == 9, "wall not readable from the far side");
+  assert(edgeset_count(eg) == 1, "one wall counted {edgeset_count(eg)} times");
+}
+
+fn test_rotation_carries_the_wall() {
+  st = walled();
+  assert(edgeset_count(st.sn_edges) == 1, "source lost its wall");
+  for n in 1..6 {
+    rot = stencil_rotate(st, n);
+    assert(edgeset_count(rot.sn_edges) == 1,
+           "rotating by {n} left {edgeset_count(rot.sn_edges)} walls, want 1");
+    // the wall must still sit between the ROTATED images of the same two cells
+    (aq, ar) = cell_rot(1, 1, n);
+    (bq, br) = cell_rot(nb_q(1, 1, 0), nb_r(1, 1, 0), n);
+    assert(edge_mat(rot.sn_edges, aq, ar, bq, br) == 7,
+           "at {n} turns the wall is not between the rotated cells");
+  }
+}
+
+fn test_stamping_carries_the_wall_onto_an_odd_row() {
+  st = walled();
+  dc = hexset_chunk(-6, -6, 24, 24);
+  dh = heights_new(-6, -6, 24, 24);
+  dl = labels_new(-6, -6, 24, 24);
+  de = edgeset_new(-6, -6, 24, 24);
+  stencil_stamp_edges(dc, dh, dl, de, st, 5, 3);   // ODD anchor row
+  assert(edgeset_count(de) == 1, "stamped {edgeset_count(de)} walls, want 1");
+  // between the translated images of the same two cells
+  dk = lattice_k(5, 3); dm = lattice_m(5, 3);
+  (tq, tr) = lattice_to_cell(lattice_k(1, 1) + dk, lattice_m(1, 1) + dm);
+  (uq, ur) = lattice_to_cell(lattice_k(nb_q(1, 1, 0), nb_r(1, 1, 0)) + dk,
+                             lattice_m(nb_q(1, 1, 0), nb_r(1, 1, 0)) + dm);
+  assert(edge_mat(de, tq, tr, uq, ur) == 7, "the wall did not land on the stamped edge");
+}
+
+fn test_walls_survive_the_document_format() {
+  st = walled();
+  p = "edge_rt.bin";
+  doc_write_edges(p, st.sn_cells, st.sn_heights, st.sn_labels, st.sn_edges, false, true, true);
+  d = doc_read(p);
+  assert(d.doc_code == HXF_OK, "refused {d.doc_code}");
+  assert(d.doc_has_e, "the EDGE section was lost");
+  assert(edgeset_count(d.doc_edges) == 1, "read back {edgeset_count(d.doc_edges)} walls, want 1");
+  assert(edge_mat(d.doc_edges, 1, 1, nb_q(1, 1, 0), nb_r(1, 1, 0)) == 7,
+         "the wall came back on the wrong edge or with the wrong material");
+  delete(p);
+}
+
+// A reader with no EDGE support must still load the rest — the whole point of
+// sections carrying lengths.
+fn test_a_file_with_walls_still_loads_its_cells() {
+  st = walled();
+  p = "edge_fwd.bin";
+  doc_write_edges(p, st.sn_cells, st.sn_heights, st.sn_labels, st.sn_edges, false, true, true);
+  d = doc_read(p);
+  assert(d.doc_code == HXF_OK, "refused {d.doc_code}");
+  assert(hexset_count(d.doc_cells) == 9, "cells lost when walls were present");
+  delete(p);
+}
+
+// The other sections have a length gate; this one did not, and removing the
+// check broke no test until this existed.  An EDGE payload is sized by the HALO
+// grid ((w+2)(h+2)3), not w*h*3, so getting that wrong is easy and silent.
+fn test_refuses_an_edge_section_of_the_wrong_length() {
+  p = "edge_badlen.bin";
+  {
+    f = file(p); f#format = LittleEndian;
+    f += (HXF_MAGIC as i32); f += (HXF_SCHEMA as i32);
+    f += (0 as i32); f += (0 as i32);
+    f += (3 as i32); f += (3 as i32);      // 3x3 -> halo grid is 5x5x3 = 75
+    f += (2 as i32); f += (0 as i32);
+    f += (TAG_OCCU as i32); f += (9 as i32);
+    for i in 0..9 { f += ((1 as u8?) ?? 0); }
+    f += (TAG_EDGE as i32); f += (27 as i32);   // w*h*3 — the plausible wrong answer
+    for i in 0..27 { f += ((0 as u8?) ?? 0); }
+  }
+  d = doc_read(p);
+  assert(d.doc_code == HXF_BAD_SECTION,
+         "an EDGE section sized w*h*3 instead of the halo grid gave {d.doc_code}");
+  delete(p);
+}

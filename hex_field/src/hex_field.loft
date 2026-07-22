@@ -574,6 +574,7 @@ pub const HXF_HEADER  = 32;
 pub const TAG_OCCU = 0x5543434F;      // 'OCCU'
 pub const TAG_HGHT = 0x54484748;      // 'HGHT'
 pub const TAG_LABL = 0x4C42414C;      // 'LABL'
+pub const TAG_EDGE = 0x45474445;      // 'EDGE' — the wall layer
 
 // Refusal codes.  0 = loaded.  Every one of these is a REFUSAL, never a
 // partial parse: a half-read field is worse than no field.
@@ -592,8 +593,10 @@ pub struct HexDoc {
   doc_cells:   HexSet,
   doc_heights: Heights,
   doc_labels:  Labels,
+  doc_edges:   EdgeSet,
   doc_has_h:   boolean,
   doc_has_l:   boolean,
+  doc_has_e:   boolean,
   doc_skipped: integer,   // unknown sections skipped — the forward-compat count
 }
 
@@ -606,12 +609,24 @@ pub fn doc_write(
   path: text, s: HexSet, hz: Heights, lb: Labels,
   has_h: boolean, has_l: boolean
 ) {
+  doc_write_edges(path, s, hz, lb, edgeset_new(hexset_q0(s), hexset_r0(s), 1, 1),
+                  has_h, has_l, false);
+}
+
+// As doc_write, plus the wall layer.  The EDGE payload is the halo grid — gw*gh*3
+// slots — because an edge on the chunk boundary belongs to a cell outside it, and
+// dropping those would silently open the walls of every stamped building's rim.
+pub fn doc_write_edges(
+  path: text, s: HexSet, hz: Heights, lb: Labels, eg: EdgeSet,
+  has_h: boolean, has_l: boolean, has_e: boolean
+) {
   w = hexset_w(s);
   h = hexset_h(s);
   n = w * h;
   sections = 1;
   if has_h { sections = sections + 1; }
   if has_l { sections = sections + 1; }
+  if has_e { sections = sections + 1; }
 
   f = file(path);
   f#format = LittleEndian;
@@ -654,6 +669,13 @@ pub fn doc_write(
       }
     }
   }
+
+  if has_e {
+    egn = (w + 2) * (h + 2) * 3;
+    f += (TAG_EDGE as i32);
+    f += (egn as i32);
+    for i in 0..egn { f += ((eg.eg_mat[i] ?? 0) as u8); }
+  }
 }
 
 // ── reading ──────────────────────────────────────────────────────────────
@@ -664,7 +686,8 @@ pub fn doc_read(path: text) -> HexDoc {
     doc_cells: hexset_chunk(0, 0, 1, 1),
     doc_heights: heights_new(0, 0, 1, 1),
     doc_labels: labels_new(0, 0, 1, 1),
-    doc_has_h: false, doc_has_l: false, doc_skipped: 0,
+    doc_edges: edgeset_new(0, 0, 1, 1),
+    doc_has_h: false, doc_has_l: false, doc_has_e: false, doc_skipped: 0,
   };
   f = file(path);
   f#format = LittleEndian;
@@ -687,6 +710,7 @@ pub fn doc_read(path: text) -> HexDoc {
   d.doc_cells   = hexset_chunk(q0, r0, w, h);
   d.doc_heights = heights_new(q0, r0, w, h);
   d.doc_labels  = labels_new(q0, r0, w, h);
+  d.doc_edges   = edgeset_new(q0, r0, w, h);
   seen_occu = false;
 
   for sx in 0..nsec {
@@ -722,6 +746,14 @@ pub fn doc_read(path: text) -> HexDoc {
         }
       }
       d.doc_has_l = true;
+    } else if tag == TAG_EDGE {
+      egn = (w + 2) * (h + 2) * 3;
+      if blen != egn { d.doc_code = HXF_BAD_SECTION; return d; }
+      for i in 0..egn {
+        ev = f#read as u8;
+        d.doc_edges.eg_mat[i] = ev;
+      }
+      d.doc_has_e = true;
     } else {
       // Unknown section: skip it by its declared length.  This is the whole
       // reason sections carry a length, and why a newer writer does not break
@@ -795,15 +827,28 @@ pub struct Stencil {
   sn_cells:   HexSet,
   sn_heights: Heights,
   sn_labels:  Labels,
+  sn_edges:   EdgeSet,
   sn_has_h:   boolean,
   sn_has_l:   boolean,
+  sn_has_e:   boolean,
   sn_code:    integer,
 }
 
 pub fn stencil_from(s: HexSet, hz: Heights, lb: Labels, has_h: boolean, has_l: boolean) -> Stencil {
   Stencil {
     sn_cells: s, sn_heights: hz, sn_labels: lb,
-    sn_has_h: has_h, sn_has_l: has_l, sn_code: ROT_OK,
+    sn_edges: edgeset_new(hexset_q0(s), hexset_r0(s), hexset_w(s), hexset_h(s)),
+    sn_has_h: has_h, sn_has_l: has_l, sn_has_e: false, sn_code: ROT_OK,
+  }
+}
+
+// A stencil that carries walls.  Separate constructor so the common case — a
+// footprint with no walls — does not allocate an edge layer it never reads.
+pub fn stencil_with_edges(s: HexSet, hz: Heights, lb: Labels, eg: EdgeSet,
+                          has_h: boolean, has_l: boolean) -> Stencil {
+  Stencil {
+    sn_cells: s, sn_heights: hz, sn_labels: lb, sn_edges: eg,
+    sn_has_h: has_h, sn_has_l: has_l, sn_has_e: true, sn_code: ROT_OK,
   }
 }
 
@@ -830,12 +875,14 @@ pub fn stencil_rotate(st: Stencil, n: integer) -> Stencil {
   if !seen { return st; }
   nw = mxq - mnq + 1;
   nh = mxr - mnr + 1;
-  out = stencil_from(
+  out = stencil_with_edges(
     hexset_chunk(mnq, mnr, nw, nh),
     heights_new(mnq, mnr, nw, nh),
     labels_new(mnq, mnr, nw, nh),
+    edgeset_new(mnq, mnr, nw, nh),
     st.sn_has_h, st.sn_has_l
   );
+  out.sn_has_e = st.sn_has_e;
   // pass 2 — carry the payload across
   for iq in 0..w {
     for ir in 0..h {
@@ -844,6 +891,30 @@ pub fn stencil_rotate(st: Stencil, n: integer) -> Stencil {
         hexset_set(out.sn_cells, tq, tr, true);
         if st.sn_has_h { height_set(out.sn_heights, tq, tr, height_get(st.sn_heights, q0 + iq, r0 + ir)); }
         if st.sn_has_l { label_set(out.sn_labels, tq, tr, label_get(st.sn_labels, q0 + iq, r0 + ir)); }
+      }
+    }
+  }
+  // Edges rotate because their key is the doubled midpoint of two centres, and
+  // the midpoint of two rotated centres is the rotation of the midpoint.  So
+  // rotating both endpoints and re-keying is exact — no resampling, no drift.
+  if st.sn_has_e {
+    for iq in 0..w {
+      for ir in 0..h {
+        cq = q0 + iq;
+        cr = r0 + ir;
+        for sl in 0..3 {
+          d = 0;
+          if sl == 1 { d = 2; }
+          if sl == 2 { d = 3; }
+          nq = nb_q(cq, cr, d);
+          nr = nb_r(cq, cr, d);
+          mv = edge_mat(st.sn_edges, cq, cr, nq, nr);
+          if mv != 0 {
+            (aq, ar) = cell_rot(cq, cr, n);
+            (bq, br) = cell_rot(nq, nr, n);
+            edge_set_mat(out.sn_edges, aq, ar, bq, br, mv);
+          }
+        }
       }
     }
   }
@@ -888,4 +959,148 @@ pub fn stencil_stamp(
       }
     }
   }
+}
+
+// Stamp including the wall layer.  Edges translate the same way cells do — in
+// lattice space — so a wall stamped on an odd row stays on the edge it was
+// authored on.
+pub fn stencil_stamp_edges(
+  dst: HexSet, dst_h: Heights, dst_l: Labels, dst_e: EdgeSet,
+  st: Stencil, aq: integer, ar: integer
+) {
+  stencil_stamp(dst, dst_h, dst_l, st, aq, ar);
+  if !st.sn_has_e { return; }
+  dk = lattice_k(aq, ar);
+  dm = lattice_m(aq, ar);
+  q0 = hexset_q0(st.sn_cells); r0 = hexset_r0(st.sn_cells);
+  w  = hexset_w(st.sn_cells);  h  = hexset_h(st.sn_cells);
+  for iq in 0..w {
+    for ir in 0..h {
+      cq = q0 + iq;
+      cr = r0 + ir;
+      for sl in 0..3 {
+        d = 0;
+        if sl == 1 { d = 2; }
+        if sl == 2 { d = 3; }
+        nq = nb_q(cq, cr, d);
+        nr = nb_r(cq, cr, d);
+        mv = edge_mat(st.sn_edges, cq, cr, nq, nr);
+        if mv != 0 {
+          (tq, tr) = lattice_to_cell(lattice_k(cq, cr) + dk, lattice_m(cq, cr) + dm);
+          (uq, ur) = lattice_to_cell(lattice_k(nq, nr) + dk, lattice_m(nq, nr) + dm);
+          edge_set_mat(dst_e, tq, tr, uq, ur, mv);
+        }
+      }
+    }
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// edges — the wall layer.
+//
+// PORTED from crawler's `hexedge.loft`, not invented here: same canonical key,
+// same direction canon, same halo, same type widths.  crawler's version also
+// carries a SURFACE id (its physics geometry — straights and arcs); this holds
+// only the material, which is what authored content and a stencil need.  When
+// crawler's module migrates, the two merge by adding that field back — they do
+// not compete.
+//
+// The canonical key is the DOUBLED MIDPOINT of the two cell centres:
+//   edge_k = lattice_k(a) + lattice_k(b),  edge_m = lattice_m(a) + lattice_m(b)
+// Symmetric in a and b, so an edge has one identity regardless of which side
+// names it.  It is also why rotation is free: the midpoint of two rotated
+// centres IS the rotation of the midpoint, so an edge rotates exactly when its
+// endpoints do.
+//
+// Opposite direction pairs are {0,1} {2,5} {3,4}, so the canonical set is
+// {0,2,3} — exactly one of an edge's two cells sees it that way, which is what
+// makes storage one slot per edge rather than two.
+//
+// TYPE WIDTHS are crawler's finding, adopted whole (their LOFT-HANDOFF H3):
+// u16/i16 cannot be index-assigned at all, and u32 loses the write SILENTLY
+// through a struct parameter.  u8 and i32 are safe. The material is u8 because
+// that is the widest safe SMALL type, not because 255 materials is a design.
+
+pub struct EdgeSet {
+  eg_q0:  integer,
+  eg_r0:  integer,
+  eg_w:   integer,
+  eg_h:   integer,
+  eg_gw:  integer,          // grid width  = w + 2, a one-cell halo
+  eg_gh:  integer,
+  eg_mat: vector<u8>,       // 0 = open
+}
+
+pub fn edgeset_new(q0: integer, r0: integer, w: integer, h: integer) -> EdgeSet {
+  gw = w + 2;
+  gh = h + 2;
+  m: vector<u8> = [];
+  n = gw * gh * 3;
+  for i in 0..n { m += [(0 as u8?) ?? 0]; }
+  EdgeSet { eg_q0: q0, eg_r0: r0, eg_w: w, eg_h: h, eg_gw: gw, eg_gh: gh, eg_mat: m }
+}
+
+// The doubled midpoint — an edge's identity, independent of which cell names it.
+pub fn edge_key(qa: integer, ra: integer, qb: integer, rb: integer) -> (integer, integer) {
+  (lattice_k(qa, ra) + lattice_k(qb, rb), lattice_m(qa, ra) + lattice_m(qb, rb))
+}
+
+fn eg_dir_from(qa: integer, ra: integer, qb: integer, rb: integer) -> integer {
+  d = -1;
+  for i in 0..6 {
+    if nb_q(qa, ra, i) == qb && nb_r(qa, ra, i) == rb { d = i; }
+  }
+  d
+}
+
+// Storage slot for the edge between two adjacent cells, or -1.
+fn eg_index(e: EdgeSet, qa: integer, ra: integer, qb: integer, rb: integer) -> integer {
+  d = eg_dir_from(qa, ra, qb, rb);
+  if d < 0 { return -1; }
+  cq = qa; cr = ra; slot = 0;
+  if d == 2 { slot = 1; }
+  if d == 3 { slot = 2; }
+  if d == 1 { cq = qb; cr = rb; slot = 0; }
+  if d == 5 { cq = qb; cr = rb; slot = 1; }
+  if d == 4 { cq = qb; cr = rb; slot = 2; }
+  dq = cq - e.eg_q0 + 1;
+  dr = cr - e.eg_r0 + 1;
+  if dq < 0 || dq >= e.eg_gw || dr < 0 || dr >= e.eg_gh { return -1; }
+  (dr * e.eg_gw + dq) * 3 + slot
+}
+
+pub fn edge_set_mat(e: EdgeSet, qa: integer, ra: integer, qb: integer, rb: integer, mat: integer) {
+  i = eg_index(e, qa, ra, qb, rb);
+  if i < 0 { return; }
+  e.eg_mat[i] = (mat as u8?) ?? 0;
+}
+
+pub fn edge_mat(e: EdgeSet, qa: integer, ra: integer, qb: integer, rb: integer) -> integer {
+  i = eg_index(e, qa, ra, qb, rb);
+  if i < 0 { return 0; }
+  (e.eg_mat[i] ?? 0) as integer
+}
+
+pub fn edgeset_q0(e: EdgeSet) -> integer { e.eg_q0 }
+pub fn edgeset_r0(e: EdgeSet) -> integer { e.eg_r0 }
+pub fn edgeset_w(e: EdgeSet) -> integer { e.eg_w }
+pub fn edgeset_h(e: EdgeSet) -> integer { e.eg_h }
+
+// How many edges carry a material.  Walks the canonical slots only, so each
+// edge is counted once however many cells touch it.
+pub fn edgeset_count(e: EdgeSet) -> integer {
+  n = 0;
+  for iq in 0..e.eg_w {
+    for ir in 0..e.eg_h {
+      cq = e.eg_q0 + iq;
+      cr = e.eg_r0 + ir;
+      for s in 0..3 {
+        d = 0;
+        if s == 1 { d = 2; }
+        if s == 2 { d = 3; }
+        if edge_mat(e, cq, cr, nb_q(cq, cr, d), nb_r(cq, cr, d)) != 0 { n = n + 1; }
+      }
+    }
+  }
+  n
 }
