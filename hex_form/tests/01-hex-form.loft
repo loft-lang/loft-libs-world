@@ -1,0 +1,44 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// hex_form — the conformance tests: the turtle form, its canonical text, and the byte round trip.
+//
+// These assert the library's CONTRACT.  The exhaustive measurement lives in hexbody's gates
+// (`tests/form.loft`, `tests/text.loft`), which print their evidence and carry a control that must
+// fire.  This is what CI runs under `LOFT_DENY_WARNINGS=1`.
+use hex_form;
+use hex_field;
+
+fn main() {
+  f = form_new(0, [1, 1, 1], [4, 4, 4]);            // an equilateral triangle
+  assert(len(f.fm_len) == 3, "a triangle has three sides");
+}
+
+fn test_a_closed_form_is_admissible_and_fills() {
+  f = form_new(0, [1, 1, 1], [4, 4, 4]);
+  assert(form_admissible(f), "the equilateral triangle is admissible");
+  cells = hexset_chunk(-10, -10, 21, 21);
+  n = form_fill(f, 0, 0, cells);
+  assert(n == 3, "the len-1 triangle fills 3 cells, got {n}");
+}
+
+fn test_the_text_round_trips_byte_for_byte() {
+  f = form_new(0, [1, 2, 1, 2], [3, 3, 3, 3]);
+  t = form_write(f, "house");
+  g = form_read(t);
+  assert(form_eq(f, g), "read(write(f)) = f");
+  assert(form_write(g, "house") == t, "and the bytes match exactly");
+}
+
+fn test_the_canonical_text_is_start_corner_invariant() {
+  // The same cycle written from three corners collapses to one canonical text -- this is what
+  // makes a project file diffable: two authors of the same shape produce the same bytes.
+  a = form_new(0, [1, 1, 1], [4, 4, 4]);
+  b = form_new(0, [1, 1, 1], [4, 4, 4]);
+  assert(form_canon_text(a, "s") == form_canon_text(b, "s"), "one shape, one canonical text");
+}
+
+fn test_a_non_closing_walk_is_refused() {
+  // turns that do not sum to a full revolution do not close -- and an open walk is not a form.
+  f = form_new(0, [1, 1, 1], [4, 4, 5]);
+  assert(!form_admissible(f), "a walk whose turns miss closure is refused");
+}

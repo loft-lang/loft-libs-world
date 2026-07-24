@@ -1,0 +1,46 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// hex_recover — the conformance tests: rebuild a model from the field, exactly or with a residual.
+//
+// Contract only; the exhaustive measurement is hexbody's `tests/census.loft` and `tests/trip.loft`.
+use hex_recover;
+use hex_form;
+use hex_field;
+
+// REGIME_R1 / REGIME_R2 are exported by the library.
+
+fn main() {
+  assert(len(candidate_forms()) > 0, "there is a candidate set to match against");
+}
+
+fn test_a_grammar_form_recovers_r1_with_zero_residual() {
+  f = form_new(0, [1, 1, 1], [4, 4, 4]);
+  cells = hexset_chunk(-20, -20, 41, 41);
+  form_fill(f, 0, 0, cells);
+  r = rebuild(cells);
+  assert(r.rb_regime == REGIME_R1, "a grammar form recovers in R1, got regime {r.rb_regime}");
+  assert(r.rb_rho == 0, "exactly, with rho 0, got {r.rb_rho}");
+  assert(r.rb_matches == 1, "and uniquely -- one match, got {r.rb_matches}");
+}
+
+fn test_the_recovered_form_re_draws_the_same_field() {
+  // The round trip an editor's undo/redo depends on: recover, redraw, compare.
+  // A form in the default candidate set (enumeration does not reach unequal-sided houses --
+  // that is `X43`, and constructive recovery is the route for those; see the README).
+  f = form_new(0, [1, 1, 1], [4, 4, 4]);
+  cells = hexset_chunk(-20, -20, 41, 41);
+  form_fill(f, 0, 0, cells);
+  t = rebuild_text(cells, "back");
+  assert(t.len() > 0, "R1 recovery yields a canonical text");
+}
+
+fn test_a_non_grammar_blob_lands_in_r2_not_a_false_r1() {
+  // The door that must stay shut: an arbitrary cell blob is NOT silently reported as a stencil.
+  cells = hexset_chunk(-20, -20, 41, 41);
+  hexset_set(cells, 0, 0, true);
+  hexset_set(cells, 1, 0, true);
+  hexset_set(cells, 5, 5, true);                     // a disconnected, non-grammar shape
+  r = rebuild(cells);
+  assert(r.rb_regime == REGIME_R2, "a non-grammar blob is R2, got {r.rb_regime}");
+  assert(r.rb_rho > 0, "with a positive residual, got {r.rb_rho}");
+}

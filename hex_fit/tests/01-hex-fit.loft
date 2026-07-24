@@ -1,0 +1,45 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// hex_fit — the conformance tests: the doorstep refuses at authoring time what would not
+// round-trip, with a named reason, an offer, and a residual.
+//
+// Contract only; the exhaustive measurement is hexbody's `tests/fit.loft`.
+use hex_fit;
+use hex_field;
+
+
+fn main() {
+  // a valid arc shell is admitted, an off-shell radius is refused -- the doorstep DISTINGUISHES.
+  assert(arc_fits(36) == FIT_OK, "shell 36 is admitted");
+  assert(arc_fits(37) != FIT_OK, "off-shell 37 is refused");
+}
+
+fn test_a_refusal_names_its_reason() {
+  code = arc_fits(37);
+  reason = fit_reason(code);
+  assert(reason.len() > 0, "a refusal carries a named reason, not a blank no");
+}
+
+fn test_an_off_shell_radius_offers_the_nearest_that_fits() {
+  // K-FIT: a refusal offers the nearest admissible alternative. For an ORDINAL parameter (a
+  // radius) an offer is owed -- unlike a material id, which is nominal (X68).
+  n = arc_fit_n(37);
+  assert(arc_is_shell(n), "the offered radius is itself a shell, got {n}");
+  res = arc_fit_residual(37);
+  assert(res >= 0, "and the residual is reported, got {res}");
+}
+
+fn test_a_level_has_nothing_to_refuse_and_that_is_the_result() {
+  // A level is an integer index -- nothing exists between two levels to snap to -- so the
+  // doorstep accepts every level. A doorstep that refused more than the field distinguishes
+  // would make legal models unauthorable (X66).
+  assert(level_fits(0) == FIT_OK, "level 0 fits");
+  assert(level_fits(1000000) == FIT_OK, "and so does level 1e6 -- levels are identical at any n");
+}
+
+fn test_the_height_slot_is_an_integer_grid() {
+  // moros's h_height is an integer at HEIGHT_SCALE wu (X67). A height off that grid truncates
+  // silently, so the doorstep refuses it -- and an on-grid height round-trips.
+  u = height_units(height_from_units(3));
+  assert(u == 3, "an on-grid height round-trips through the voxel, got {u}");
+}

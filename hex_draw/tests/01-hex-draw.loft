@@ -1,0 +1,41 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// hex_draw — the conformance tests: a Plan draws into the field, and its wall surface reads back.
+//
+// Contract only; the exhaustive measurement is hexbody's `tests/house.loft` and `tests/surface.loft`.
+use hex_draw;
+use hex_form;
+use hex_field;
+
+fn plan5x4() -> Plan { plan_new(0, 0, 5, 4, 0, false) }
+
+fn main() {
+  p = plan5x4();
+  cells = hexset_chunk(-20, -20, 41, 41);
+  types = labels_new(-20, -20, 41, 41);
+  n = draw_floor(p, cells, types, 1);
+  assert(n == 27, "a 5x4 house has 27 floor cells, got {n}");
+}
+
+fn test_the_walls_are_one_connected_boundary() {
+  p = plan5x4();
+  cells = hexset_chunk(-20, -20, 41, 41);
+  types = labels_new(-20, -20, 41, 41);
+  edges = edgeset_new(-20, -20, 41, 41);
+  draw_floor(p, cells, types, 1);
+  ne = draw_walls(cells, edges, 7);
+  assert(ne == 38, "the 5x4 house has 38 wall edges, got {ne}");
+}
+
+fn test_a_wall_recovers_as_one_exact_surface() {
+  // `G2`: a wall is not a strip of edges, it is one analytic surface -- and its direction is
+  // EXACTLY a heading, not a fitted approximation.  This is what a game emits as a collision proxy.
+  p = plan5x4();
+  cells = hexset_chunk(-20, -20, 41, 41);
+  types = labels_new(-20, -20, 41, 41);
+  draw_floor(p, cells, types, 1);
+  w = surface_of(p, cells, 0);
+  assert(surface_is_exact(w), "side 0's surface is exact");
+  spread = surface_fitted_spread(p, cells, 0);
+  assert(spread == 0.0, "the fitted surface has zero spread -- one flat quad, got {spread}");
+}

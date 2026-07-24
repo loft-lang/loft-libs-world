@@ -1,0 +1,41 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// hex_shape — the conformance tests: the box in 12 directions, and the arc whose radius is a shell.
+//
+// Contract only; the exhaustive measurement is hexbody's `tests/box.loft` and `tests/arc.loft`.
+use hex_shape;
+use hex_form;
+use hex_field;
+
+fn main() {
+  b = box_new(0, 0, 5, 4, 0, false);
+  assert(box_hw(b) > 0.0, "a box has a positive half-width");
+}
+
+fn test_the_two_orbits_are_distinct() {
+  // 60-degree steps are a lattice symmetry (orbit 0); 30-degree steps are not (orbit 1). A
+  // consumer choosing a box angle must know which family it is in, so the split is asserted.
+  assert(box_orbit(0) == 0, "rot 0 is the edge family");
+  assert(box_orbit(1) == 1, "rot 1 is the other family");
+  assert(box_orbit(2) == 0, "rot 2 is back to the edge family");
+}
+
+fn test_an_arc_radius_quantises_to_a_shell() {
+  // `X49`: an arc's radius is not continuous -- it realises only the shells 3k^2+m^2. A disk of
+  // "radius 6" fills to the nearest shell, and its recovered shell is one of the realisable set.
+  cells = hexset_chunk(-20, -20, 41, 41);
+  n = arc_fill(0, 0, 36, cells);                     // n24 = 36 is a shell (radius 6)
+  assert(n > 0, "the disk filled {n} cells");
+  shells = arc_shells_upto(64);
+  found = false;
+  for si in 0..len(shells) { if (shells[si] ?? -1) == 36 { found = true; } }
+  assert(found, "36 is one of the realisable shells");
+}
+
+fn test_an_arcs_centre_recovers_exactly() {
+  cells = hexset_chunk(-20, -20, 41, 41);
+  arc_fill(3, 2, 12, cells);
+  (cq, cr, ok) = arc_recover_centre(cells);
+  assert(ok, "the centre was recovered");
+  assert(cq == 3 && cr == 2, "the centre comes back exactly, got ({cq}, {cr})");
+}

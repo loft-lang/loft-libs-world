@@ -1,0 +1,52 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// hex_place — the conformance tests: a pose is exact in its own frame, and two stencils combine
+// order-free with their shared edge fused.
+//
+// Contract only; the exhaustive measurement is hexbody's `tests/seam.loft`, `tests/combine.loft`
+// and `tests/level.loft`.
+use hex_place;
+use hex_field;
+
+fn twobox(off: integer) -> HexSet {
+  s = hexset_chunk(-10, -10, 21, 21);
+  for r in 0..3 { for q in 0..3 { hexset_set(s, q + off, r, true); } }
+  s
+}
+
+fn main() {
+  a = twobox(0);
+  assert(hexset_count(a) == 9, "a 3x3 block has 9 cells");
+}
+
+fn test_a_pose_inverts_exactly() {
+  // A pose maps local<->world; the inverse of the forward map returns the original point. This
+  // is I6 in miniature: the map is a pure function, exact in its own frame.
+  p = pose_new(0.8, 0.6, 3.0, 4.0);                  // cos/sin 4/5-3/5, a Pythagorean pose
+  lx = 2.0;
+  ly = 5.0;
+  wx = pose_fwd_x(p, lx, ly);
+  wy = pose_fwd_y(p, lx, ly);
+  bx = pose_inv_x(p, wx, wy);
+  by = pose_inv_y(p, wx, wy);
+  assert(bx > 1.999 && bx < 2.001, "x survives the round trip, got {bx}");
+  assert(by > 4.999 && by < 5.001, "y survives the round trip, got {by}");
+}
+
+fn test_two_adjacent_stencils_fuse_at_the_shared_edge() {
+  // "mark all, then cut once": the edge shared by two touching stencils is interior to the union,
+  // so it is never cut -- the two fuse rather than growing a wall between them.
+  a = twobox(0);
+  b = twobox(2);                                     // overlaps a's last column
+  e = edgeset_new(-10, -10, 21, 21);
+  combine_cut(a, 1, b, 2, e);
+  shared = shared_marked(a, b, e);
+  assert(shared == 0, "no wall is marked on the shared interior, got {shared}");
+}
+
+fn test_arbitration_is_fail_safe_toward_solid() {
+  // A world gap under a body solid reads solid -- collision never falls through. I4.
+  assert(arb_solid(true, false), "solid over gap is solid");
+  assert(arb_solid(false, true), "gap over solid is solid");
+  assert(!arb_solid(false, false), "gap over gap is gap");
+}
