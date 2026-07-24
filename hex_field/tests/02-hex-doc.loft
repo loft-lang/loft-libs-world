@@ -101,10 +101,10 @@ fn test_unknown_section_is_skipped() {
     f += (0 as i32);                        // reserved
     f += (0x5A5A5A5A as i32);               // a tag from the future
     f += (6 as i32);
-    for i in 0..6 { f += (0xEE as u8); }
+    for _ in 0..6 { f += (0xEE as u8); }
     f += (TAG_OCCU as i32);
     f += (4 as i32);
-    for i in 0..4 { f += (1 as u8); }
+    for _ in 0..4 { f += (1 as u8); }
   }
   d = doc_read(p);
   assert(d.doc_code == HXF_OK, "a future section made the load fail: {d.doc_code}");
@@ -127,7 +127,7 @@ fn test_refuses_future_schema() {
   {
     f = file(p); f#format = LittleEndian;
     f += (HXF_MAGIC as i32); f += (99 as i32);
-    for i in 0..6 { f += (0 as i32); }
+    for _ in 0..6 { f += (0 as i32); }
   }
   d = doc_read(p);
   assert(d.doc_code == HXF_BAD_SCHEMA, "future schema gave {d.doc_code}");
@@ -157,7 +157,7 @@ fn test_refuses_section_length_disagreeing_with_dimensions() {
     f += (4 as i32); f += (4 as i32);      // claims 16 cells
     f += (1 as i32); f += (0 as i32);
     f += (TAG_OCCU as i32); f += (9 as i32);   // but ships 9 bytes
-    for i in 0..9 { f += (1 as u8); }
+    for _ in 0..9 { f += (1 as u8); }
   }
   d = doc_read(p);
   assert(d.doc_code == HXF_BAD_SECTION, "dimension mismatch gave {d.doc_code}");
@@ -174,7 +174,7 @@ fn test_refuses_truncated_file() {
   keep = ff#size - 20;
   cut = tmp("cut");
   { g = file(cut); g#format = LittleEndian;
-    for i in 0..keep { g += (ff#read as u8); } }
+    for _ in 0..keep { b = ff#read as u8; g += (b as u8); } }
   d = doc_read(cut);
   assert(d.doc_code == HXF_TRUNCATED, "truncated file gave {d.doc_code}");
   delete(full); delete(cut);

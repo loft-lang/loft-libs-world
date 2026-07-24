@@ -98,9 +98,9 @@ fn test_refuses_an_edge_section_of_the_wrong_length() {
     f += (3 as i32); f += (3 as i32);      // 3x3 -> halo grid is 5x5x3 = 75
     f += (2 as i32); f += (0 as i32);
     f += (TAG_OCCU as i32); f += (9 as i32);
-    for i in 0..9 { f += ((1 as u8?) ?? 0); }
+    for _ in 0..9 { f += ((1 as u8?) ?? 0); }
     f += (TAG_EDGE as i32); f += (27 as i32);   // w*h*3 — the plausible wrong answer
-    for i in 0..27 { f += ((0 as u8?) ?? 0); }
+    for _ in 0..27 { f += ((0 as u8?) ?? 0); }
   }
   d = doc_read(p);
   assert(d.doc_code == HXF_BAD_SECTION,

@@ -93,7 +93,7 @@ pub fn hexset_count(s: HexSet) -> integer { s.hs_count }
 // Hex (q,r) -> exact integer lattice centre.  Matches hex_grid::hex_to_px scaled by
 // (sqrt(3)/2, 1/2) — verified against the library before porting.
 pub fn lattice_k(q: integer, r: integer) -> integer { 2 * q + (r & 1) }
-pub fn lattice_m(q: integer, r: integer) -> integer { 3 * r }
+pub fn lattice_m(_q: integer, r: integer) -> integer { 3 * r }
 
 // Neighbour (q,r) in direction d, odd-r offset.  Same SET as hex_grid::hex_neighbor.
 pub fn nb_q(q: integer, r: integer, d: integer) -> integer {
@@ -107,7 +107,7 @@ pub fn nb_q(q: integer, r: integer, d: integer) -> integer {
   q - 1
 }
 
-pub fn nb_r(q: integer, r: integer, d: integer) -> integer {
+pub fn nb_r(_q: integer, r: integer, d: integer) -> integer {
   if d == 0 { return r; }
   if d == 1 { return r; }
   if d == 2 { return r - 1; }
@@ -749,7 +749,7 @@ pub fn doc_read(path: text) -> HexDoc {
   d.doc_layers  = layers_new(q0, r0, w, h);
   seen_occu = false;
 
-  for sx in 0..nsec {
+  for _ in 0..nsec {
     if f#next + 8 > total { d.doc_code = HXF_TRUNCATED; return d; }
     tag = f#read as i32;
     blen = f#read as i32;
@@ -858,7 +858,7 @@ pub fn cell_rot(q: integer, r: integer, n: integer) -> (integer, integer) {
   rm = lattice_m(q, r);
   steps = n % 6;
   if steps < 0 { steps = steps + 6; }
-  for rs in 0..steps {
+  for _ in 0..steps {
     (nk, nm) = lattice_rot60(rk, rm);
     rk = nk;
     rm = nm;
@@ -1258,7 +1258,7 @@ pub fn edgeset_new(q0: integer, r0: integer, w: integer, h: integer) -> EdgeSet 
   m: vector<u8> = [];
   sf: vector<i32> = [];
   n = gw * gh * 3;
-  for i in 0..n { m += [(0 as u8?) ?? 0]; sf += [(0 as i32?) ?? 0]; }
+  for _ in 0..n { m += [(0 as u8?) ?? 0]; sf += [(0 as i32?) ?? 0]; }
   EdgeSet { eg_q0: q0, eg_r0: r0, eg_w: w, eg_h: h, eg_gw: gw, eg_gh: gh,
             eg_mat: m, eg_surf: sf, eg_count: 0 }
 }
@@ -1480,7 +1480,7 @@ pub fn layer_add(ls: Layers, name: text) -> integer {
   if had >= 0 { return had; }
   ls.ly_names += [name];
   n = ls.ly_w * ls.ly_h;
-  for i in 0..n { ls.ly_vals += [0]; }
+  for _ in 0..n { ls.ly_vals += [0]; }
   len(ls.ly_names) - 1
 }
 

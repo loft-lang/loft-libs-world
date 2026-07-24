@@ -97,11 +97,11 @@ fn test_refuses_a_layer_section_of_the_wrong_length() {
     f += (2 as i32); f += (2 as i32);
     f += (2 as i32); f += (0 as i32);
     f += (TAG_OCCU as i32); f += (4 as i32);
-    for i in 0..4 { f += ((1 as u8?) ?? 0); }
+    for _ in 0..4 { f += ((1 as u8?) ?? 0); }
     f += (TAG_LAYR as i32);
     f += (20 as i32);          // claims 20; a 4-byte name + 4 cells needs 4+4+16 = 24
     f += (4 as i32); f += "item";
-    for i in 0..4 { f += (0 as i32); }
+    for _ in 0..4 { f += (0 as i32); }
   }
   d = doc_read(p);
   assert(d.doc_code == HXF_BAD_SECTION, "a short LAYR section gave {d.doc_code}");
