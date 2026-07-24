@@ -935,7 +935,12 @@ pub fn stencil_rotate(st: Stencil, n: integer) -> Stencil {
     hexset_chunk(mnq, mnr, nw, nh),
     heights_new(mnq, mnr, nw, nh),
     labels_new(mnq, mnr, nw, nh),
-    edgeset_new(mnq - 1, mnr - 1, nw + 2, nh + 2),
+    // The CELL extent, not a pre-haloed one: `edgeset_new` adds the one-cell halo
+    // itself (`gw = w + 2`), which is exactly the reach a rim edge needs — its owner
+    // is at most one cell outside.  Passing `(mnq - 1, nw + 2)` here halos it twice,
+    // and `stencil_from` does not, so two stencils holding the same walls would
+    // disagree on `eg_gw` and `edgeset_equal` could never compare them.
+    edgeset_new(mnq, mnr, nw, nh),
     st.sn_has_h, st.sn_has_l
   );
   out.sn_has_e = st.sn_has_e;
@@ -1014,7 +1019,7 @@ pub fn stencil_mirror(st: Stencil) -> Stencil {
     hexset_chunk(mnq, mnr, nw, nh),
     heights_new(mnq, mnr, nw, nh),
     labels_new(mnq, mnr, nw, nh),
-    edgeset_new(mnq - 1, mnr - 1, nw + 2, nh + 2),
+    edgeset_new(mnq, mnr, nw, nh),      // the cell extent — see stencil_rotate
     st.sn_has_h, st.sn_has_l
   );
   out.sn_has_e = st.sn_has_e;
