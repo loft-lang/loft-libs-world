@@ -47,31 +47,31 @@ use hex_grid;
 // tt_rise and tt_steep are INDEPENDENT; tt_wet marks water bodies (sea/lake):
 // they take no relief and no boundary contest.
 pub struct TerrainType {
-  const tt_key:   text,
-  const tt_rise:  float,   // m of ridge lift at the 100 m reference relief
-  const tt_steep: float,   // m of detail amplitude; sqrt(steep) wins boundaries
-  const tt_wet:   boolean,
+  tt_key:   text,
+  tt_rise:  float,   // m of ridge lift at the 100 m reference relief
+  tt_steep: float,   // m of detail amplitude; sqrt(steep) wins boundaries
+  tt_wet:   boolean,
 }
 
 // Algorithm parameters (engine side).  terrain_params() gives the blueprint's
 // user-tuned defaults; every field is meters unless noted.
 pub struct TerrainParams {
-  const tp_seed:        integer,
-  const tp_tile:        float,    // overland hex pitch
-  const tp_sea:         float,    // sea level
-  const tp_lake_fill:   float,    // flood-fill raise that makes a cell a lake
-  const tp_acc_min:     float,    // accumulation (tiles) before a stream is a river
-  const tp_meander:     float,    // fractal displacement strength K
-  const tp_seg_min:     float,    // stop subdividing below this segment length
-  const tp_nb_base:     float,    // relief multiplier with zero steep neighbors
-  const tp_nb_boost:    float,    // ADDED per steep neighbor (compounding)
-  const tp_steep_delta: float,    // neighbor height delta that counts as steep
-  const tp_carve_max:   float,    // max single-course valley depth
-  const tp_valley_w:    float,    // smallest valley falloff width
-  const tp_valley_max:  float,    // biggest river's falloff width
-  const tp_detail_wl:   float,    // detail-noise base wavelength
-  const tp_ridge_wl:    float,    // ridge-field wavelength (peaks COMBINE)
-  const tp_warp:        float,    // domain-warp displacement of the detail
+  tp_seed:        integer,
+  tp_tile:        float,    // overland hex pitch
+  tp_sea:         float,    // sea level
+  tp_lake_fill:   float,    // flood-fill raise that makes a cell a lake
+  tp_acc_min:     float,    // accumulation (tiles) before a stream is a river
+  tp_meander:     float,    // fractal displacement strength K
+  tp_seg_min:     float,    // stop subdividing below this segment length
+  tp_nb_base:     float,    // relief multiplier with zero steep neighbors
+  tp_nb_boost:    float,    // ADDED per steep neighbor (compounding)
+  tp_steep_delta: float,    // neighbor height delta that counts as steep
+  tp_carve_max:   float,    // max single-course valley depth
+  tp_valley_w:    float,    // smallest valley falloff width
+  tp_valley_max:  float,    // biggest river's falloff width
+  tp_detail_wl:   float,    // detail-noise base wavelength
+  tp_ridge_wl:    float,    // ridge-field wavelength (peaks COMBINE)
+  tp_warp:        float,    // domain-warp displacement of the detail
 }
 
 pub fn terrain_params(seed: integer, tile: float) -> TerrainParams {
@@ -86,15 +86,15 @@ pub fn terrain_params(seed: integer, tile: float) -> TerrainParams {
 
 // Parallel per-cell vectors, index = r * tr_nx + c (odd-r offset coords).
 pub struct Terrain {
-  const tr_nx:     integer,
-  const tr_ny:     integer,
-  const tr_h:      vector<float>,   // height (m); after hydrology = the FILLED surface
-  const tr_mat:    vector<integer>, // index into the caller's TerrainType vector
-  const tr_moist:  vector<float>,
-  const tr_flow:   vector<integer>, // steepest-descent neighbor dir 0..5, -1 = none
-  const tr_acc:    vector<float>,   // flow accumulation (tiles)
-  const tr_relief: vector<float>,   // compounded neighbor relief (0 on wet cells)
-  const tr_wet:    vector<boolean>, // water-flow cell: wet material OR river acc
+  tr_nx:     integer,
+  tr_ny:     integer,
+  tr_h:      vector<float>,   // height (m); after hydrology = the FILLED surface
+  tr_mat:    vector<integer>, // index into the caller's TerrainType vector
+  tr_moist:  vector<float>,
+  tr_flow:   vector<integer>, // steepest-descent neighbor dir 0..5, -1 = none
+  tr_acc:    vector<float>,   // flow accumulation (tiles)
+  tr_relief: vector<float>,   // compounded neighbor relief (0 on wet cells)
+  tr_wet:    vector<boolean>, // water-flow cell: wet material OR river acc
 }
 
 pub fn terrain_new(nx: integer, ny: integer) -> Terrain {
@@ -217,9 +217,9 @@ pub fn terrain_hydrology(t: Terrain, p: TerrainParams, lake_mat: integer) {
   nx = t.tr_nx;
   ny = t.tr_ny;
   n = nx * ny;
-  th = &t.tr_h;       // `&` borrows: index-writes go THROUGH to the field (since
-  tm = &t.tr_mat;     // @PLN85 #415 a bare `x = t.tr_h` COPIES the field's vector,
-  tf = &t.tr_flow;    // so the writes would never reach `t`)
+  th = &t.tr_h;       // live refs: index-writes go through to the record (C86: a
+  tm = &t.tr_mat;     // plain bind now COPIES, so `&` is required to write through)
+  tf = &t.tr_flow;
   ta = &t.tr_acc;
   orig: vector<float> = [];
   level: vector<float> = [];
@@ -350,7 +350,7 @@ pub fn terrain_hydrology(t: Terrain, p: TerrainParams, lake_mat: integer) {
 pub fn terrain_relief_pass(t: Terrain, types: vector<TerrainType>, p: TerrainParams) {
   nx = t.tr_nx;
   ny = t.tr_ny;
-  tw = &t.tr_wet;     // `&` borrow so element writes reach the field (@PLN85 #415)
+  tw = &t.tr_wet;
   tl = &t.tr_relief;
   for r in 0..ny {
     for c in 0..nx {
@@ -398,14 +398,14 @@ pub fn terrain_relief_pass(t: Terrain, types: vector<TerrainType>, p: TerrainPar
 
 // One blended surface record at a fine point.
 pub struct TerrainSurf {
-  const sf_h:      float,    // fine height BEFORE river carving
-  const sf_blend:  float,    // the coarse blended height alone
-  const sf_mat:    integer,  // winning land material (the boundary contest)
-  const sf_mix:    float,    // 0.5..1: how decisively it wins (edge softness)
-  const sf_relief: float,
-  const sf_moist:  float,
-  const sf_watery: float,    // blended weight of wet-material cells
-  const sf_lakey:  float,    // blended weight of wet cells ABOVE sea level
+  sf_h:      float,    // fine height BEFORE river carving
+  sf_blend:  float,    // the coarse blended height alone
+  sf_mat:    integer,  // winning land material (the boundary contest)
+  sf_mix:    float,    // 0.5..1: how decisively it wins (edge softness)
+  sf_relief: float,
+  sf_moist:  float,
+  sf_watery: float,    // blended weight of wet-material cells
+  sf_lakey:  float,    // blended weight of wet cells ABOVE sea level
 }
 
 // Smooth kernel blend of the overland cells around (x, y) + the boundary-line
@@ -482,7 +482,8 @@ pub fn terrain_surface_at(t: Terrain, types: vector<TerrainType>, p: TerrainPara
     tyc = types[cm];
     if tyc != null && !tyc.tt_wet && (wm[cm] ?? 0.0) > 0.0 {
       jit = 0.72 + 0.56 * (terrain_fbm(p.tp_seed, x, y, 340.0, 3, 40 + cm) * 0.5 + 0.5);
-      sc = (wm[cm] ?? 0.0) * iw * sqrt(max(tyc.tt_steep, 0.01)) * jit;
+      steep_root = sqrt(max(tyc.tt_steep, 0.01));
+      sc = (wm[cm] ?? 0.0) * iw * (steep_root ?? 0.0) * jit;
       if sc > s1 {
         s2 = s1;
         steep2 = steep1;
@@ -567,15 +568,15 @@ pub fn terrain_water_at(t: Terrain, types: vector<TerrainType>, p: TerrainParams
 // One river course PIECE: fine polyline (ends ON the shorelines) with
 // per-vertex water width, carve depth and valley falloff width.
 pub struct TerrainRiver {
-  const rv_x:  vector<float>,
-  const rv_y:  vector<float>,
-  const rv_w:  vector<float>,    // water half-width test: dist < rv_w/2
-  const rv_d:  vector<float>,    // carve depth
-  const rv_vw: vector<float>,    // carve falloff width
-  const rv_x0: float,   // bbox (+ tp_valley_max*4 = the influence apron)
-  const rv_y0: float,
-  const rv_x1: float,
-  const rv_y1: float,
+  rv_x:  vector<float>,
+  rv_y:  vector<float>,
+  rv_w:  vector<float>,    // water half-width test: dist < rv_w/2
+  rv_d:  vector<float>,    // carve depth
+  rv_vw: vector<float>,    // carve falloff width
+  rv_x0: float,   // bbox (+ tp_valley_max*4 = the influence apron)
+  rv_y0: float,
+  rv_x1: float,
+  rv_y1: float,
 }
 
 fn th_cellhash(seed: integer, a1: integer, a2: integer, b1: integer, b2: integer, ch: integer) -> float {
@@ -704,20 +705,16 @@ fn th_shape_river(t: Terrain, p: TerrainParams, vx: vector<float>, vy: vector<fl
     kx = vx[k] ?? 0.0;
     ky = vy[k] ?? 0.0;
     kv = vv[k] ?? 1.0;
-    // `sqrt` returns `float?` (negative-domain → null); `kv` is a valley weight
-    // (≥ 0), so discharge ONCE at the source with `?? 0.0` and reuse `skv` in the
-    // three carve/valley/width terms below rather than coalescing each call site.
-    skv = sqrt(kv) ?? 0.0;
     hx = terrain_blend_h(t, p, kx + e, ky) - terrain_blend_h(t, p, kx - e, ky);
     hy = terrain_blend_h(t, p, kx, ky + e) - terrain_blend_h(t, p, kx, ky - e);
     sl = (sqrt(hx * hx + hy * hy) / (2.0 * e)) ?? 0.0;
     fs = min(1.0, sl / 0.05);
     h0 = terrain_blend_h(t, p, kx, ky);
-    base = 3.0 + 1.7 * skv;
+    base = 3.0 + 1.7 * sqrt(kv);
     dep = base * (0.45 + 0.55 * fs) + base * 0.90 * exp(0.0 - max(h0, 0.0) / 14.0);
     dd += [min(p.tp_carve_max, dep)];
-    vw += [min(p.tp_valley_max, (24.0 + 11.0 * skv) * (1.6 - 0.6 * fs))];
-    ww += [min(26.0, 2.2 + 1.35 * skv)];
+    vw += [min(p.tp_valley_max, (24.0 + 11.0 * sqrt(kv)) * (1.6 - 0.6 * fs))];
+    ww += [min(26.0, 2.2 + 1.35 * sqrt(kv))];
     x0 = min(x0, kx);
     y0 = min(y0, ky);
     x1 = max(x1, kx);
@@ -893,10 +890,10 @@ pub fn terrain_rivers(t: Terrain, types: vector<TerrainType>, p: TerrainParams) 
 // ── Fine sampling (the game-facing surface) ────────────────────────────────
 
 pub struct TerrainSample {
-  const ts_h:     float,    // carved fine height
-  const ts_mat:   integer,  // winning land material
-  const ts_water: integer,  // 0 dry, 1 river, 2 sea, 3 lake
-  const ts_rdist: float,    // distance to the nearest river course (1e9 = none)
+  ts_h:     float,    // carved fine height
+  ts_mat:   integer,  // winning land material
+  ts_water: integer,  // 0 dry, 1 river, 2 sea, 3 lake
+  ts_rdist: float,    // distance to the nearest river course (1e9 = none)
 }
 
 // The full sample: surface + ADDITIVE valley carving from every course near
@@ -925,7 +922,7 @@ pub fn terrain_sample(t: Terrain, types: vector<TerrainType>, p: TerrainParams, 
           tt = min(max((((x - ax) * ex + (y - ay) * ey) / ee) ?? 0.0, 0.0), 1.0);
           ddx = x - (ax + tt * ex);
           ddy = y - (ay + tt * ey);
-          d = sqrt(ddx * ddx + ddy * ddy);
+          d = sqrt(ddx * ddx + ddy * ddy) ?? 0.0;
           if d < cd {
             cd = d;
             cdep = (rv.rv_d[k] ?? 0.0) * (1.0 - tt) + (rv.rv_d[k + 1] ?? 0.0) * tt;

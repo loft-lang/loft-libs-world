@@ -25,24 +25,11 @@ fn test_types() -> vector<hex_terrain::TerrainType> {
 // A small deterministic island: radial falloff + fbm + one massif, sea rim.
 // The continent recipe is CALLER side (content); the lib provides mechanism.
 fn build_world(seed: integer) -> (hex_terrain::Terrain, hex_terrain::TerrainParams) {
-  // tp_acc_min is now a const field (write-once), so tweak the blueprint by
-  // constructing a fresh TerrainParams from terrain_params()' defaults with
-  // the one override, rather than reassigning the field in place.
-  base = hex_terrain::terrain_params(seed, 400.0);
-  p = hex_terrain::TerrainParams {
-    tp_seed: base.tp_seed, tp_tile: base.tp_tile, tp_sea: base.tp_sea,
-    tp_lake_fill: base.tp_lake_fill, tp_acc_min: 3.0, tp_meander: base.tp_meander,
-    tp_seg_min: base.tp_seg_min, tp_nb_base: base.tp_nb_base, tp_nb_boost: base.tp_nb_boost,
-    tp_steep_delta: base.tp_steep_delta, tp_carve_max: base.tp_carve_max,
-    tp_valley_w: base.tp_valley_w, tp_valley_max: base.tp_valley_max,
-    tp_detail_wl: base.tp_detail_wl, tp_ridge_wl: base.tp_ridge_wl, tp_warp: base.tp_warp };
+  p = hex_terrain::terrain_params(seed, 400.0);
+  p.tp_acc_min = 3.0;
   nx = 16;
   ny = 13;
   t = hex_terrain::terrain_new(nx, ny);
-  // Borrow (`&`) the fields we fill: since @PLN85 #415 a struct vector-field read
-  // COPIES on bind (`th = t.tr_h` would give an independent vector whose element
-  // writes never reach `t`), so an explicit `&` is required to write THROUGH to the
-  // field — the hydrology/land passes below read `t.tr_*` directly.
   th = &t.tr_h;
   tmo = &t.tr_moist;
   ww = (nx as float) * 400.0;
@@ -59,10 +46,7 @@ fn build_world(seed: integer) -> (hex_terrain::Terrain, hex_terrain::TerrainPara
       g = exp(0.0 - gx * gx - gy * gy);
       i = hex_terrain::terrain_idx(t, c, r);
       if i < len(th) {
-        // `pow` returns `float?` (domain edge); discharge the stored VALUE at its
-        // source (can't `??` the write target `th[i]`).  `?? 0.0` never fires for
-        // the in-range heightmap inputs here.
-        th[i] = (170.0 * n + 90.0 - 480.0 * pow(rad, 2.4) + 520.0 * g) ?? 0.0;
+        th[i] = 170.0 * n + 90.0 - 480.0 * (pow(rad, 2.4) ?? 0.0) + 520.0 * g;
       }
       if i < len(tmo) {
         tmo[i] = 0.5;
@@ -145,7 +129,7 @@ fn main() {
     for k in 0..n - 1 {
       ddx = (rv.rv_x[k + 1] ?? 0.0) - (rv.rv_x[k] ?? 0.0);
       ddy = (rv.rv_y[k + 1] ?? 0.0) - (rv.rv_y[k] ?? 0.0);
-      pathlen = pathlen + sqrt(ddx * ddx + ddy * ddy);
+      pathlen = pathlen + (sqrt(ddx * ddx + ddy * ddy) ?? 0.0);
     }
     sx = (rv.rv_x[n - 1] ?? 0.0) - (rv.rv_x[0] ?? 0.0);
     sy = (rv.rv_y[n - 1] ?? 0.0) - (rv.rv_y[0] ?? 0.0);
