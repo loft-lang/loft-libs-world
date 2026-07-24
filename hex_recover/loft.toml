@@ -1,8 +1,13 @@
+[package]
+name    = "hex_recover"
+version = "0.1.0"
+loft    = ">=0.8"
 
+[library]
+entry = "src/hex_recover.loft"
 
-# REGISTRY DEPENDENCIES (for the index entry, NOT declared here): hex_field, hex_form
-# Declared as `[dependencies] x = ">=0.1"` they break `--lib` multi-library consumption
-# (loft attempts registry resolution of the dep instead of finding it on the --lib path);
-# and install reads deps from the registry INDEX, not this file (loft src/install.rs
-# resolve_recursive uses version.deps). So the deps belong in the index entry, added at
-# publish time -- this comment is their source of truth until then.
+# REGISTRY DEPENDENCIES (added to the index entry at publish time, NOT declared here): hex_field, hex_form
+# Declared as `[dependencies] x = ">=0.1"` they break `--lib` multi-library consumption -- loft
+# resolves the dep from the registry instead of the --lib path. Install reads deps from the
+# registry INDEX, not this file (loft src/install.rs resolve_recursive uses version.deps), so the
+# deps live in the index entry. See hexbody plans/lib-split.
