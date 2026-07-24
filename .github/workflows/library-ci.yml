@@ -15,7 +15,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        package: [hex_world, hex_grid, hex_terrain, hex_field]
+        package: [hex_world, hex_grid, hex_terrain, hex_field, hex_edge, hex_way, hex_roof]
     steps:
       - uses: actions/checkout@v4
 

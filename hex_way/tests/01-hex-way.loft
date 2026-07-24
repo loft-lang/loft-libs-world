@@ -1,0 +1,51 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// hex_way — the conformance tests: a way is an exact CENTRELINE plus offsets, never a
+// rasterised band, and its arc length, tangent and offsets follow from that.
+//
+// These assert the library's CONTRACT, not its depth.  The exhaustive measurement lives in
+// hexbody's gates (`tests/line.loft`, `tests/arb.loft`), which print their evidence and carry a
+// control that must fire.  This file is what CI runs under `LOFT_DENY_WARNINGS=1`.
+use hex_way;
+use hex_edge;
+use hex_field;
+
+fn main() {
+  t = track_new();
+  assert(track_len(t) == 0.0, "an empty track has zero length");
+}
+
+fn test_a_straight_segment_has_its_euclidean_length() {
+  t = track_new();
+  track_straight(t, 0.0, 0.0, 3.0, 4.0);          // the 3-4-5 triangle
+  l = track_len(t);
+  assert(l > 4.999 && l < 5.001, "a 3-4 straight is 5 long, got {l}");
+  assert(seg_len(t, 0) > 4.999, "the one segment carries that length");
+}
+
+fn test_a_point_along_a_segment_interpolates_exactly() {
+  t = track_new();
+  track_straight(t, 0.0, 0.0, 10.0, 0.0);
+  (x, y) = seg_point(t, 0, 5.0);                  // halfway
+  assert(x > 4.999 && x < 5.001, "halfway along is x = 5, got {x}");
+  assert(y > -0.001 && y < 0.001, "and stays on the line, got y = {y}");
+  (tx, ty) = seg_tangent(t, 0, 5.0);
+  assert(tx > 0.999 && ty > -0.001 && ty < 0.001, "the tangent points +x, got ({tx}, {ty})");
+}
+
+fn test_an_arc_segment_measures_its_true_arc_length() {
+  t = track_new();
+  // a quarter circle of radius 2: length = 2 * pi/2 = pi
+  track_arc(t, 0.0, 0.0, 2.0, 0.0, 1.5707963267948966);
+  l = track_len(t);
+  assert(l > 3.140 && l < 3.143, "a quarter arc of r=2 is pi long, got {l}");
+}
+
+fn test_distance_to_the_centreline_is_measured_from_the_line_not_a_band() {
+  // `X8`: a way is a centreline plus offsets.  A point 3 off a straight run is 3 away --
+  // if the way were stored as a rasterised band this would quantise, and it must not.
+  t = track_new();
+  track_straight(t, 0.0, 0.0, 10.0, 0.0);
+  d = track_distance(t, 5.0, 3.0);
+  assert(d > 2.999 && d < 3.001, "a point 3 off the centreline is 3 away, got {d}");
+}

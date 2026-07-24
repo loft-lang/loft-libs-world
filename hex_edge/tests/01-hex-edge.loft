@@ -1,0 +1,55 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// hex_edge — the conformance tests: the surface set, edge geometry, and the material table.
+//
+// These assert the library's CONTRACT, not its depth.  The exhaustive measurement of this code
+// lives in hexbody's gates (`tests/wall.loft`, `tests/arb.loft`, `tests/line.loft`), which print
+// their evidence and carry a control that must fire.  This file is what a consumer reads to see
+// the package is exercised, and what CI runs under `LOFT_DENY_WARNINGS=1`.
+use hex_edge;
+use hex_field;
+
+fn main() {
+  s = surfaces_new();
+  // id 0 is RESERVED for "no surface", so a fresh set already holds one slot -- a consumer
+  // indexing surfaces must know that, which is why it is asserted rather than assumed.
+  assert(s.sf_n == 1, "a fresh surface set holds only the reserved id 0, got {s.sf_n}");
+}
+
+fn test_a_straight_surface_measures_distance_along_its_normal() {
+  s = surfaces_new();
+  // the line y = 0, normal +y
+  i = surf_straight(s, 0.0, 1.0, 0.0);
+  assert(i == 1, "the first real surface is id 1 -- id 0 is reserved for none, got {i}");
+  d = surf_distance(s, i, 0.0, 3.0);
+  assert(d > 2.99 && d < 3.01, "a point 3 above the line is 3 away, got {d}");
+  (nx, ny) = surf_normal(s, i, 0.0, 3.0);
+  assert(nx > -0.01 && nx < 0.01 && ny > 0.99, "the normal points +y, got ({nx}, {ny})");
+}
+
+fn test_an_arc_surface_measures_distance_from_its_rim() {
+  s = surfaces_new();
+  i = surf_arc(s, 0.0, 0.0, 5.0);
+  // a point on the rim is at distance 0; one 2 further out is 2 away
+  d0 = surf_distance(s, i, 5.0, 0.0);
+  d2 = surf_distance(s, i, 7.0, 0.0);
+  assert(d0 > -0.01 && d0 < 0.01, "a point on the rim is 0 away, got {d0}");
+  assert(d2 > 1.99 && d2 < 2.01, "a point 2 outside the rim is 2 away, got {d2}");
+}
+
+fn test_the_material_table_carries_its_properties() {
+  m = materials_new();
+  id = material_add(m, true, 3.0, 1.0, 0.0, 0.0, 0.0);
+  assert(mat_solid(m, id), "stone is solid");
+  assert(mat_height(m, id) > 2.99 && mat_height(m, id) < 3.01, "stone's height came back");
+  assert(!mat_solid(m, 0), "material 0 is the empty one and is not solid");
+}
+
+fn test_an_edge_midpoint_is_shared_by_the_two_cells_it_separates() {
+  // The edge between (0,0) and its neighbour is the SAME edge from either side -- this is the
+  // property `SPEC` L11 exists to protect, and it is cheap to state here.
+  // (0,0) and (1,0) are neighbours on the odd-r lattice; no `hex_grid` dependency needed.
+  (ax, ay) = edge_point(0, 0, 1, 0);
+  (bx, by) = edge_point(1, 0, 0, 0);
+  assert(ax == bx && ay == by, "the edge midpoint is the same from both sides");
+}

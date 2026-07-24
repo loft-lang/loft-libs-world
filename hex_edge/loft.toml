@@ -1,0 +1,10 @@
+[package]
+name    = "hex_edge"
+version = "0.1.0"
+loft    = ">=0.8"
+
+[library]
+entry = "src/hex_edge.loft"
+
+[dependencies]
+hex_field = { path = "../hex_field" }

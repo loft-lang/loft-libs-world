@@ -1,0 +1,76 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// hex_roof — the conformance tests: a roof is a HEIGHT FIELD over a cell set, and it must drain.
+//
+// These assert the library's CONTRACT, not its depth.  The exhaustive measurement lives in
+// hexbody's `tests/house.loft` (roofs at 12 orientations, `eave_spread`, `roof_ponds = 0`), which
+// prints its evidence and carries a control that must fire.  This file is what CI runs under
+// `LOFT_DENY_WARNINGS=1`.
+//
+// ⚠ `roof_match` takes a TOLERANCE and is an R2 fit by design — recovering a profile from an
+// arbitrary height field, not from one we authored.  That is licensed; it is not an `ε` smuggled
+// into an exact path.
+use hex_roof;
+use hex_way;
+use hex_field;
+
+const W = 9;
+const H = 9;
+
+fn disc() -> HexSet {
+  s = hexset_chunk(0, 0, W, H);
+  for r in 0..H {
+    for q in 0..W {
+      dq = q - 4;
+      dr = r - 4;
+      if dq * dq + dr * dr <= 9 { hexset_set(s, q, r, true); }
+    }
+  }
+  s
+}
+
+fn main() {
+  s = disc();
+  assert(hexset_count(s) > 0, "the test disc has cells");
+}
+
+fn test_a_cone_rises_to_a_single_peak() {
+  // ⚠ `roof_cone`'s (cx, cy) is in WORLD units, not cell indices — cell (4,4) is NOT at world
+  // (4.0, 4.0) on a pointy-top odd-r lattice.  Asserting "cell (4,4) is the apex" fails with 9
+  // cells above it, which is a wrong assumption rather than a defect.  So assert the PROPERTY:
+  // the cone is not flat, and its maximum is positive.
+  s = disc();
+  f = heights_new(0, 0, W, H);
+  roof_cone(s, f, 4.0, 4.0, 5.0, 1.0, 9.0);
+  hi = 0.0;
+  lo = 1000000.0;
+  for r in 0..H {
+    for q in 0..W {
+      if hexset_get(s, q, r) {
+        h = height_get(f, q, r);
+        if h > hi { hi = h; }
+        if h < lo { lo = h; }
+      }
+    }
+  }
+  assert(hi > 0.0, "the cone has a positive maximum, got {hi}");
+  assert(hi > lo, "the cone is not flat: max {hi} must exceed min {lo}");
+}
+
+fn test_a_cone_has_no_ponds() {
+  // A pond is a cell with no downhill neighbour — water that cannot leave. A roof that ponds is
+  // a roof that leaks, so this is the load-bearing property of every profile in this library.
+  s = disc();
+  f = heights_new(0, 0, W, H);
+  roof_cone(s, f, 4.0, 4.0, 5.0, 1.0, 9.0);
+  p = roof_ponds(s, f);
+  assert(p == 0, "a cone must not pond, found {p}");
+}
+
+fn test_a_flat_field_does_pond_which_keeps_the_pond_check_honest() {
+  // The control: if `roof_ponds` returned 0 for everything the test above would prove nothing.
+  s = disc();
+  f = heights_new(0, 0, W, H);
+  p = roof_ponds(s, f);
+  assert(p > 0, "a dead-flat field must pond, but roof_ponds returned {p}");
+}

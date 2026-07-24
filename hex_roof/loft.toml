@@ -1,0 +1,11 @@
+[package]
+name    = "hex_roof"
+version = "0.1.0"
+loft    = ">=0.8"
+
+[library]
+entry = "src/hex_roof.loft"
+
+[dependencies]
+hex_field = { path = "../hex_field" }
+hex_way = { path = "../hex_way" }
