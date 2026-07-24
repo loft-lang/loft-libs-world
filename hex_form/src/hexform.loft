@@ -1,0 +1,762 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// hexform — THE 12 HEADINGS OF H12, AS EXACT LATTICE STEPS.
+//
+// A stencil side runs in one of 12 headings, 30 degrees apart (ROUNDTRIP.md §2.1).  This
+// file is the table of those steps and nothing else: no geometry, no rasterisation, pure
+// integer arithmetic.  Everything downstream indexes it, so it is the cheapest possible
+// thing to be wrong about and the cheapest to check.
+//
+// STEPS ARE IN DOUBLED (k, m) COORDINATES, NOT IN (q, r).  hex_field stores pointy-top,
+// ODD-R OFFSET cells — `lattice_k(q,r) = 2q + (r & 1)`, `lattice_m(q,r) = 3r` — so a step
+// expressed in (q, r) DEPENDS ON THE PARITY OF r.  In (k, m) the offset is already absorbed
+// and the same six neighbour deltas hold on every row.  Working here keeps the whole file
+// parity-free; `formtest` proves that against hex_field's own `nb_q` / `nb_r`.
+//
+// THE TWO CLASSES (ROUNDTRIP.md §2.1).  Even headings are the six edge-neighbour directions,
+// odd headings the six vertex directions.  Their world lengths differ by exactly sqrt(3),
+// which this file exposes as an INTEGER: 4 * len^2 = 3k^2 + m^2, giving 12 for an edge step
+// and 36 for a vertex one.  Never compare these as floats — the ratio is exact.
+use hex_field;
+use hex_grid;
+
+pub const HEAD_N = 12;
+
+// 4 * the squared world length of one edge step and one vertex step.  From
+// x = k*sqrt(3)/2 and y = m/2, len^2 = (3k^2 + m^2)/4, so scaling by 4 keeps it integral.
+pub const EDGE_N2_4   = 12;
+pub const VERTEX_N2_4 = 36;
+
+// Normalise a heading to 0..11.
+//
+// EVERY index of the table goes through here.  A running heading is `h0 + sum(turn)` and the
+// turns are -5..6, so it leaves 0..11 constantly — a 4-sided cycle turning 3 each time
+// reaches h = 12 on its last side.  Two things then go wrong SILENTLY if the raw value is
+// used: in loft a negative index reads from the END of a vector instead of returning null,
+// and an index at or past the length returns null rather than wrapping.  Both hand back a
+// plausible wrong answer, which is why this is the first function in the file.
+pub fn head_norm(h: integer) -> integer { ((h % HEAD_N) + HEAD_N) % HEAD_N }
+
+// The step for heading `h`, as (dk, dm) in doubled coordinates.
+//
+// Ordered counter-clockwise from +x: h = 0 is due east, and each step is +30 degrees.  Even
+// h are the edge neighbours, odd h the vertex directions.
+pub fn head_step(h: integer) -> (integer, integer) {
+  n = head_norm(h);
+  if n == 0  { return ( 2,  0); }
+  if n == 1  { return ( 3,  3); }
+  if n == 2  { return ( 1,  3); }
+  if n == 3  { return ( 0,  6); }
+  if n == 4  { return (-1,  3); }
+  if n == 5  { return (-3,  3); }
+  if n == 6  { return (-2,  0); }
+  if n == 7  { return (-3, -3); }
+  if n == 8  { return (-1, -3); }
+  if n == 9  { return ( 0, -6); }
+  if n == 10 { return ( 1, -3); }
+  ( 3, -3)
+}
+
+// 4 * the squared world length of the step — EDGE_N2_4 or VERTEX_N2_4, exactly.
+pub fn head_n2_4(h: integer) -> integer {
+  st = head_step(h);
+  3 * st.0 * st.0 + st.1 * st.1
+}
+
+// An even heading is an edge-neighbour direction; an odd one points at a vertex.
+pub fn head_is_edge(h: integer) -> boolean { head_norm(h) % 2 == 0 }
+
+// The exact 60-degree rotation on doubled coordinates (ROUNDTRIP.md §1, constraint X1).
+//
+// Both halves stay integral because every lattice point satisfies k = m (mod 2): k's parity
+// is `r & 1` and m = 3r has the same parity.  On the heading table this acts as h -> h + 2,
+// which is what makes the six rotations of O a subgroup of the twelve headings.
+pub fn rot60_k(k: integer, m: integer) -> integer { (k - m) / 2 }
+pub fn rot60_m(k: integer, m: integer) -> integer { (3 * k + m) / 2 }
+
+// The exact reflection (constraint X2).  On the heading table this acts as h -> 6 - h.
+pub fn refl_k(k: integer) -> integer { -k }
+pub fn refl_m(m: integer) -> integer { m }
+
+// The heading whose step is (dk, dm), or -1 if no heading has that step.  Used by the gate
+// to check the table against hex_field's neighbours, and later by recovery.
+pub fn head_of_step(dk: integer, dm: integer) -> integer {
+  for h in 0..HEAD_N {
+    st = head_step(h);
+    if st.0 == dk && st.1 == dm { return h; }
+  }
+  -1
+}
+
+// ── LAW J — A STENCIL BOUNDARY IS A CLOSED TURTLE CYCLE (step S1) ───────────
+//
+// A Form is a walk: start facing `fm_h0`, and for each side walk `fm_len[i]` steps in the
+// current heading, then turn by `fm_turn[i]`.  It is admissible only if it CLOSES, and that
+// is two independent conditions:
+//
+//     sum(len_i * e(h_i)) = (0, 0)     the walk returns to its start
+//     sum(turn_i)         = 12         it turned through exactly one revolution
+//
+// NEITHER IMPLIES THE OTHER, and the gate proves it both ways.  The last turn happens AFTER
+// the last side, so it cannot move the endpoint — a wrong final turn leaves the vector sum
+// at (0,0) and is caught only by the turn total.  Conversely a wrong LENGTH leaves the turn
+// total at 12 and is caught only by the vector sum.
+//
+// THE TURN TOTAL IS +12, NOT -12.  A cycle walked the other way round is the same shape with
+// turn total -12, so requiring +12 picks one spelling of the two — the canonical-form rule
+// C3 (`DESIGN.md` §3) applied at its cheapest point, before anything is written down.
+pub struct Form {
+  fm_h0:   integer,
+  fm_len:  vector<integer>,
+  fm_turn: vector<integer>,
+}
+
+// One full revolution, in twelfths.
+pub const TURN_FULL = 12;
+
+pub fn form_new(h0: integer, lens: vector<integer>, turns: vector<integer>) -> Form {
+  Form { fm_h0: head_norm(h0), fm_len: lens, fm_turn: turns }
+}
+
+pub fn form_sides(f: Form) -> integer { len(f.fm_len) }
+
+// The heading side `i` runs in: the start heading plus every turn taken before it.
+pub fn form_heading(f: Form, i: integer) -> integer {
+  turns = f.fm_turn;
+  h = f.fm_h0;
+  for hj in 0..i { h = h + (turns[hj] ?? 0); }
+  head_norm(h)
+}
+
+pub fn form_turn_sum(f: Form) -> integer {
+  turns = f.fm_turn;
+  total = 0;
+  for ti in 0..len(turns) { total = total + (turns[ti] ?? 0); }
+  total
+}
+
+// Where the walk ends up, relative to where it started, in doubled coordinates.
+pub fn form_close(f: Form) -> (integer, integer) {
+  lens = f.fm_len;
+  turns = f.fm_turn;
+  ck = 0;
+  cm = 0;
+  h = f.fm_h0;
+  for si in 0..len(lens) {
+    st = head_step(h);
+    sl = lens[si] ?? 0;
+    ck = ck + sl * st.0;
+    cm = cm + sl * st.1;
+    h = h + (turns[si] ?? 0);
+  }
+  (ck, cm)
+}
+
+// Law J.  Both conditions, and a side count that can bound a region at all.
+pub fn form_closes(f: Form) -> boolean {
+  if form_sides(f) < 3 { return false; }
+  res = form_close(f);
+  res.0 == 0 && res.1 == 0 && form_turn_sum(f) == TURN_FULL
+}
+
+// ── WHY A LATTICE POLYGON CANNOT BE A RECTANGLE (step S1, OD-11) ────────────
+//
+// Two headings 90 degrees apart exist (0 and 3), so a turtle cycle CAN turn a right angle.
+// What it cannot do is make both sides quantise the same way, and that is a property of the
+// hex lattice rather than of this table:
+//
+//     the perpendicular of (k, m) is (-m, 3k)          3*k*(-m) + m*(3k) = 0
+//     its 4*len^2 is  3m^2 + 9k^2 = 3 * (3k^2 + m^2)   EXACTLY 3x the original
+//
+// Any lattice vector along that perpendicular is an integer multiple of the primitive one,
+// so its length is sqrt(3) * (a rational) times the original — never equal, because sqrt(3)
+// is irrational.  THERE IS NO SQUARE SUBLATTICE OF A HEXAGONAL LATTICE (a lattice cannot
+// carry both 4-fold and 6-fold symmetry), so no choice of headings gives a rectangle whose
+// two sides are counted in the same unit.
+//
+// That is why `housedraw`'s Plan is a CONTINUOUS rectangle rasterised centre-in-region, and
+// why it — not a turtle cycle — is domain A's shape primitive.  See DESIGN.md §10.4.
+pub fn perp_k(_k: integer, m: integer) -> integer { -m }
+pub fn perp_m(k: integer, _m: integer) -> integer { 3 * k }
+
+// 4 * the squared world length of an arbitrary doubled-coordinate vector.
+pub fn vec_n2_4(k: integer, m: integer) -> integer { 3 * k * k + m * m }
+
+// ── THE INSIDE TEST, EXACT — NO HEX EVER LIES ON THE BOUNDARY (S3) ──────────
+//
+// A hex must be unambiguously INSIDE or OUTSIDE; a wall never runs through a hex, only along
+// its edges.  That is only true by construction if no cell centre can sit ON the boundary
+// line — and with the boundary placed AT |k| = wid it can, systematically: `housedraw`'s own
+// note records that "a strict comparison sits on the last bit of a float for a whole column",
+// which is why `draw_floor` carries an EPS.
+//
+// Placing the boundary BETWEEN cell centres removes the tie rather than tolerating it, and
+// both axes then become exact integer tests that CANNOT tie, for two different reasons:
+//
+//     u:  2|k| <= 2*wid + 1        EVEN vs ODD — equality is impossible by parity
+//     v:  m^2  <= 3 * dep^2        m^2 = 3*dep^2 would make sqrt(3) rational
+//
+// No epsilon, no tolerance, no tie-break rule to remember.  Verified to reproduce the gated
+// cell counts exactly (5x4 -> 27, 4x4 -> 23, 6x4 -> 33).
+fn iabs(v: integer) -> integer { if v < 0 { -v } else { v } }
+
+// Is the cell at doubled offset (k, m) from the plan's centre inside a wid x dep plan?
+pub fn plan_holds(wid: integer, dep: integer, k: integer, m: integer) -> boolean {
+  2 * iabs(k) <= 2 * wid + 1 && m * m <= 3 * dep * dep
+}
+
+// Can a cell centre ever lie exactly ON the boundary?  No — and this returns the reason as a
+// checkable fact rather than a comment: the u test compares an even to an odd number.
+pub fn plan_u_can_tie(wid: integer, k: integer) -> boolean { 2 * iabs(k) == 2 * wid + 1 }
+
+// ── S3 — FILL A CLOSED TURTLE CYCLE, AND PROVE THE FILL BY ITS OWN AREA ─────
+//
+// `Form` closes (law J, S1); this turns it into a region.  The turtle walks CENTRE to CENTRE,
+// so every polygon vertex is a hex centre and the path traces the centre-line of the boundary
+// ring.  The region is therefore every hex whose centre lies inside OR ON that polygon.
+//
+// WHY THE TURTLE AT ALL, when OD-11 gave domain A's rectangle to `Plan`?  Because a lattice
+// polygon provably cannot be a rectangle (`X24`) — but it CAN be a triangle, a rhombus and a
+// hexagon, exactly.  The turtle is the **hexagonal-tower** family: the shapes the lattice does
+// hold exactly, which is precisely the set `Plan` cannot express.  Two primitives, two families,
+// neither a special case of the other.
+//
+// THE CROSS-CHECK IS THE SHAPE'S OWN AREA, NOT A SECOND IMPLEMENTATION.  crawler's `hexforms.py`
+// pins the invariant (T2, re-measured here):
+//
+//     sum of the integer shoelace over the boundary  ==  12 * (number of cells)
+//
+// A single hex shoelaces to exactly 12 in doubled (k,m) units, and holes come out negative, so
+// the traced outline and the cell count CANNOT disagree.  It is exact integer arithmetic — no
+// epsilon, no tolerance — and it needs no second fill routine to compare against, which is what
+// `STEPS.md` asks for as option (b).
+
+// The corner offsets in doubled (k,m) are `hex_field`'s `corner_k` / `corner_m` — already the
+// canonical table, indexed the same way `hex_edge_corners` indexes it. NOT restated here: L11,
+// and a private copy is exactly what caused X26.
+
+// The turtle polygon's vertices, in doubled (k,m) RELATIVE to the start.  One vertex per side:
+// the point the walk is standing on before it walks that side.
+pub fn form_poly_k(f: Form) -> vector<integer> {
+  lens = f.fm_len;
+  turns = f.fm_turn;
+  outk: vector<integer> = [];
+  pk = 0;
+  hk = f.fm_h0;
+  for pi in 0..len(lens) {
+    outk += [pk];
+    stk = head_step(hk);
+    pk = pk + (lens[pi] ?? 0) * stk.0;
+    hk = hk + (turns[pi] ?? 0);
+  }
+  outk
+}
+
+pub fn form_poly_m(f: Form) -> vector<integer> {
+  lens = f.fm_len;
+  turns = f.fm_turn;
+  outm: vector<integer> = [];
+  pm = 0;
+  hm = f.fm_h0;
+  for pj in 0..len(lens) {
+    outm += [pm];
+    stm = head_step(hm);
+    pm = pm + (lens[pj] ?? 0) * stm.1;
+    hm = hm + (turns[pj] ?? 0);
+  }
+  outm
+}
+
+fn imin(a: integer, b: integer) -> integer { if a < b { a } else { b } }
+fn imax(a: integer, b: integer) -> integer { if a > b { a } else { b } }
+
+// Is (pk, pm) inside or ON the closed polygon?  Exact integer arithmetic throughout: the
+// on-edge test is a zero cross product, and the crossing test compares a cross product's SIGN
+// rather than computing an intersection, so there is no division and no epsilon anywhere.
+//
+// ON THE BOUNDARY COUNTS AS INSIDE, and that is the whole reason the closed forms come out
+// integral: the turtle traces the centres of the boundary ring, so those cells ARE the shape.
+pub fn poly_holds(vk: vector<integer>, vm: vector<integer>,
+                  pk: integer, pm: integer) -> boolean {
+  n = len(vk);
+  if n < 3 { return false; }
+  for ei in 0..n {
+    ak = vk[ei] ?? 0;
+    am = vm[ei] ?? 0;
+    ej = (ei + 1) % n;
+    bk = vk[ej] ?? 0;
+    bm = vm[ej] ?? 0;
+    crs = (bk - ak) * (pm - am) - (bm - am) * (pk - ak);
+    if crs == 0 {
+      if pk >= imin(ak, bk) && pk <= imax(ak, bk)
+         && pm >= imin(am, bm) && pm <= imax(am, bm) { return true; }
+    }
+  }
+  inside = false;
+  for ci in 0..n {
+    ck = vk[ci] ?? 0;
+    cm = vm[ci] ?? 0;
+    cj = (ci + 1) % n;
+    dk = vk[cj] ?? 0;
+    dm = vm[cj] ?? 0;
+    if (cm > pm) != (dm > pm) {
+      cr2 = (dk - ck) * (pm - cm) - (dm - cm) * (pk - ck);
+      if dm > cm {
+        if cr2 > 0 { inside = !inside; }
+      } else {
+        if cr2 < 0 { inside = !inside; }
+      }
+    }
+  }
+  inside
+}
+
+// THE ROUTINE: fill a closed Form into `cells`, anchored so the walk starts at cell (cq, cr).
+//
+// A NON-CLOSING FORM IS REFUSED, NOT PATCHED (the control).  Law J is the admission test; a walk
+// that does not return to its start bounds no region, and silently filling "what it would have
+// enclosed" would invent a shape the author never wrote.
+pub fn form_fill(f: Form, cq: integer, cr: integer, cells: HexSet) -> integer {
+  if !form_closes(f) { return -1; }
+  vk = form_poly_k(f);
+  vm = form_poly_m(f);
+  bk = lattice_k(cq, cr);
+  bm = lattice_m(cq, cr);
+  n = 0;
+  for fr in hexset_r0(cells)..hexset_r0(cells) + hexset_h(cells) {
+    for fq in hexset_q0(cells)..hexset_q0(cells) + hexset_w(cells) {
+      if poly_holds(vk, vm, lattice_k(fq, fr) - bk, lattice_m(fq, fr) - bm) {
+        hexset_set(cells, fq, fr, true);
+        n = n + 1;
+      }
+    }
+  }
+  n
+}
+
+// TWICE THE SIGNED AREA of the set's boundary, in doubled (k,m) units — summed over every
+// boundary edge directly, so it needs no loop tracing: the shoelace of a closed loop is the sum
+// over its edges, and summing over all loops is summing over all edges.
+//
+// `hex_edge_corners(dir)` gives the edge's two corners in the winding order that makes the outer
+// boundary positive and an enclosed hole negative, which is what makes `= 12 * cells` a real
+// check on enclosure and not just on count.
+pub fn set_shoelace2(cells: HexSet) -> integer {
+  s = 0;
+  for sr in hexset_r0(cells)..hexset_r0(cells) + hexset_h(cells) {
+    for sq in hexset_q0(cells)..hexset_q0(cells) + hexset_w(cells) {
+      if hexset_get(cells, sq, sr) {
+        for sd in 0..6 {
+          (nq, nr) = hex_neighbor(sq, sr, sd);
+          if !hexset_get(cells, nq, nr) {
+            (c1, c2) = hex_edge_corners(sd);
+            ak = lattice_k(sq, sr) + corner_k(c1);
+            am = lattice_m(sq, sr) + corner_m(c1);
+            b2k = lattice_k(sq, sr) + corner_k(c2);
+            b2m = lattice_m(sq, sr) + corner_m(c2);
+            s = s + ak * b2m - b2k * am;
+          }
+        }
+      }
+    }
+  }
+  s
+}
+
+// ── THE CLOSED FORMS — predicted, not read off the fill ────────────────────
+//
+// Each is the count of lattice points inside-or-on the shape in the CENTRE basis (spanned by one
+// edge step and the next-but-one), so each is a plain combinatorial identity rather than a
+// measurement:
+//
+//   triangle side n   the lattice points of a right triangle (n+1)(n+2)/2
+//   rhombus a x b     a box in the centre basis, (a+1)(b+1)
+//   hexagon side n    the hex region of radius n, 3n^2 + 3n + 1
+pub fn tri_cells(n: integer) -> integer { ((n + 1) * (n + 2) / 2) ?? 0 }
+pub fn rhombus_cells(a: integer, b: integer) -> integer { (a + 1) * (b + 1) }
+pub fn hexagon_cells(n: integer) -> integer { 3 * n * n + 3 * n + 1 }
+
+// ── S4 — THE BOUNDARY OF A FILLED REGION, AND WHETHER ITS CORNERS ARE PRECISE ─
+//
+// The wall is the boundary of the fill (`I3`), taken as EDGES — `housedraw::draw_walls` already
+// does that and is reused unchanged.  What was never checked anywhere is what happens WHERE TWO
+// RUNS MEET (`DESIGN.md` §10.4): the corner.  These are the topology primitives parts 1 and 3
+// need, over the cell set directly, so no EdgeSet has to be threaded through.
+//
+// A vertex is keyed by its exact doubled-(k,m) integer position, so "the same corner" is integer
+// equality — no float quantisation, the same discipline as the OD-12 chain check.
+const VKEY_OFF = 500;
+const VKEY_SPAN = 2000;
+
+fn vkey(k: integer, m: integer) -> integer { (k + VKEY_OFF) * VKEY_SPAN + (m + VKEY_OFF) }
+
+// The two endpoint keys of boundary edge `dir` of cell (q,r), as a pair.
+fn bedge_a(q: integer, r: integer, dir: integer) -> integer {
+  (c1, c2) = hex_edge_corners(dir);
+  vkey(lattice_k(q, r) + corner_k(c1), lattice_m(q, r) + corner_m(c1))
+}
+
+fn bedge_b(q: integer, r: integer, dir: integer) -> integer {
+  (c1, c2) = hex_edge_corners(dir);
+  vkey(lattice_k(q, r) + corner_k(c2), lattice_m(q, r) + corner_m(c2))
+}
+
+// Every boundary vertex of the region, one entry per incident edge — so an entry's multiplicity
+// IS that vertex's degree.
+fn boundary_vertices(cells: HexSet) -> vector<integer> {
+  vs: vector<integer> = [];
+  for br in hexset_r0(cells)..hexset_r0(cells) + hexset_h(cells) {
+    for bq in hexset_q0(cells)..hexset_q0(cells) + hexset_w(cells) {
+      if hexset_get(cells, bq, br) {
+        for bd in 0..6 {
+          (nq, nr) = hex_neighbor(bq, br, bd);
+          if !hexset_get(cells, nq, nr) {
+            vs += [bedge_a(bq, br, bd)];
+            vs += [bedge_b(bq, br, bd)];
+          }
+        }
+      }
+    }
+  }
+  vs
+}
+
+fn degree_count(vs: vector<integer>, want_lo: integer, want_hi: integer) -> integer {
+  n = 0;
+  for di in 0..len(vs) {
+    firstd = true;
+    for dk in 0..di { if (vs[dk] ?? 0) == (vs[di] ?? 0) { firstd = false; } }
+    if firstd {
+      deg = 0;
+      for dj in 0..len(vs) { if (vs[dj] ?? 0) == (vs[di] ?? 0) { deg = deg + 1; } }
+      if deg >= want_lo && deg <= want_hi { n = n + 1; }
+    }
+  }
+  n
+}
+
+// PART 1a — dangling ends.  A closed loop has NONE: every boundary vertex is entered and left.
+pub fn boundary_ends(cells: HexSet) -> integer { degree_count(boundary_vertices(cells), 1, 1) }
+
+// PART 1b — pinches.  crawler's tracer relies on a hex boundary never pinching at a vertex
+// (each vertex touches exactly 3 mutually adjacent cells), verified there over 412 forms — a T2
+// claim, re-measured here as a gate rather than assumed.
+pub fn boundary_branches(cells: HexSet) -> integer { degree_count(boundary_vertices(cells), 3, 99) }
+
+// PART 1c — how many separate closed loops the boundary forms.  ONE means the region is a single
+// simply-connected shape; TWO means it has a hole (the outer loop plus the hole's), which is `I3`'s
+// named failure.  Label propagation over the edge graph — the edge count is small and this needs
+// no auxiliary structure.
+pub fn boundary_loops(cells: HexSet) -> integer {
+  ea: vector<integer> = [];
+  eb: vector<integer> = [];
+  for lr in hexset_r0(cells)..hexset_r0(cells) + hexset_h(cells) {
+    for lq in hexset_q0(cells)..hexset_q0(cells) + hexset_w(cells) {
+      if hexset_get(cells, lq, lr) {
+        for ld in 0..6 {
+          (nq, nr) = hex_neighbor(lq, lr, ld);
+          if !hexset_get(cells, nq, nr) {
+            ea += [bedge_a(lq, lr, ld)];
+            eb += [bedge_b(lq, lr, ld)];
+          }
+        }
+      }
+    }
+  }
+  ne = len(ea);
+  if ne == 0 { return 0; }
+  comp: vector<integer> = [];
+  for ci in 0..ne { comp += [ci]; }
+  changed = true;
+  while changed {
+    changed = false;
+    for pi in 0..ne {
+      for pj in 0..ne {
+        if pi != pj {
+          shares = (ea[pi] ?? 0) == (ea[pj] ?? 0) || (ea[pi] ?? 0) == (eb[pj] ?? 0)
+                || (eb[pi] ?? 0) == (ea[pj] ?? 0) || (eb[pi] ?? 0) == (eb[pj] ?? 0);
+          if shares && (comp[pj] ?? 0) < (comp[pi] ?? 0) {
+            comp[pi] = comp[pj] ?? 0;
+            changed = true;
+          }
+        }
+      }
+    }
+  }
+  nloops = 0;
+  for qi in 0..ne {
+    firstq = true;
+    for qk in 0..qi { if (comp[qk] ?? 0) == (comp[qi] ?? 0) { firstq = false; } }
+    if firstq { nloops = nloops + 1; }
+  }
+  nloops
+}
+
+// ── PARTS 2 AND 4 — WRITTEN NOW, ENFORCED LATER ────────────────────────────
+//
+// CASHED IN.  The corner ANGLE (part 2) and the MITER POINT (part 4) needed the fitted analytic
+// surface; it landed at S4b (`X47`) and gained its extent at `G2` (`X61`), so `tests/form.loft` §17
+// now CHECKS them.  Part 4's original wording — *"the miter sits on the exact model corner"* — turned
+// out to be wrong: `Plan` is continuous-then-rasterised, so the continuous corner is quantised away
+// (I-QUANT) and what the miter recovers exactly is the CELL-REGION corner.  History kept below.
+//
+// (was) The corner ANGLE (part 2) and the MITER POINT (part 4) need the fitted analytic surface, which
+// does not exist until S8.  `DESIGN.md` §10.4 says to write them into the gate red at S4.
+//
+// A PERMANENTLY RED SUITE IS NOT A SIGNAL, so instead of failing every run from here to S8 they
+// are a TRIPWIRE: while `SURFACE_LANDED` is false the gate prints them as PENDING and asserts
+// nothing about them; flipping this to true at S8 makes the gate FAIL until the real checks are
+// written.  They cannot be forgotten, and `make test` stays a live signal in the meantime.
+// (If a red suite is wanted instead, flip this today — the gate section is already written.)
+pub const SURFACE_LANDED = true;
+
+// The same discipline for `rebuild` (S8), which `tests/trip.loft` is written against BEFORE it
+// exists (`DESIGN.md` §8.0).  While this is false the trip gate is legitimately RED, and the
+// runner asserts that redness; flipping it at S8 makes the runner demand a GREEN trip gate.
+pub const REBUILD_LANDED = true;
+
+// ── A4 — LAW J IS NOT A SUFFICIENT ADMISSION RULE ──────────────────────────
+//
+// Law J asks only that the walk CLOSES: `Σ turn = 12` and the vector sum is zero.  Rung A4 grew
+// the space to unequal sides and REFLEX corners, and found law J admits two things it must not:
+//
+//   NON-SIMPLE walks — a repeated vertex, so the "polygon" crosses or touches itself and has no
+//                      well-defined inside.
+//   NON-CONVEX forms — which VIOLATE LAW F.  Measured over the 70 simple non-convex 4-sided
+//                      forms: 62 of 70 at unit scale, and still 36 of 70 grown five times, draw
+//                      a field that some OTHER form also draws.  `draw` is not injective there,
+//                      so no recovery — hull, tracing, or anything else — can tell them apart.
+//                      Scaling shrinks the failure but never removes it.
+//
+// THAT IS A MODEL-SPACE LIMIT, NOT A METHOD LIMIT, and it is why the fix is at the DOORSTEP
+// (`K-FIT`): the editor refuses a non-convex stencil at authoring time rather than letting one be
+// drawn and fail to come back.  `DESIGN.md` §5.2 — a restriction the census finds is a fact to
+// record, not a defect to engineer away.
+//
+// A convex form is exactly one whose turns are all POSITIVE: every exterior angle turning the same
+// way, summing to one revolution.  A turn of 0 is a straight join, which is a re-spelling of a
+// longer side rather than a corner, so it is refused too.
+pub fn form_is_convex(f: Form) -> boolean {
+  turns = f.fm_turn;
+  for ci in 0..len(turns) { if (turns[ci] ?? 0) <= 0 { return false; } }
+  true
+}
+
+// Does the walk visit any point twice?  A repeated vertex means the boundary is not a simple
+// closed curve, so "inside" is not defined and the fill is meaningless.
+pub fn form_is_simple(f: Form) -> boolean {
+  vk = form_poly_k(f);
+  vm = form_poly_m(f);
+  n = len(vk);
+  for ai in 0..n {
+    for aj in 0..n {
+      if ai < aj && (vk[ai] ?? 0) == (vk[aj] ?? 0) && (vm[ai] ?? 0) == (vm[aj] ?? 0) {
+        return false;
+      }
+    }
+  }
+  true
+}
+
+// THE ADMISSION RULE, as A4 leaves it: closed (law J), simple, and convex.
+pub fn form_admissible(f: Form) -> boolean {
+  form_closes(f) && form_is_simple(f) && form_is_convex(f)
+}
+
+// ── THE PLAN, AND THE LATTICE→WORLD MAP ─────────────────────────────────────
+//
+// Moved here from `housedraw` on 2026-07-24 (`plans/lib-split/` phase 1).  `OD-11` resolved
+// *"what IS a house?"* to **`Plan`, not the turtle cycle** — so `Plan` is a member of `𝕄*`, an
+// OBJECT, and it had been living inside the `draw` map's module.  With it went `cell_x`/`cell_y`
+// (the lattice→world map), `HEX_LEN`, and `side_edges` (which READS the field for a Plan's side
+// and is used by the surface fitter, not only by the drawer).
+//
+// Measured before moving: `hexbox` used only `HEX_LEN`/`cell_x`/`cell_y` from `housedraw`, and
+// `hexsurf` only `Plan`/`SideRun`/`side_run_len`/`side_edges` — every other apparent use was a
+// COMMENT.  So this removes both `shape → draw` edges outright rather than softening them.
+// ⚠ `HEX_LEN` IS NOT DECLARED HERE — it is `hex_grid`'s (`= SQRT3 * HEX_SIZE`, one hex step,
+// 1.5 m by `SPEC` L8).  `housedraw` carried a private copy of the identical value, and the
+// duplicate was INVISIBLE while `housedraw` did not import `hex_grid`; moving the constant into
+// this module, which does, made the compiler refuse it.  That is `SPEC` **L11** — the library owns
+// the shared table — and it is `X26`'s class of defect, found by a move rather than by a gate.
+const SQ3_2 = 0.8660254037844386;         // sqrt(3)/2 — half a hex step; also metres per wu
+const EPS = 0.000000001;                  // a float sign-test guard, not a P4 tolerance
+pub fn cell_x(q: integer, r: integer) -> float { (lattice_k(q, r) as float) * SQ3_2 }
+pub fn cell_y(q: integer, r: integer) -> float { (lattice_m(q, r) as float) * 0.5 }
+pub fn fabs(v: float) -> float { if v < 0.0 { -v } else { v } }
+
+// The 6 rotations are exact on the lattice, so use the exact table rather than trig:
+// no rounding, and no fallible float math to discharge.
+fn rot_cos(n: integer) -> float {
+  if n == 0 { 1.0 } else if n == 1 { 0.5 } else if n == 2 { -0.5 }
+  else if n == 3 { -1.0 } else if n == 4 { -0.5 } else { 0.5 }
+}
+fn rot_sin(n: integer) -> float {
+  if n == 0 { 0.0 } else if n == 1 { SQ3_2 } else if n == 2 { SQ3_2 }
+  else if n == 3 { 0.0 } else if n == 4 { -SQ3_2 } else { -SQ3_2 }
+}
+
+// ── the plan: a rectangle in its own frame ──────────────────────────────────
+pub struct Plan {
+  pl_cq: integer,     // anchor cell
+  pl_cr: integer,
+  pl_wid: integer,    // extent along local u, in hex steps (1.5 m each)
+  pl_dep: integer,    // extent along local v
+  pl_rot: integer,    // 0..5, 60 degree steps
+  pl_mir: boolean,    // the 12th orientation: (rot, mir) is the D6 the lattice has
+}
+
+pub fn plan_new(cq: integer, cr: integer, wid: integer, dep: integer,
+                rot: integer, mir: boolean) -> Plan {
+  Plan { pl_cq: cq, pl_cr: cr, pl_wid: wid, pl_dep: dep,
+         pl_rot: ((rot % 6) + 6) % 6, pl_mir: mir }
+}
+
+// A flip toggles the chirality and NOTHING else — no side remapping, no t -> 1-t.
+// If an implementation finds itself remapping, the frame rule above is wrong somewhere.
+pub fn plan_flip(p: Plan) -> Plan {
+  Plan { pl_cq: p.pl_cq, pl_cr: p.pl_cr, pl_wid: p.pl_wid, pl_dep: p.pl_dep,
+         pl_rot: p.pl_rot, pl_mir: !p.pl_mir }
+}
+
+pub fn plan_hw(p: Plan) -> float { (p.pl_wid as float) * HEX_LEN * 0.5 }
+pub fn plan_hd(p: Plan) -> float { (p.pl_dep as float) * HEX_LEN * 0.5 }
+
+fn frame_s(p: Plan) -> float { if p.pl_mir { -1.0 } else { 1.0 } }
+
+pub fn plan_to_world(p: Plan, lu: float, lv: float) -> (float, float) {
+  co = rot_cos(p.pl_rot);
+  si = rot_sin(p.pl_rot);
+  s = frame_s(p);
+  ( cell_x(p.pl_cq, p.pl_cr) + lu * s * co - lv * si,
+    cell_y(p.pl_cq, p.pl_cr) + lu * s * si + lv * co )
+}
+
+pub fn plan_to_local(p: Plan, px: float, py: float) -> (float, float) {
+  co = rot_cos(p.pl_rot);
+  si = rot_sin(p.pl_rot);
+  s = frame_s(p);
+  dx = px - cell_x(p.pl_cq, p.pl_cr);
+  dy = py - cell_y(p.pl_cq, p.pl_cr);
+  ( dx * s * co + dy * s * si, -dx * si + dy * co )
+}
+
+// ── sides ───────────────────────────────────────────────────────────────────
+//
+// Sides run 0..3 as a loop, each A -> B, with the outward normal 90 degrees clockwise
+// from B - A.  t runs A -> B, which is what an observer standing OUTSIDE reads
+// left to right.  Under a mirror the endpoints EXCHANGE (rule 1 above).
+//
+//    side 0  (+u face)   A (+hw,-hd)  B (+hw,+hd)
+//    side 1  (+v face)   A (+hw,+hd)  B (-hw,+hd)
+//    side 2  (-u face)   A (-hw,+hd)  B (-hw,-hd)
+//    side 3  (-v face)   A (-hw,-hd)  B (+hw,-hd)
+
+fn side_u(p: Plan, side: integer, which: integer) -> float {
+  hw = plan_hw(p);
+  e = which;
+  if p.pl_mir { e = 1 - which; }          // the exchange, applied once
+  if side == 0 { hw }
+  else if side == 1 { if e == 0 { hw } else { -hw } }
+  else if side == 2 { -hw }
+  else { if e == 0 { -hw } else { hw } }
+}
+
+fn side_v(p: Plan, side: integer, which: integer) -> float {
+  hd = plan_hd(p);
+  e = which;
+  if p.pl_mir { e = 1 - which; }
+  if side == 0 { if e == 0 { -hd } else { hd } }
+  else if side == 1 { hd }
+  else if side == 2 { if e == 0 { hd } else { -hd } }
+  else { -hd }
+}
+
+pub fn plan_side_point(p: Plan, side: integer, t: float) -> (float, float) {
+  au = side_u(p, side, 0);
+  av = side_v(p, side, 0);
+  bu = side_u(p, side, 1);
+  bv = side_v(p, side, 1);
+  plan_to_world(p, au + t * (bu - au), av + t * (bv - av))
+}
+
+// Outward, unit — taken from the MASSING (centre -> side midpoint), never from the
+// endpoint order.  Reading it off B - A lets a broken endpoint rule supply its own
+// definition of outward, and the facade gate can then never fire.
+pub fn plan_side_normal(p: Plan, side: integer) -> (float, float) {
+  (mx, my) = plan_side_point(p, side, 0.5);
+  ox = cell_x(p.pl_cq, p.pl_cr);
+  oy = cell_y(p.pl_cq, p.pl_cr);
+  dx = mx - ox;
+  dy = my - oy;
+  ln = sqrt(dx * dx + dy * dy) ?? 0.0;
+  if ln < EPS { return (0.0, 0.0); }
+  (dx / ln ?? 0.0, dy / ln ?? 0.0)
+}
+
+// ── the boundary edges lying on one side, with their reading parameter ──────
+pub struct SideRun {
+  sr_qa: vector<integer>,
+  sr_ra: vector<integer>,
+  sr_qb: vector<integer>,
+  sr_rb: vector<integer>,
+  sr_t:  vector<float>,     // 0..1 along the side, A -> B, as read from OUTSIDE
+}
+
+pub fn side_run_len(sr: SideRun) -> integer { len(sr.sr_t) }
+
+// Which side an edge lies on, and where along it.  An edge's midpoint is the midpoint
+// of the two cell centres it separates — the shared edge bisects that line — so no
+// corner table is needed.
+pub fn side_edges(p: Plan, cells: HexSet, side: integer) -> SideRun {
+  hw = plan_hw(p);
+  hd = plan_hd(p);
+  half = hw;
+  if side == 0 || side == 2 { half = hd; }
+  // reading direction along the side, before the mirror
+  sgn = 1.0;
+  if side == 1 || side == 2 { sgn = -1.0; }
+  if p.pl_mir { sgn = -sgn; }
+
+  qa: vector<integer> = [];
+  ra: vector<integer> = [];
+  qb: vector<integer> = [];
+  rb: vector<integer> = [];
+  ts: vector<float> = [];
+
+  for er in hexset_r0(cells)..hexset_r0(cells) + hexset_h(cells) {
+    for eq in hexset_q0(cells)..hexset_q0(cells) + hexset_w(cells) {
+      if hexset_get(cells, eq, er) {
+        for ed in 0..6 {
+          mq = nb_q(eq, er, ed);
+          mr = nb_r(eq, er, ed);
+          if !hexset_get(cells, mq, mr) {
+            mx = (cell_x(eq, er) + cell_x(mq, mr)) * 0.5;
+            my = (cell_y(eq, er) + cell_y(mq, mr)) * 0.5;
+            (lu, lv) = plan_to_local(p, mx, my);
+            // classify by which local coordinate is furthest outside the massing
+            ex_u = fabs(lu) - hw;
+            ex_v = fabs(lv) - hd;
+            got = -1;
+            along = 0.0;
+            if ex_u > ex_v {
+              if lu > 0.0 { got = 0; } else { got = 2; }
+              along = lv;
+            } else {
+              if lv > 0.0 { got = 1; } else { got = 3; }
+              along = lu;
+            }
+            if got == side {
+              qa += [eq];
+              ra += [er];
+              qb += [mq];
+              rb += [mr];
+              ts += [0.5 + sgn * along / (2.0 * half) ?? 0.0];
+            }
+          }
+        }
+      }
+    }
+  }
+  SideRun { sr_qa: qa, sr_ra: ra, sr_qb: qb, sr_rb: rb, sr_t: ts }
+}

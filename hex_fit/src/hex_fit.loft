@@ -1,0 +1,12 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// hex_fit — the doorstep — refuse at authoring time what would not round-trip.
+//
+// `fits?` and `snap`. A continuous model parameter must be quantised to what the field
+// distinguishes; off that grid a value is silently SNAPPED, not rejected, so the doorstep
+// refuses it up front with a named reason, an offer of the nearest fitting alternative, and the
+// residual. Also the `Draft` — a form carrying an embedded wall run.
+//
+// Entry point: re-exports `hexfit`, `hexdraft`.
+use hexfit;
+use hexdraft;

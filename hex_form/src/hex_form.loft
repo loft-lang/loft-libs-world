@@ -1,0 +1,11 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// hex_form — the exact turtle form on the hex lattice, and its canonical text.
+//
+// The MODEL axis of the `hex_*` family: the 12 headings of `H₁₂` as exact lattice steps, the
+// closed turtle cycle that is a stencil's outline, the `Plan` rectangle, the lattice→world map,
+// and the canonical text a form is written to and read back from — byte-for-byte.
+//
+// Entry point: re-exports `hexform` (the lattice and the form) and `formtext` (the text).
+use hexform;
+use formtext;

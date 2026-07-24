@@ -6,6 +6,15 @@ loft    = ">=0.8"
 [library]
 entry = "src/hex_roof.loft"
 
-[dependencies]
-hex_field = { path = "../hex_field" }
-hex_way = { path = "../hex_way" }
+# ⚠ THE INTRA-CHUNK DEPENDENCIES ARE NOT DECLARED HERE, AND THAT IS DELIBERATE (2026-07-24).
+# They resolve through `--lib <chunk root>`, which is how every library in this chunk already
+# works.  Declared as PATH deps they break: a path dep loaded TRANSITIVELY does not resolve its
+# own path deps, so `hex_way -> hex_edge -> hex_field` fails with `hex_at` unknown inside
+# hex_edge, while `use hex_edge;` alone is fine.  moros does not hit this because its deps are
+# REGISTRY constraints (`hex_grid = ">=0.1"`), not paths.
+#
+# So the fix is publication order, not a manifest edit: publish bottom-up (hex_field first), and
+# each library then declares the one below it registry-style, which is the form that works.
+# Until then this file states the package and the entry, and the chunk root supplies the rest.
+#
+# This library needs, in order: hex_field, hex_way

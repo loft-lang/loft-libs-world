@@ -1,0 +1,91 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// hexseat — SEATING A STENCIL ON TERRAIN (rung A8, `OD-4`'s open half).
+//
+// `OD-4` came in two halves and only one was ever closed.  **Storage is settled**: terrain is the
+// foxel's `height` slot — *"same slot as roofs; the two were always one question"* (`DESIGN` §10).
+// What stayed open is **seating**: a stencil is authored flat in its own local frame, and the ground
+// it is placed on is not flat.  `SPEC` **G5** already names the shape of the answer — *"a building …
+// **seated on terrain**, residual flagged"*.
+//
+// THE CONSTRUCTION, AND WHY IT COSTS THE ROUND TRIP NOTHING:
+//
+//   **Seating writes the `height` slot.  It does not touch cells or edges.**
+//
+// So a stencil's footprint is byte-identical on flat ground and on a slope, and `rebuild` — which
+// reads the CELLS — recovers the same text either way.  Terrain and stencil occupy **orthogonal
+// slots** in the foxel, so they compose without interacting at all.
+//
+// That is the third time this shape of answer has come up, and it is worth naming: a **door** is a
+// material, not a hole (`X51`); a **level** is a filter before the cut, not an arbitration after it
+// (`X58`); **terrain** is a height, not a change of footprint.  Each time the round trip survives
+// because the new thing lands in a slot the recovery does not read.
+//
+// WHAT THE SLOPE DOES COST is a **residual**: a stencil seated at ONE height cannot match ground
+// that varies under it.  That residual is real, it is a function of the seat policy, and by `G5` it
+// must be **returned and flagged — never silently absorbed**.  Which height to seat at (lowest,
+// mean, highest) is a **policy**; it changes the residual and changes nothing about recoverability —
+// the same split `A6` found between `Sep` (recoverability) and `X7` (a choice policy).
+use hex_field;
+use hex_form;
+
+pub const SEAT_LOW  = 0;    // seat at the lowest ground under the footprint — the building perches
+pub const SEAT_MEAN = 1;    // seat at the mean — the residual is smallest, split above and below
+pub const SEAT_HIGH = 2;    // seat at the highest — the building is buried into the slope
+
+// The height to seat at, under `policy`.  A pure read of the terrain under the footprint.
+pub fn seat_height(cells: HexSet, terr: Heights, policy: integer) -> float {
+  lo = 0.0;
+  hi = 0.0;
+  sum = 0.0;
+  n = 0;
+  for r in hexset_r0(cells)..hexset_r0(cells) + hexset_h(cells) {
+    for q in hexset_q0(cells)..hexset_q0(cells) + hexset_w(cells) {
+      if hexset_get(cells, q, r) {
+        z = height_get(terr, q, r);
+        if n == 0 { lo = z; hi = z; }
+        if z < lo { lo = z; }
+        if z > hi { hi = z; }
+        sum = sum + z;
+        n = n + 1;
+      }
+    }
+  }
+  if n == 0 { return 0.0; }
+  if policy == SEAT_LOW { return lo; }
+  if policy == SEAT_HIGH { return hi; }
+  (sum / (n as float)) ?? 0.0
+}
+
+// THE RESIDUAL, and it is returned rather than swallowed (`G5`): the largest gap between the seat
+// height and the ground under any footprint cell.  Zero on flat ground; on a slope it is the
+// cut-and-fill the placement owes, and the editor must show it.
+pub fn seat_residual(cells: HexSet, terr: Heights, z: float) -> float {
+  worst = 0.0;
+  for r in hexset_r0(cells)..hexset_r0(cells) + hexset_h(cells) {
+    for q in hexset_q0(cells)..hexset_q0(cells) + hexset_w(cells) {
+      if hexset_get(cells, q, r) {
+        d = height_get(terr, q, r) - z;
+        if d < 0.0 { d = 0.0 - d; }
+        if d > worst { worst = d; }
+      }
+    }
+  }
+  worst
+}
+
+// SEAT THE STENCIL: write the seat height into the `height` slot for every footprint cell.  Cells
+// and edges are untouched — that is the whole point, and it is what keeps `rebuild` exact.  Returns
+// the number of cells whose height was written.
+pub fn seat_write(cells: HexSet, terr: Heights, z: float) -> integer {
+  n = 0;
+  for r in hexset_r0(cells)..hexset_r0(cells) + hexset_h(cells) {
+    for q in hexset_q0(cells)..hexset_q0(cells) + hexset_w(cells) {
+      if hexset_get(cells, q, r) {
+        height_set(terr, q, r, z);
+        n = n + 1;
+      }
+    }
+  }
+  n
+}

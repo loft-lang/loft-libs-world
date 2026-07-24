@@ -1,0 +1,250 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// hexdraft — A STENCIL DESCRIPTION THAT CARRIES LINEWORK, AND A ROUND TRIP THAT NOTICES (`OD-13`).
+//
+// `OD-13` is a standing requirement: *"a city/castle needs more directions to be believable so the
+// other 12 need to be first class."*  The geometry was gated first (`X56` accuracy and linking,
+// `X57` the orientations), then the carrying and the reader (`X60`).  What was still missing is the
+// half whose omission is **silent**:
+//
+//   `rebuild` did not READ the embedded run, so it was dropped — and `rt_trip` did not notice.
+//   A round trip that cannot see a missing wall reports success on a model missing its content.
+//
+// This module closes that.  A `Stencil` is a **form plus an embedded run**, it writes and reads as
+// one text, it draws as one field, and it rebuilds from that field **including the run** — so
+// dropping the run now fails the trip instead of passing it.
+//
+// THE SLOT DISCIPLINE, unchanged from `X51`/`X58`/`X59`/`X60`: the run is a material on **interior**
+// edges (both cells in the footprint), so the footprint is untouched and the form recovery reads a
+// slot the run never writes.  The two recoveries read disjoint slots and compose without
+// interacting — which is why this is wiring rather than redesign.
+//
+// ⚠ ONE NEIGHBOUR CONVENTION: `hex_neighbor` with `hex_edge_corners`, never `nb_q`/`nb_r`.  Mixing
+// them cost four separate failures before it was found (`SPEC` **L11**, `X26`'s mode).
+//
+// ⚠ NAME: this is the **description** side — a `Form` plus linework, the thing a canonical text
+// spells.  `hex_field::Stencil` is the **field** side (cells, heights, edges, layers, with
+// rotate/mirror/stamp).  Both are legitimate and they are exactly `OD-6`'s two halves — *"is a
+// stencil a field or a generative description?"*, answered *"the foxel is the stored truth; a
+// description is admissible only if it draws into the schema exactly"*.  They must not share a
+// name, so this one is `Draft`.
+//
+// SCOPE: **one** embedded run per stencil.  Several would need the interior edges split into
+// connected components first, which is a separate step and is not pretended here.
+use hex_field;
+use hex_grid;
+use hex_form;
+use hex_recover;
+use hex_draw;
+use hex_shape;
+
+pub struct Draft {
+  df_form: Form,
+  df_d:    integer,     // embedded run direction, or -1 for none
+  df_a:    integer,     // anchor, triangle coordinates
+  df_b:    integer,
+  df_p:    integer,     // periods
+}
+
+pub fn draft_new(f: Form, d: integer, a: integer, b: integer, p: integer) -> Draft {
+  Draft { df_form: f, df_d: d, df_a: a, df_b: b, df_p: p }
+}
+
+pub fn draft_has_run(s: Draft) -> boolean { s.df_d >= 0 }
+
+fn nth_word(line: text, i: integer) -> text {
+  ws = line.split(' ');
+  ws[i] ?? ""
+}
+fn word_int(line: text, i: integer) -> integer { nth_word(line, i) as integer ?? 0 }
+
+// The canonical text: the form's spelling, then — if there is one — a single `wall` line.
+// One line, one record, same shape as `side`: the reader refuses anything else rather than
+// repairing it (`X39`).
+pub fn draft_write(s: Draft, name: text) -> text {
+  base = form_write(s.df_form, name);
+  if s.df_d < 0 { return base; }
+  base + "\nwall d {s.df_d} a {s.df_a} b {s.df_b} p {s.df_p}"
+}
+
+// Parse.  The `side` lines go to `form_read` unchanged; a trailing `wall` line is this layer's.
+// A malformed record yields a stencil with an empty form — REFUSED, never repaired.
+pub fn draft_read(t: text) -> Draft {
+  lines = t.split('\n');
+  nl = len(lines);
+  ftext = "";
+  d = 0 - 1;
+  a = 0;
+  b = 0;
+  p = 0;
+  nwall = 0;
+  for i in 0..nl {
+    ln = lines[i] ?? "";
+    if nth_word(ln, 0) == "wall" {
+      nwall = nwall + 1;
+      if nth_word(ln, 1) != "d" || nth_word(ln, 3) != "a" || nth_word(ln, 5) != "b"
+         || nth_word(ln, 7) != "p" {
+        return draft_new(form_new(0, [], []), 0 - 1, 0, 0, 0);
+      }
+      d = word_int(ln, 2);
+      a = word_int(ln, 4);
+      b = word_int(ln, 6);
+      p = word_int(ln, 8);
+    } else {
+      if i == 0 { ftext = ln; } else { ftext = ftext + "\n" + ln; }
+    }
+  }
+  if nwall > 1 { return draft_new(form_new(0, [], []), 0 - 1, 0, 0, 0); }
+  draft_new(form_read(ftext), d, a, b, p)
+}
+
+// Draw the whole stencil into one field: the fill, its own boundary walls, and the embedded run as
+// material on INTERIOR edges only.  Returns the number of interior edges the run marked.
+pub fn draft_draw(s: Draft, cq: integer, cr: integer, cells: HexSet, edges: EdgeSet,
+                    wallmat: integer, embedmat: integer) -> integer {
+  form_fill(s.df_form, cq, cr, cells);
+  draw_walls(cells, edges, wallmat);
+  if s.df_d < 0 { return 0; }
+  q0 = hexset_q0(cells);
+  r0 = hexset_r0(cells);
+  gw = hexset_w(cells);
+  gh = hexset_h(cells);
+  ew = edgeset_new(q0, r0, gw, gh);
+  w = wall_from_run(s.df_d, s.df_a, s.df_b, s.df_p, embedmat);
+  wall_write(w, ew, q0, r0, gw, gh);
+  n = 0;
+  for r in r0..r0 + gh {
+    for q in q0..q0 + gw {
+      for dd in 0..3 {
+        (nq, nr) = hex_neighbor(q, r, dd);
+        if edge_mat(ew, q, r, nq, nr) != 0
+           && hexset_get(cells, q, r) && hexset_get(cells, nq, nr) {
+          edge_set_mat(edges, q, r, nq, nr, embedmat);
+          n = n + 1;
+        }
+      }
+    }
+  }
+  n
+}
+
+// The INTERIOR edges carrying `embedmat`, isolated — what the run reader consumes.  Boundary edges
+// (one cell out) are the stencil's own walls and are never part of a run.
+pub fn draft_interior(cells: HexSet, edges: EdgeSet, embedmat: integer) -> EdgeSet {
+  q0 = hexset_q0(cells);
+  r0 = hexset_r0(cells);
+  gw = hexset_w(cells);
+  gh = hexset_h(cells);
+  ei = edgeset_new(q0, r0, gw, gh);
+  for r in r0..r0 + gh {
+    for q in q0..q0 + gw {
+      for dd in 0..3 {
+        (nq, nr) = hex_neighbor(q, r, dd);
+        if edge_mat(edges, q, r, nq, nr) == embedmat
+           && hexset_get(cells, q, r) && hexset_get(cells, nq, nr) {
+          edge_set_mat(ei, q, r, nq, nr, embedmat);
+        }
+      }
+    }
+  }
+  ei
+}
+
+// REBUILD, INCLUDING THE RUN.  The form comes from the cells (constructive recovery, `X45`); the
+// run comes from the interior edges (`wall_read_run`, `X60`) — two recoveries reading disjoint
+// slots.  An unreadable run is REFUSED, so it is dropped loudly by a text diff rather than silently.
+pub fn draft_rebuild_text(cells: HexSet, edges: EdgeSet, name: text, embedmat: integer) -> text {
+  base = rebuild_construct_text(cells, name);
+  if base == "" { return ""; }
+  ei = draft_interior(cells, edges, embedmat);
+  (d, a, b, p, ok) = wall_read_run(ei, hexset_q0(cells), hexset_r0(cells),
+                                   hexset_w(cells), hexset_h(cells));
+  if !ok { return base; }
+  base + "\nwall d {d} a {a} b {b} p {p}"
+}
+
+// ── THE DOORSTEP (`fits?`, law C₁ / `K-FIT`) ───────────────────────────────
+//
+// `X50`/`I-QUANT`: a value off the grid the field distinguishes is **silently snapped, not
+// rejected** — so the refusal has to happen at authoring time or the round trip reports success on
+// a model nobody wrote.  `K-FIT` also fixes the FORM of a refusal: it **names its restriction** and
+// **offers the nearest fitting alternative**; never a silent snap, never a blank no.
+//
+// An embedded run inherits the line doorstep (§10.10: anchor on a hex VERTEX, a whole number of
+// periods, endpoint also a vertex — `wall_run_ok`) and adds one requirement world linework does not
+// have: **it must lie wholly INSIDE the footprint**.  A run that pokes out is not an embedded wall
+// at all — part of it lands on boundary edges, which belong to the stencil's own outline, and the
+// reader would recover something the author did not write.
+pub const FIT_OK        = 0;
+pub const FIT_NO_FORM   = 1;   // the form itself is not admissible (closed ∧ simple ∧ convex)
+pub const FIT_BAD_DIR   = 2;   // the direction is not one of the 24
+pub const FIT_BAD_P     = 3;   // a run of zero or negative periods
+pub const FIT_NO_VERTEX = 4;   // the anchor is a hex CENTRE, not a vertex
+pub const FIT_NOT_LEGAL = 5;   // whole periods, but the endpoint is not a vertex
+pub const FIT_OUTSIDE   = 6;   // the run leaves the footprint
+
+pub fn draft_fit_reason(code: integer) -> text {
+  if code == FIT_OK { return "ok"; }
+  if code == FIT_NO_FORM { return "the form is not admissible (closed, simple, convex)"; }
+  if code == FIT_BAD_DIR { return "the direction is not one of the 24"; }
+  if code == FIT_BAD_P { return "a run needs at least one period"; }
+  if code == FIT_NO_VERTEX { return "the anchor is a hex centre; a run must start on a vertex"; }
+  if code == FIT_NOT_LEGAL { return "that many periods does not end on a vertex"; }
+  if code == FIT_OUTSIDE { return "the run leaves the footprint; an embedded wall must be interior"; }
+  "unknown"
+}
+
+// Every marked edge of the run is interior to `cells` — the containment test, in one place so the
+// doorstep and the reader cannot disagree about what "inside" means.
+fn run_is_inside(cells: HexSet, d: integer, a: integer, b: integer, p: integer) -> boolean {
+  q0 = hexset_q0(cells);
+  r0 = hexset_r0(cells);
+  gw = hexset_w(cells);
+  gh = hexset_h(cells);
+  ew = edgeset_new(q0, r0, gw, gh);
+  w = wall_from_run(d, a, b, p, 1);
+  n = wall_write(w, ew, q0, r0, gw, gh);
+  if n <= 0 { return false; }
+  ins = 0;
+  for r in r0..r0 + gh {
+    for q in q0..q0 + gw {
+      for dd in 0..3 {
+        (nq, nr) = hex_neighbor(q, r, dd);
+        if edge_mat(ew, q, r, nq, nr) != 0
+           && hexset_get(cells, q, r) && hexset_get(cells, nq, nr) { ins = ins + 1; }
+      }
+    }
+  }
+  ins == n
+}
+
+// THE DOORSTEP.  `cells` is the form's own footprint.  Returns a reason code — `FIT_OK` or the
+// specific restriction, never a bare false.
+pub fn draft_fits(s: Draft, cells: HexSet) -> integer {
+  if !form_admissible(s.df_form) { return FIT_NO_FORM; }
+  if s.df_d < 0 { return FIT_OK; }
+  if s.df_d >= 24 { return FIT_BAD_DIR; }
+  if s.df_p <= 0 { return FIT_BAD_P; }
+  if !tri_is_vertex(s.df_a, s.df_b) { return FIT_NO_VERTEX; }
+  if !wall_run_ok(s.df_d, s.df_a, s.df_b, s.df_p) { return FIT_NOT_LEGAL; }
+  if !run_is_inside(cells, s.df_d, s.df_a, s.df_b, s.df_p) { return FIT_OUTSIDE; }
+  FIT_OK
+}
+
+// AND THE ALTERNATIVE THE REFUSAL OWES (`K-FIT`): the longest run from this anchor, in this
+// direction, that IS admissible and fits — searching downward so the offer is never longer than
+// what was asked for.  0 when nothing fits, which is itself a usable answer: move the anchor.
+pub fn draft_fit_p(s: Draft, cells: HexSet) -> integer {
+  if s.df_d < 0 || s.df_d >= 24 { return 0; }
+  if !tri_is_vertex(s.df_a, s.df_b) { return 0; }
+  want = s.df_p;
+  if want < 1 { want = 1; }
+  for k in 0..want {
+    try = want - k;
+    if try >= 1 && wall_run_ok(s.df_d, s.df_a, s.df_b, try)
+       && run_is_inside(cells, s.df_d, s.df_a, s.df_b, try) {
+      return try;
+    }
+  }
+  0
+}

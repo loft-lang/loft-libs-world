@@ -1,0 +1,12 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// hex_place — place, seat and combine — the operations a model survives.
+//
+// A body carries a POSE and is never stamped into the world lattice; two stencils are combined
+// by "mark all, then cut once", which is order-free and fuses their shared edge; and a stencil
+// is SEATED on terrain by writing the height slot alone, so its footprint is untouched.
+//
+// Entry point: re-exports `hexframe`, `hexseat`, `hexcombine`.
+use hexframe;
+use hexseat;
+use hexcombine;

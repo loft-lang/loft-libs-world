@@ -1,10 +1,10 @@
 [package]
-name    = "hex_edge"
+name    = "hex_recover"
 version = "0.1.0"
 loft    = ">=0.8"
 
 [library]
-entry = "src/hex_edge.loft"
+entry = "src/hex_recover.loft"
 
 # ⚠ THE INTRA-CHUNK DEPENDENCIES ARE NOT DECLARED HERE, AND THAT IS DELIBERATE (2026-07-24).
 # They resolve through `--lib <chunk root>`, which is how every library in this chunk already
@@ -17,4 +17,4 @@ entry = "src/hex_edge.loft"
 # each library then declares the one below it registry-style, which is the form that works.
 # Until then this file states the package and the entry, and the chunk root supplies the rest.
 #
-# This library needs, in order: hex_field
+# This library needs, in order: hex_field, hex_form

@@ -1,0 +1,98 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// hexframe — THE FRAME SEAM: a POSED body against the world (DESIGN §6; laws K₁, K₂).
+//
+// Collision reads several presentations at once — the world (identity frame) plus every posed body.
+// Inside a frame geometry is exact; ACROSS frames it cannot be, because a pose is continuous.  The
+// whole discipline of this module is to make the error live in exactly ONE place:
+//
+//   THE POSE TRANSFORM IS THE SOLE FLOATING-POINT STEP.  Every cross-frame query routes through it
+//   once — world → p⁻¹ → exact local test → (p) → world — so ε > 0 is permitted ONLY on the seam
+//   (`ε_seam`), and is a DETERMINISTIC function of its inputs (`L7`/`I9`: byte-identical replay).
+//   Inside a frame the error is exactly 0.  (crawler's chunk seam is a different thing, and exact.)
+//
+// The FORBIDDEN fix is closing a crack by moving geometry — snapping a body's wall onto the world
+// lattice.  That relocates the machine-ε seam error into a frame INTERIOR, where it becomes a real
+// displacement, and voids law D for that body.  `tests/seam.loft` §3 measures both.
+//
+// This is the one place `hexframe` is float, on purpose.  Everything the pose acts on is otherwise
+// integer/exact (X1–X52), so `ε_seam` is the entire error budget of the stack.
+use hex_form;
+
+// A pose: a rotation (given as its cos/sin, so a Pythagorean angle can be represented EXACTLY) then
+// a translation.  Stored as cos/sin rather than θ so a gate can build a rational rotation and check
+// the float pipeline against an exact integer oracle.
+pub struct Pose {
+  ps_cs: float,
+  ps_sn: float,
+  ps_tx: float,
+  ps_ty: float,
+}
+
+pub fn pose_new(cs: float, sn: float, tx: float, ty: float) -> Pose {
+  Pose { ps_cs: cs, ps_sn: sn, ps_tx: tx, ps_ty: ty }
+}
+
+// world → local.  THE sole float step (with `pose_fwd_*`).  A cross-frame query calls this once and
+// then tests in the body's own exact frame.
+pub fn pose_inv_x(p: Pose, wx: float, wy: float) -> float {
+  p.ps_cs * (wx - p.ps_tx) + p.ps_sn * (wy - p.ps_ty)
+}
+pub fn pose_inv_y(p: Pose, wx: float, wy: float) -> float {
+  0.0 - p.ps_sn * (wx - p.ps_tx) + p.ps_cs * (wy - p.ps_ty)
+}
+
+// local → world.
+pub fn pose_fwd_x(p: Pose, lx: float, ly: float) -> float {
+  p.ps_cs * lx - p.ps_sn * ly + p.ps_tx
+}
+pub fn pose_fwd_y(p: Pose, lx: float, ly: float) -> float {
+  p.ps_sn * lx + p.ps_cs * ly + p.ps_ty
+}
+
+// The round-trip residual |p(p⁻¹(W)) − W|∞ at one world point — the transform's numerical error,
+// which is what `ε_seam` bounds.  Exactly 0 in exact arithmetic; ~machine ε in float.
+pub fn pose_residual(p: Pose, wx: float, wy: float) -> float {
+  lx = pose_inv_x(p, wx, wy);
+  ly = pose_inv_y(p, wx, wy);
+  bx = pose_fwd_x(p, lx, ly);
+  by = pose_fwd_y(p, lx, ly);
+  ex = bx - wx; if ex < 0.0 { ex = 0.0 - ex; }
+  ey = by - wy; if ey < 0.0 { ey = 0.0 - ey; }
+  if ey > ex { return ey; }
+  ex
+}
+
+// Is world point (wx,wy) inside the disk body posed by `p`?  The body is a disk of squared-radius
+// `rr` about its LOCAL centre (cx,cy) — a posed tower (its radius is a shell, `X49`).  Routes through
+// the transform, then the exact local test |l − c|² ≤ rr.  This is the general body test in
+// miniature: transform once, then decide in the body's own frame.
+pub fn disk_hit(p: Pose, cx: float, cy: float, rr: float, wx: float, wy: float) -> boolean {
+  lx = pose_inv_x(p, wx, wy) - cx;
+  ly = pose_inv_y(p, wx, wy) - cy;
+  lx * lx + ly * ly <= rr
+}
+
+// ── ARBITRATION WHERE FRAMES DISAGREE (law K₂) ─────────────────────────────
+//
+// Two requirements the design flags as easy to omit silently: a TOTAL ORDER on frames (a
+// "whichever is nearer" tie broken by iteration order breaks replay), and a FAIL-SAFE DIRECTION —
+// prefer *solid* over *gap*, so a crack yields a spurious contact rather than a body falling through
+// the world (composes with `I4`).  Both are captured below and are order-free by construction.
+
+// The fail-safe verdict at a point claimed by two frames: solid if EITHER is solid.  Order-free
+// (symmetric) and conservative — a gap only where both agree it is a gap.
+pub fn arb_solid(a_solid: boolean, b_solid: boolean) -> boolean { a_solid || b_solid }
+
+// Which frame OWNS a contested point — its material/surface wins.  The lowest id among the frames
+// claiming *solid* (a total order on frames), or -1 if none is solid.  Intrinsic, so it does not
+// depend on the order the frames are visited.
+pub fn arb_owner(a_solid: boolean, a_id: integer, b_solid: boolean, b_id: integer) -> integer {
+  if a_solid && b_solid {
+    if a_id < b_id { return a_id; }
+    return b_id;
+  }
+  if a_solid { return a_id; }
+  if b_solid { return b_id; }
+  -1
+}

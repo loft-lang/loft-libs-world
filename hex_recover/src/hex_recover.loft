@@ -1,0 +1,12 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// hex_recover — rebuild a model from the field — exactly, or with a reported residual.
+//
+// The `rebuild` map. Constructive recovery reads the form off the field, enumerating nothing:
+// every admitted form is convex, so the convex hull of the filled cells IS the turtle polygon.
+// The census that decided injectivity is here too, with the three digests that answer three
+// different questions and must never be confused.
+//
+// Entry point: re-exports `formfit`, `formcensus`.
+use formfit;
+use formcensus;

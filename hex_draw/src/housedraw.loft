@@ -1,0 +1,189 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// housedraw — DRAW A BUILDING IN ANY OF THE 12 ORIENTATIONS.
+//
+// The field primitives all exist already (hex_field: HexSet/Labels/EdgeSet/Heights;
+// hexroof: the roof profiles).  What was missing is the layer above them: a LOCAL FRAME
+// so the same building can be drawn at 6 rotations x 2 chiralities, and openings placed
+// on its walls by (side, t) rather than by cell coordinates.
+//
+// FOUR ROUTINES, and each writes exactly one layer:
+//
+//   draw_floor    the massing  -> HexSet + Labels     (the floor you stand on)
+//   draw_walls    its boundary -> EdgeSet             (thin walls: no floor is lost)
+//   place_opening n edges at t -> EdgeSet material    (doors and windows)
+//   draw_roof     a ridge      -> Heights             (a thin caller of hexroof)
+//
+// THE TWO RULES THAT MAKE 12 ORIENTATIONS WORK, both measured by src/housetest.loft:
+//
+//  1. THE MIRROR IS APPLIED ONCE, IN THE FRAME.  Local -> world negates local u when
+//     mirrored; a side's endpoints then only EXCHANGE.  Applying it in both places turns
+//     every outward normal INWARD (measured: -1.000 at all 12 orientations).
+//
+//  2. A WALL IS THE BOUNDARY OF A FILLED REGION, never a band of cells buffered along a
+//     line.  The boundary of a region is a closed loop BY CONSTRUCTION at any size,
+//     orientation or tie; the buffer rule leaks (measured: 2 components, 0 cells enclosed
+//     — a wall with a hole — while still passing an equivariance check 12/12).
+//
+// A DOOR IS A MATERIAL ON ITS EDGES, AND NEVER DELETES THEM.  Deleting fragments the wall
+// run, which is the defect DRAWING.md names as a doored tower fitting 3 arcs instead of 1.
+// The foxel stores ONE material per wall slot (ROUNDTRIP.md §2.4), so an opening REPLACES
+// the wall material rather than sitting in a channel beside it.  Composition therefore
+// belongs in the material vocabulary — "a door in a cottage wall" is a material — which is
+// what the consumer reads to decide passability.
+use hex_field;
+use hex_form;
+use hex_way;
+use hex_roof;
+
+const EPS = 0.000000001;
+
+// Opening materials — values in the SAME vocabulary as the wall materials, because they
+// share the one slot.  A door overrides `solid`; a window does not (it overrides opacity,
+// which is an elevation property and never touches the footprint).
+//
+// ⚠ `OPEN_NONE` IS NOT "no opening" — it is the wall-material value **0, which means NO WALL**.
+// Writing it DELETES the edge and breaks the run in two (`X51`: 37 edges, 2 dangling ends, and on
+// a tower 3 arcs instead of 1).  It is kept because 0 is the slot's empty value, but it is never
+// what an author means by an opening.  moros makes exactly this mistake — `builtin_house_door`
+// leaves the doorway edge at material 0 and calls it *"crawler's convention: a door is a gap"*.
+//
+// THE TAXONOMY (user, 2026-07-24: *"A door is not a gap in the wall, it is something that can be a
+// collider or not. But we also allow real gaps — the door itself is missing completely, but the
+// wall continues like normal"*).  Three distinct things live on a wall edge, and **all three keep
+// the wall one continuous run**:
+//
+//   OPEN_DOOR    an opening fitted with a door leaf — a collider WHEN CLOSED, not when open
+//   OPEN_WINDOW  an opening at elevation — never a floor-level collider, wall continues
+//   OPEN_GAP     a real gap: the leaf is missing entirely, never a collider, wall continues
+//
+// The difference between `OPEN_GAP` and `OPEN_NONE` is the whole point: a gap is an **opening in a
+// wall that is still there**; `OPEN_NONE` is the **absence of the wall**.
+//
+// THE RATIONALE, and it is what makes this not a matter of taste (user, 2026-07-24): *"a gap/door
+// will never be rendered as a missing wall, there will be something like a door-frame or ragged
+// stone opening there."*  An opening **has geometry of its own** — a frame, a lintel, a ragged
+// jamb.  Absence has none.  So an opening must name a material that carries that geometry, which
+// is precisely a wall id into the palette; writing 0 would ask the renderer to draw nothing and the
+// collision layer to find no wall, both wrong.
+pub const OPEN_NONE   = 0;
+pub const OPEN_DOOR   = 1;
+pub const OPEN_WINDOW = 2;
+pub const OPEN_GAP    = 3;
+
+
+// ── 1. THE FLOOR ────────────────────────────────────────────────────────────
+//
+// The massing is filled FIRST and walled second.  Comparisons are inclusive (<= bound
+// + eps) so the fill never loses a column of cells to the structural tie: along u every
+// cell-to-side distance is an exact multiple of sqrt(3)/2, which is exactly the default
+// halfwidth, so a strict comparison sits on the last bit of a float for a whole column.
+pub fn draw_floor(p: Plan, cells: HexSet, types: Labels, floor_type: integer) -> integer {
+  hw = plan_hw(p);
+  hd = plan_hd(p);
+  n = 0;
+  for fr in hexset_r0(cells)..hexset_r0(cells) + hexset_h(cells) {
+    for fq in hexset_q0(cells)..hexset_q0(cells) + hexset_w(cells) {
+      (lu, lv) = plan_to_local(p, cell_x(fq, fr), cell_y(fq, fr));
+      if fabs(lu) <= hw + EPS && fabs(lv) <= hd + EPS {
+        hexset_set(cells, fq, fr, true);
+        label_set(types, fq, fr, floor_type);
+        n = n + 1;
+      }
+    }
+  }
+  n
+}
+
+// ── 2. THE WALLS ────────────────────────────────────────────────────────────
+//
+// Every edge between a cell of the region and one outside it.  Closed by construction,
+// and it costs no floor at all: a 7.5 x 6.0 m cottage keeps all 27 of its cells, where
+// a wall drawn as a band of cells would eat 16 of them — 59% of the house.
+pub fn draw_walls(cells: HexSet, edges: EdgeSet, wall_mat: integer) -> integer {
+  n = 0;
+  for wr in hexset_r0(cells)..hexset_r0(cells) + hexset_h(cells) {
+    for wq in hexset_q0(cells)..hexset_q0(cells) + hexset_w(cells) {
+      if hexset_get(cells, wq, wr) {
+        for d in 0..6 {
+          nq = nb_q(wq, wr, d);
+          nr = nb_r(wq, wr, d);
+          if !hexset_get(cells, nq, nr) {
+            edge_set_mat(edges, wq, wr, nq, nr, wall_mat);
+            n = n + 1;
+          }
+        }
+      }
+    }
+  }
+  n
+}
+
+
+// ── 3. OPENINGS ─────────────────────────────────────────────────────────────
+//
+// A door is N EDGES centred at t, not a t-interval erased with a segment: erasing
+// over-erases by ~halfwidth at EACH end (a 3.00 m interval opens 4.50 m of wall) and
+// shrinking the segment over-corrects.  One hex edge is 1.0 world unit = 0.87 m of
+// clear width — a real domestic door, which a cell-thick wall could not express at all.
+//
+// The edge KEEPS its wall material; the opening goes in the surf slot.  Nothing is
+// deleted, so the wall still fits as one run.
+pub fn place_opening(p: Plan, cells: HexSet, edges: EdgeSet,
+                     side: integer, t: float, nedges: integer, kind: integer) -> integer {
+  sr = side_edges(p, cells, side);
+  total = len(sr.sr_t);
+  if total == 0 { return 0; }
+  taken: vector<boolean> = [for _ in 0..total { false }];
+  placed = 0;
+  for _pick in 0..nedges {
+    best = -1;
+    bestd = 0.0;
+    for i in 0..total {
+      if !(taken[i] ?? true) {
+        d = fabs((sr.sr_t[i] ?? 0.0) - t);
+        if best < 0 || d < bestd { best = i; bestd = d; }
+      }
+    }
+    if best >= 0 {
+      taken[best] = true;
+      edge_set_mat(edges, sr.sr_qa[best] ?? 0, sr.sr_ra[best] ?? 0,
+                          sr.sr_qb[best] ?? 0, sr.sr_rb[best] ?? 0, kind);
+      placed = placed + 1;
+    }
+  }
+  placed
+}
+
+// ── 4. THE ROOF ─────────────────────────────────────────────────────────────
+//
+// One ring of halo around the massing, because that ring is what makes the EAVE
+// interpolable: without it 38 of the 76 wall-edge samples face a cell with no stored
+// height, and the wall top has nothing to meet.
+pub fn grow_ring(src: HexSet, dst: HexSet) {
+  for gr in hexset_r0(src)..hexset_r0(src) + hexset_h(src) {
+    for gq in hexset_q0(src)..hexset_q0(src) + hexset_w(src) {
+      if hexset_get(src, gq, gr) {
+        hexset_set(dst, gq, gr, true);
+        for gd in 0..6 { hexset_set(dst, nb_q(gq, gr, gd), nb_r(gq, gr, gd), true); }
+      }
+    }
+  }
+}
+
+// A gable: the ridge runs along local u THROUGH the anchor and PAST both gable ends.
+// Stopping it at the wall makes the distance go radial past the tip, so the gable end
+// rolls over like a cone quadrant — 0.43 units, 0.37 m of bulge.  A hip is the same
+// call with the ridge shortened; then the conical ends are the feature, not a defect.
+pub fn draw_roof(p: Plan, cells: HexSet, hz: Heights,
+                 eave: float, pitch: float, hip_steps: integer) {
+  hw = plan_hw(p);
+  hd = plan_hd(p);
+  half = hw + hd + HEX_LEN;                       // gable: run well past the ends
+  if hip_steps > 0 { half = hw - (hip_steps as float) * HEX_LEN * 0.5; }
+  (x0, y0) = plan_to_world(p, -half, 0.0);
+  (x1, y1) = plan_to_world(p, half, 0.0);
+  tr = track_new();
+  track_straight(tr, x0, y0, x1, y1);
+  roof_ridge(cells, hz, tr, eave + pitch * hd, pitch, 1000000.0);
+}

@@ -1,0 +1,296 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// hexbox — A BOX IS THE INTERIOR THE EDITOR SELECTS, AND THE WALL IS DERIVED FROM IT.
+//
+// The editor's gesture is *"select the inside hexes as a rectangle"* — the user picks the
+// room, never the wall. Everything a building needs follows from that one set:
+//
+//     box_fill      the interior cells                 (what the user selected)
+//     draw_walls    the THIN wall — housedraw's        (an edge between in and out;
+//                   boundary edges, costs no floor)     a house, a cottage, a tower)
+//     box_ring_out  the THICK wall — a full ring of    (a castle, a town wall: the
+//                   hexes just outside the selection)   wall IS ground you stand on)
+//
+// TWELVE DIRECTIONS, NOT SIX. `housedraw`'s `Plan` rotates in 0..5, sixty degrees a step,
+// because those six are the lattice's own rotations. But a stencil side runs in one of the
+// TWELVE headings of H12 (`ROUNDTRIP` §2.1), and a rectangle's two sides are a heading and
+// the heading three steps on. So `Box` rotates in 0..11, THIRTY degrees a step, and the 12
+// split into two orbits that behave completely differently:
+//
+//   EVEN rot — local u on an EDGE heading. The six are lattice rotations of one another,
+//              so their cell sets are EXACTLY equivariant: same count, related by X1's
+//              integer map. This is `Plan`'s family.
+//   ODD  rot — local u on a VERTEX heading. Also six, also mutually equivariant — but a
+//              30 degree rotation is NOT a lattice symmetry, so this family is NOT related
+//              to the even one by any exact map. It is a SECOND family of boxes, not a
+//              rotation of the first.
+//
+// That is `X24` again — the lattice has 6-fold symmetry, not 12-fold — and it is why the
+// two orbits must be measured separately rather than assumed to agree. The rectangle is
+// continuous and rasterises at any angle; what differs is the STRIP the wall runs in,
+// zigzag on one family and staircase on the other, in ratio 9/8 exactly (`X25`).
+use hex_field;
+use hex_grid;
+use hex_form;
+
+pub const BOX_ROT = 12;
+
+// The exact cosine and sine of `n * 30` degrees. Every value is 0, +-1/2, +-sqrt(3)/2 or
+// +-1 — exact in Q(sqrt3), so this is a table and never a trig call (`housedraw` makes the
+// same argument for its six).
+const SQ3_2B = 0.8660254037844386;
+
+pub fn box_cos(n: integer) -> float {
+  b = ((n % BOX_ROT) + BOX_ROT) % BOX_ROT;
+  if b == 0  {  1.0 }     else if b == 1  {  SQ3_2B } else if b == 2  {  0.5 }
+  else if b == 3  {  0.0 } else if b == 4  { -0.5 }    else if b == 5  { -SQ3_2B }
+  else if b == 6  { -1.0 } else if b == 7  { -SQ3_2B } else if b == 8  { -0.5 }
+  else if b == 9  {  0.0 } else if b == 10 {  0.5 }    else {  SQ3_2B }
+}
+
+pub fn box_sin(n: integer) -> float {
+  b = ((n % BOX_ROT) + BOX_ROT) % BOX_ROT;
+  if b == 0  {  0.0 }     else if b == 1  {  0.5 }    else if b == 2  {  SQ3_2B }
+  else if b == 3  {  1.0 } else if b == 4  {  SQ3_2B } else if b == 5  {  0.5 }
+  else if b == 6  {  0.0 } else if b == 7  { -0.5 }    else if b == 8  { -SQ3_2B }
+  else if b == 9  { -1.0 } else if b == 10 { -SQ3_2B } else { -0.5 }
+}
+
+// Which of the two orbits `rot` belongs to: 0 = the EDGE family (`Plan`'s six),
+// 1 = the VERTEX family. Members of one orbit are exact lattice rotations of each other;
+// members of different orbits are not related by any exact map.
+pub fn box_orbit(rot: integer) -> integer { (((rot % BOX_ROT) + BOX_ROT) % BOX_ROT) % 2 }
+
+pub struct Box {
+  bx_cq:  integer,     // anchor cell
+  bx_cr:  integer,
+  bx_wid: integer,     // extent along local u, in hex steps (1.5 m each)
+  bx_dep: integer,     // extent along local v
+  bx_rot: integer,     // 0..11 — THIRTY degree steps
+  bx_mir: boolean,     // the flip
+}
+
+pub fn box_new(cq: integer, cr: integer, wid: integer, dep: integer,
+               rot: integer, mir: boolean) -> Box {
+  Box { bx_cq: cq, bx_cr: cr, bx_wid: wid, bx_dep: dep,
+        bx_rot: ((rot % BOX_ROT) + BOX_ROT) % BOX_ROT, bx_mir: mir }
+}
+
+pub fn box_hw(b: Box) -> float { (b.bx_wid as float) * HEX_LEN * 0.5 }
+pub fn box_hd(b: Box) -> float { (b.bx_dep as float) * HEX_LEN * 0.5 }
+
+fn box_s(b: Box) -> float { if b.bx_mir { -1.0 } else { 1.0 } }
+
+// World point -> the box's local frame. Same convention as `housedraw::plan_to_local`, so
+// an even-rot Box and the Plan with rot/2 describe the SAME rectangle — which the gate
+// checks rather than assumes.
+pub fn box_to_local(b: Box, px: float, py: float) -> (float, float) {
+  co = box_cos(b.bx_rot);
+  si = box_sin(b.bx_rot);
+  s = box_s(b);
+  dx = px - cell_x(b.bx_cq, b.bx_cr);
+  dy = py - cell_y(b.bx_cq, b.bx_cr);
+  (dx * s * co + dy * s * si, -dx * si + dy * co)
+}
+
+// THE SELECTION: every cell whose CENTRE lies in the rectangle.
+//
+// The comparison is inclusive with an epsilon for exactly the reason `housedraw::draw_floor`
+// documents — along an edge heading every cell-to-side distance is an exact multiple of
+// sqrt(3)/2, which is the default halfwidth, so a strict test sits on the last bit of a
+// float for a whole column. On the VERTEX headings the same tie appears at a different
+// spacing, which is why the epsilon is kept here too rather than assumed unnecessary.
+const BOX_EPS = 0.000000001;
+
+fn bfabs(v: float) -> float { if v < 0.0 { -v } else { v } }
+
+pub fn box_fill(b: Box, cells: HexSet) -> integer {
+  hw = box_hw(b);
+  hd = box_hd(b);
+  n = 0;
+  for br in hexset_r0(cells)..hexset_r0(cells) + hexset_h(cells) {
+    for bq in hexset_q0(cells)..hexset_q0(cells) + hexset_w(cells) {
+      (lu, lv) = box_to_local(b, cell_x(bq, br), cell_y(bq, br));
+      if bfabs(lu) <= hw + BOX_EPS && bfabs(lv) <= hd + BOX_EPS {
+        hexset_set(cells, bq, br, true);
+        n = n + 1;
+      }
+    }
+  }
+  n
+}
+
+// ── THE THICK WALL — a castle, not a cottage ───────────────────────────────
+//
+// A cottage wall is an EDGE: it costs no floor, and 27 cells of house stay 27 cells of
+// house. A castle wall is different in kind — it is GROUND, wide enough to stand and walk
+// on, with an inside and an outside. So it is a ring of whole CELLS, and the only question
+// is which side of the selection it takes.
+//
+// `box_ring_out` puts it OUTSIDE: the user's selection is the courtyard, untouched, and the
+// wall is the ring of cells around it. This is the one that matches the editor's gesture —
+// what you select is what you get to keep.
+pub fn box_ring_out(cells: HexSet, ring: HexSet) -> integer {
+  n = 0;
+  for rr in hexset_r0(cells)..hexset_r0(cells) + hexset_h(cells) {
+    for rq in hexset_q0(cells)..hexset_q0(cells) + hexset_w(cells) {
+      if hexset_get(cells, rq, rr) {
+        for rd in 0..6 {
+          nq = nb_q(rq, rr, rd);
+          nr = nb_r(rq, rr, rd);
+          if !hexset_get(cells, nq, nr) && !hexset_get(ring, nq, nr) {
+            hexset_set(ring, nq, nr, true);
+            n = n + 1;
+          }
+        }
+      }
+    }
+  }
+  n
+}
+
+// `box_ring_in` takes it from INSIDE instead: the outermost layer of the selection becomes
+// wall and the courtyard shrinks. Same ring, opposite side — a town wall drawn to a
+// surveyed outer boundary wants this one.
+pub fn box_ring_in(cells: HexSet, ring: HexSet) -> integer {
+  n = 0;
+  for ir in hexset_r0(cells)..hexset_r0(cells) + hexset_h(cells) {
+    for iq in hexset_q0(cells)..hexset_q0(cells) + hexset_w(cells) {
+      if hexset_get(cells, iq, ir) {
+        edge = false;
+        for id in 0..6 {
+          if !hexset_get(cells, nb_q(iq, ir, id), nb_r(iq, ir, id)) { edge = true; }
+        }
+        if edge { hexset_set(ring, iq, ir, true); n = n + 1; }
+      }
+    }
+  }
+  n
+}
+
+// ── DOES THE WALL HOLD? ────────────────────────────────────────────────────
+//
+// A ring that looks closed and is not is the exact defect `SPEC` I3's control names — "2
+// components, 0 enclosed, yet still 12/12 equivariant". For a thick wall the honest test is
+// not to count cells but to try to WALK IN: flood the outside and see whether it reaches the
+// courtyard. One hole and it does.
+//
+// Relaxation rather than a queue: the region is a box, so sweeping until nothing changes
+// terminates in at most its perimeter in passes, and it needs no auxiliary storage.
+pub fn flood_outside(wall: HexSet, out: HexSet) {
+  q0 = hexset_q0(out);
+  r0 = hexset_r0(out);
+  w = hexset_w(out);
+  h = hexset_h(out);
+  // seed: the whole border of the window, minus any wall on it
+  for sq in q0..q0 + w {
+    if !hexset_get(wall, sq, r0) { hexset_set(out, sq, r0, true); }
+    if !hexset_get(wall, sq, r0 + h - 1) { hexset_set(out, sq, r0 + h - 1, true); }
+  }
+  for sr in r0..r0 + h {
+    if !hexset_get(wall, q0, sr) { hexset_set(out, q0, sr, true); }
+    if !hexset_get(wall, q0 + w - 1, sr) { hexset_set(out, q0 + w - 1, sr, true); }
+  }
+  changed = true;
+  while changed {
+    changed = false;
+    for fr in r0..r0 + h {
+      for fq in q0..q0 + w {
+        if hexset_get(out, fq, fr) {
+          for fd in 0..6 {
+            nq = nb_q(fq, fr, fd);
+            nr = nb_r(fq, fr, fd);
+            if nq >= q0 && nq < q0 + w && nr >= r0 && nr < r0 + h {
+              if !hexset_get(wall, nq, nr) && !hexset_get(out, nq, nr) {
+                hexset_set(out, nq, nr, true);
+                changed = true;
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+// How many cells of `inner` the outside flood reached. Zero means the wall holds.
+pub fn leak_count(inner: HexSet, out: HexSet) -> integer {
+  n = 0;
+  for lr in hexset_r0(inner)..hexset_r0(inner) + hexset_h(inner) {
+    for lq in hexset_q0(inner)..hexset_q0(inner) + hexset_w(inner) {
+      if hexset_get(inner, lq, lr) && hexset_get(out, lq, lr) { n = n + 1; }
+    }
+  }
+  n
+}
+
+// ── A THICK LINE — the town wall that is not a box ─────────────────────────
+//
+// Same wall, no enclosure: a run of cells one hex wide, for a curtain wall or a rampart.
+// The cells are those the segment passes THROUGH — a hex is on the line iff the segment
+// enters it — so the chain is connected by construction and exactly one cell wide.
+//
+// Stepping is by a third of a cell, which cannot skip one: consecutive samples are 0.577 wu
+// apart at most while a hex is 1.732 wu across, so every cell the segment crosses is
+// sampled at least twice.
+pub fn line_hexes(x0: float, y0: float, x1: float, y1: float, cells: HexSet) -> integer {
+  dx = x1 - x0;
+  dy = y1 - y0;
+  ln = sqrt(dx * dx + dy * dy) ?? 0.0;
+  steps = ((ln * 3.0) as integer) + 1;
+  // `/` is FALLIBLE in loft, so `t` below types as `float?`.  `steps` is `(..) + 1` on a
+  // non-negative `sqrt`, so it is at least 1 and the divide cannot fail — but a null `t` taken as
+  // `0.0` would put EVERY sample on the start point, laying a one-cell stub where a wall was asked
+  // for and returning a plausible count for it.  Refuse instead: 0 cells is visible to the caller,
+  // a collapsed wall is not.  The `?? 0.0` below is unreachable past this guard.
+  if steps < 1 { return 0; }
+  n = 0;
+  for si in 0..steps + 1 {
+    t = (si as float) / (steps as float) ?? 0.0;
+    (hq, hr) = px_to_hex(x0 + dx * t, y0 + dy * t);
+    if !hexset_get(cells, hq, hr) {
+      hexset_set(cells, hq, hr, true);
+      n = n + 1;
+    }
+  }
+  n
+}
+
+// Is every cell of the set reachable from every other, stepping only within the set?
+// A wall with a gap is not a wall; this is what makes "one hex wide" mean a CHAIN.
+pub fn set_connected(cells: HexSet) -> boolean {
+  seedq = 0;
+  seedr = 0;
+  found = false;
+  total = 0;
+  for cr in hexset_r0(cells)..hexset_r0(cells) + hexset_h(cells) {
+    for cq in hexset_q0(cells)..hexset_q0(cells) + hexset_w(cells) {
+      if hexset_get(cells, cq, cr) {
+        total = total + 1;
+        if !found { seedq = cq; seedr = cr; found = true; }
+      }
+    }
+  }
+  if !found { return false; }
+  reach = hexset_chunk(hexset_q0(cells), hexset_r0(cells), hexset_w(cells), hexset_h(cells));
+  hexset_set(reach, seedq, seedr, true);
+  changed = true;
+  while changed {
+    changed = false;
+    for rr in hexset_r0(cells)..hexset_r0(cells) + hexset_h(cells) {
+      for rq in hexset_q0(cells)..hexset_q0(cells) + hexset_w(cells) {
+        if hexset_get(reach, rq, rr) {
+          for rd in 0..6 {
+            nq = nb_q(rq, rr, rd);
+            nr = nb_r(rq, rr, rd);
+            if hexset_get(cells, nq, nr) && !hexset_get(reach, nq, nr) {
+              hexset_set(reach, nq, nr, true);
+              changed = true;
+            }
+          }
+        }
+      }
+    }
+  }
+  hexset_count(reach) == total
+}

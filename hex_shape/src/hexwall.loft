@@ -1,0 +1,902 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// hexwall — A WALL IS A STRAIGHT LINE, AND IT WRITES ITSELF INTO THE FOXEL.
+//
+// The wall is the primitive, not the house.  It does not care which side is inside, or
+// whether there is a house at all — the same line is a house wall, a party wall or a fence.
+// A house is four of them; a fence is one.
+//
+// THE 24 DIRECTIONS, AND WHY ONLY 12 ARE FOR HOUSES.  A direction is `d24`, in
+// fifteenths-of-a-revolution steps (24 of them, 15 degrees apart):
+//
+//   EVEN d24 — the 12 headings of H12, each an EXACT lattice step (hexform).  These are the
+//              only directions a STENCIL may use: a house is built from them.
+//   ODD  d24 — the 12 in-between directions, made by wobbling between the two adjacent
+//              headings.  THEY ARE NOT EXACT.  The two headings differ in length by sqrt(3)
+//              (edge class vs vertex class), so one step of each does not bisect the angle —
+//              it lands 4.11 degrees off the nominal.  We use them anyway, and that is
+//              precisely why HOUSES ARE NEVER DRAWN WITH AN IN-BETWEEN ANGLE: they belong to
+//              world linework (roads, fences, cliffs — SPEC domain B), where the offset does
+//              not have to close a shape or meet a corner.
+//
+// THE STORAGE IS THE FOXEL AND NOTHING ELSE: three wall slots per hex.  `EdgeSet` already is
+// that model — an edge is stored once, by the cell that owns it — so `wall_write` marks the
+// chain of hex edges lying ALONG the wall (the boundary between the half-planes it divides,
+// `wall_separates`) and stores nothing else.  No direction, no offset, no triangles: recovering
+// the line from the marks is `rebuild`'s job, not storage's.
+use hex_field;
+use hex_grid;
+use hex_form;
+
+// The wall is one triangle thick.  Triangle side = 1/3 hex edge, so the height — and the
+// wall's width — is sqrt(3)/6 world units = 1/4 m exactly.  (DESIGN.md §10.7.)
+pub const WALL_W = 0.28867513459481287;
+
+pub const D24 = 24;
+
+pub struct Wall {
+  wa_ox:   float,      // centre of the run, world units
+  wa_oy:   float,
+  wa_dx:   float,      // unit direction
+  wa_dy:   float,
+  wa_half: float,      // half the run length
+  wa_mat:  integer,    // the material written into every slot it crosses
+}
+
+// The direction of `d24` as a doubled-coordinate vector, before normalising.
+//
+// Even `d24`: the heading itself, exact.  Odd: the in-between vector below, which is inexact —
+// no lattice vector points at an odd multiple of 15° at all (`X31`).
+//
+// ── THE IN-BETWEEN VECTOR (odd `d24`) — `N = 39`, the vector `(7,−2)` ──────
+//
+// This used to be the SUM of the two adjacent headings — `(5,3)` here, `(5,−1)` reduced, `N = 21` —
+// which put every in-between direction **4.1066°** off its nominal angle.  `N = 39` is **3.7× more
+// accurate (1.1021°)** and is one of only two vectors in the whole neighbourhood that keeps
+// **`δ = 0`**.  Changed while domain B still had **no stored content** (the corpus is all `H₁₂`
+// stencils), so it cost nothing; once linework exists it would be unmigratable (law `A₂`).
+//
+// **`δ = (tri_a − tri_b) mod 3` is the axis that decides LINKING**, and it is why `N = 39` and not
+// the finer-looking `N = 13`.  A run of `p` periods from a vertex of class `c` ends on class
+// `(c + p·δ) mod 3`, and class 0 is a hex CENTRE, which `wall_run_ok` refuses:
+//
+//   δ = 0  →  the vertex class is PRESERVED: every multiple is admissible from every vertex (9/9)
+//   δ ≠ 0  →  the class CYCLES: one run in three lands on a centre and is refused (6/9), and the
+//             shortest legal run depends on which class you started from
+//
+// A house wall can leave you on either class — the `N = 1` family (30/90/150°) changes it — so a
+// `δ ≠ 0` in-between direction links to the house angles *conditionally*: from half of all house
+// corners its shortest legal run doubles.  `N = 13` is finer (3.122 m against 5.408 m) and equally
+// accurate, but it spends exactly that property.  `N = 39` buys the whole angle improvement and
+// leaves linework-meets-house behaving as it does today.  `X31`'s ladder compared only angle and
+// period, so it could not see this axis at all.
+//
+// The vectors are **vertex**-lattice vectors, not cell-to-cell ones (`m` need not be a multiple of
+// 3).  That is fine: `wall_step_*` feeds only `wall_new` (which normalises to a unit direction),
+// `wall_angle_actual` (angle only) and `tri_a`/`tri_b` (which convert to triangle coordinates and
+// reduce) — nothing steps cell by cell along it.  The one requirement is `m ≡ k (mod 2)`, so
+// `tri_b`'s `(m − k)/2` stays integral; every entry satisfies it.
+//
+// Entries 6..11 are the negation of 0..5, because `d` and `d + 12` are opposite directions.  The
+// first six come from rotating `d = 1` by the exact 60° lattice map, and `d = 3` from reflecting
+// then rotating — so the table is one vector, turned, not twelve independent choices.
+fn between_k(i: integer) -> integer {
+  j = i;
+  s = 1;
+  if i >= 6 { j = i - 6; s = 0 - 1; }
+  kk = 7;
+  if j == 1 { kk = 5; }
+  if j == 2 { kk = 2; }
+  if j == 3 { kk = 0 - 2; }
+  if j == 4 { kk = 0 - 5; }
+  if j == 5 { kk = 0 - 7; }
+  s * kk
+}
+
+fn between_m(i: integer) -> integer {
+  j = i;
+  s = 1;
+  if i >= 6 { j = i - 6; s = 0 - 1; }
+  mm = 3;
+  if j == 1 { mm = 9; }
+  if j == 2 { mm = 12; }
+  if j == 3 { mm = 12; }
+  if j == 4 { mm = 9; }
+  if j == 5 { mm = 3; }
+  s * mm
+}
+
+pub fn wall_step_k(d24: integer) -> integer {
+  n = ((d24 % D24) + D24) % D24;
+  h = n / 2;
+  a = head_step(h);
+  if n % 2 == 0 { return a.0; }
+  between_k((n - 1) / 2)
+}
+
+pub fn wall_step_m(d24: integer) -> integer {
+  n = ((d24 % D24) + D24) % D24;
+  h = n / 2;
+  a = head_step(h);
+  if n % 2 == 0 { return a.1; }
+  between_m((n - 1) / 2)
+}
+
+// An even d24 is one of the 12 exact headings; an odd one is an in-between.
+pub fn wall_is_exact(d24: integer) -> boolean { (((d24 % D24) + D24) % D24) % 2 == 0 }
+
+// World direction of a doubled-coordinate vector: x = k*sqrt(3)/2, y = m/2.
+fn dir_x(k: integer, _m: integer) -> float { (k as float) * 0.8660254037844386 }
+fn dir_y(_k: integer, m: integer) -> float { (m as float) * 0.5 }
+
+pub fn wall_new(d24: integer, ox: float, oy: float, half: float, mat: integer) -> Wall {
+  sk = wall_step_k(d24);
+  sm = wall_step_m(d24);
+  vx = dir_x(sk, sm);
+  vy = dir_y(sk, sm);
+  len = sqrt(vx * vx + vy * vy);
+  Wall { wa_ox: ox, wa_oy: oy, wa_dx: (vx / len) ?? 0.0, wa_dy: (vy / len) ?? 0.0,
+         wa_half: half, wa_mat: mat }
+}
+
+// The nominal angle of `d24` in degrees, and the angle its step actually points at.  The two
+// differ by ~4.11 degrees on every odd d24 — the gate prints both rather than hiding it.
+pub fn wall_angle_nominal(d24: integer) -> float {
+  ((((d24 % D24) + D24) % D24) as float) * 15.0
+}
+
+pub fn wall_angle_actual(d24: integer) -> float {
+  sk = wall_step_k(d24);
+  sm = wall_step_m(d24);
+  a = atan2(dir_y(sk, sm), dir_x(sk, sm)) * 57.29577951308232;
+  if a < 0.0 { a + 360.0 } else { a }
+}
+
+// ── writing into the foxel — ALONG the wall, not ACROSS it (OD-12) ─────────
+//
+// THE FIRST TRY MARKED THE WRONG EDGES.  The band model asked "does the wall's thin
+// rectangle overlap this hex edge?" — and the edges a thin band overlaps are the ones lying
+// ACROSS it, roughly perpendicular.  A due-east wall came out as a comb of vertical pickets
+// (`X28`), because a hex has edges on only three lines (30/90/150) and none runs east, so a
+// wall going east cannot BE a run of hex edges pointing east.
+//
+// THE WALL IS A BOUNDARY, NOT A BAND.  A straight line divides the plane into two
+// half-planes.  The hex edges that lie ALONG the line are exactly the ones that SEPARATE a
+// cell on one side from a cell on the other — the boundary between the two half-planes, which
+// for any direction is a single connected chain, straight in the three edge directions and an
+// alternating wobble otherwise.  This is `housedraw::draw_walls`' own rule (an edge between an
+// inside cell and an outside one), applied to a half-plane instead of a filled region — so it
+// inherits `I3`'s "closed by construction, one wide" for free.
+//
+// Signed perpendicular offset of a world point from the wall's centre line.  Positive on the
+// side the normal (-dy, dx) points to; the sign is all that matters for separation.
+pub fn wall_offset_signed(w: Wall, px: float, py: float) -> float {
+  (px - w.wa_ox) * (0.0 - w.wa_dy) + (py - w.wa_oy) * w.wa_dx
+}
+
+// Signed distance along the run from its centre — in [-wa_half, +wa_half] over the segment.
+fn wall_along(w: Wall, px: float, py: float) -> float {
+  (px - w.wa_ox) * w.wa_dx + (py - w.wa_oy) * w.wa_dy
+}
+
+// Does the wall's centre line SEPARATE the two cell centres — and does it cross between them
+// WITHIN the run?  A hex edge is marked iff its two owning cells answer yes.
+//
+// The tie-break (offset == 0 counts as the positive side) makes the test total and
+// deterministic (`I9`).  A wall centred on a hex CENTRE (the bare `wall_new(d, 0, 0, …)` form) can
+// put a whole row of centres on the line, and then the tie-break places the boundary just to one
+// side of them rather than through them.
+//
+// ⚠ THE COMPARISON MUST TREAT A MATHEMATICAL ZERO AS ZERO — that is what `WALL_EPS` is doing here.
+// This comment used to claim a VERTEX-anchored wall never puts a cell centre on the line, so the
+// tie-break could never fire.  **That is false**, and `tests/flip.loft` caught it: the `N = 1`
+// family (30/90/150…) at `p = 3` does — e.g. `d = 2` from vertex `(3,0)` puts cell `(1,1)` exactly
+// on the line.  Its offset is mathematically 0, but in FLOAT it comes out as `−1.39e-16` in one
+// orientation and as a clean `0` in the rotation of the same wall.  A bare `oc >= 0.0` then sorts
+// that one cell onto opposite sides in the two orientations, and the rasterisation stops being
+// rotation-covariant — 18 cases, exactly the ones with a centre on the line.
+//
+// Comparing against `−WALL_EPS` instead makes a zero read as zero in EVERY orientation, so the
+// documented tie-break behaves as documented.  This is not a tolerance in a fit (`P4`): the
+// quantity is *exactly* zero and the epsilon only removes rounding noise from a SIGN test.  It
+// cannot misclassify a genuinely off-line cell either — a cell centre that is not on the line sits
+// an algebraic distance away, orders of magnitude above `1e-9`.
+const WALL_EPS = 0.000000001;   // a float SIGN-test guard, not a P4 tolerance
+
+pub fn wall_separates(w: Wall, cx: float, cy: float, nx: float, ny: float) -> boolean {
+  oc = wall_offset_signed(w, cx, cy);
+  on = wall_offset_signed(w, nx, ny);
+  pc = oc > 0.0 - WALL_EPS;
+  pn = on > 0.0 - WALL_EPS;
+  if pc == pn { return false; }
+  // where the segment C->N crosses the line, and whether that point is within the run
+  t = (oc / (oc - on)) ?? 0.5;
+  ax = cx + t * (nx - cx);
+  ay = cy + t * (ny - cy);
+  al = wall_along(w, ax, ay);
+  al >= (0.0 - w.wa_half) - WALL_EPS && al <= w.wa_half + WALL_EPS
+}
+
+// The endpoint edges sit exactly at along = +-wa_half; include them so the chain reaches its
+// vertices.  A rasterisation tie-break, not a geometric fudge — the same role `draw_floor`'s
+// EPS plays, and it never moves a mark off its edge.
+
+// ── THE EDGE TABLE IS hex_grid's, NOT OURS ─────────────────────────────────
+//
+// `hex_grid` already owns the moros edge-wall model — it says so in the file: "walls live
+// on hex edges, stored on 3 canonical edges per hex (dirs 0,1,2); dirs 3,4,5 belong to the
+// neighbour".  So `hex_edge_corners(dir)` IS the map from a neighbour direction to the two
+// corners bounding that edge, and `moros_render::emit_hex_walls` emits exactly those corner
+// pairs (N = 5->0, NE = 0->1, SE = 1->2) for the three stored slots.
+//
+// A PRIVATE CORNER CONVENTION IS A SILENT WRONG ANSWER.  This file first carried its own
+// table (corner 0 at 30 degrees) and paired edge `c` with `nb_q/nb_r(q, r, c)` — but
+// hex_field's direction order is [E, W, SE, SW, NE, NW] and hex_grid's is
+// [E, SE, SW, W, NW, NE], so five of the six edges were stored against the WRONG
+// neighbour.  Every gate stayed green: a consistently wrong edge is still written once,
+// still idempotent, still non-empty.  Only measuring the marks back against the geometry
+// caught it, which is why `wall_edge_gap` below is a gate and not a comment.
+//
+// Corner `c` of the hex at (q,r), in world units — hex_grid's table, hex_grid's indices.
+pub fn hex_corner_x(q: integer, r: integer, c: integer) -> float {
+  (cx, cy) = hex_to_px(q, r);
+  (ox, oy) = hex_corner_offset(((c % 6) + 6) % 6);
+  cx + ox
+}
+
+pub fn hex_corner_y(q: integer, r: integer, c: integer) -> float {
+  (cx, cy) = hex_to_px(q, r);
+  (ox, oy) = hex_corner_offset(((c % 6) + 6) % 6);
+  cy + oy
+}
+
+// Cell centre in world units.  hex_field's exact lattice and hex_grid's float world agree
+// term for term — k*sqrt(3)/2 = sqrt(3)*(q + (r&1)/2) and m/2 = 1.5r — so this is the
+// integer spelling of `hex_to_px`, not a second convention.
+pub fn cell_x_w(q: integer, r: integer) -> float {
+  (lattice_k(q, r) as float) * 0.8660254037844386
+}
+
+pub fn cell_y_w(q: integer, r: integer) -> float { (lattice_m(q, r) as float) * 0.5 }
+
+// THE CHECK THAT WOULD HAVE CAUGHT IT: how far the midpoint of edge `dir` sits from the
+// midpoint between the two cell centres it is supposed to separate.  Zero for every
+// direction, or the edge table and the neighbour table disagree.
+pub fn wall_edge_gap(q: integer, r: integer, dir: integer) -> float {
+  (e1, e2) = hex_edge_corners(dir);
+  mx = (hex_corner_x(q, r, e1) + hex_corner_x(q, r, e2)) / 2.0;
+  my = (hex_corner_y(q, r, e1) + hex_corner_y(q, r, e2)) / 2.0;
+  (nq, nr) = hex_neighbor(q, r, dir);
+  hx = (cell_x_w(q, r) + cell_x_w(nq, nr)) / 2.0;
+  hy = (cell_y_w(q, r) + cell_y_w(nq, nr)) / 2.0;
+  sqrt((mx - hx) * (mx - hx) + (my - hy) * (my - hy)) ?? 0.0
+}
+
+// Triangle-lattice coordinates of a hex corner — EXACT integers, because every hex corner is
+// a vertex of the triangle lattice.  The centre of (q,r) is (3k, 3(m-k)/2) with k = lattice_k,
+// m = lattice_m; the six corner deltas are constant.  Used to key the edge chain by its shared
+// vertices when checking connectivity (`tests/wall.loft` §6b).
+fn corner_da(ci: integer) -> integer {
+  c = ((ci % 6) + 6) % 6;
+  if c == 0 { 0 } else if c == 1 { -3 } else if c == 2 { -3 }
+  else if c == 3 { 0 } else if c == 4 { 3 } else { 3 }
+}
+
+fn corner_db(ci: integer) -> integer {
+  c = ((ci % 6) + 6) % 6;
+  if c == 0 { 3 } else if c == 1 { 3 } else if c == 2 { 0 }
+  else if c == 3 { -3 } else if c == 4 { -3 } else { 0 }
+}
+
+pub fn hex_corner_tri_a(q: integer, r: integer, ci: integer) -> integer {
+  3 * lattice_k(q, r) + corner_da(ci)
+}
+
+pub fn hex_corner_tri_b(q: integer, r: integer, ci: integer) -> integer {
+  ((3 * (lattice_m(q, r) - lattice_k(q, r)) / 2) ?? 0) + corner_db(ci)
+}
+
+// `wall_from_run` — the principled vertex-anchored constructor — is defined further down, beside
+// the endpoint machinery it depends on (`tri_x`, `wall_end_a`), which is where it belongs anyway.
+// It was once forced there by a loft defect (LOFT-HANDOFF H5, fixed and verified on 2026.7.2).
+
+// THE ROUTINE: draw the wall into the foxel's three wall slots per hex.
+//
+// An edge is marked iff the wall's centre line SEPARATES its two owning cells, within the run.
+// `edge_set_mat` stores an edge once, under whichever cell owns it, so writing from both sides
+// is idempotent — which is what makes the three-slots-per-hex model hold.
+pub fn wall_write(w: Wall, edges: EdgeSet, q0: integer, r0: integer,
+                  wq: integer, hq: integer) -> integer {
+  n = 0;
+  for wr in r0..r0 + hq {
+    for wqq in q0..q0 + wq {
+      for wd in 0..6 {
+        (nq, nr) = hex_neighbor(wqq, wr, wd);
+        if wall_separates(w, cell_x_w(wqq, wr), cell_y_w(wqq, wr),
+                             cell_x_w(nq, nr), cell_y_w(nq, nr)) {
+          if edge_mat(edges, wqq, wr, nq, nr) == 0 {
+            edge_set_mat(edges, wqq, wr, nq, nr, w.wa_mat);
+            n = n + 1;
+          }
+        }
+      }
+    }
+  }
+  n
+}
+
+// ── READING THE CHAIN BACK: is it ALONG the wall, and is it ONE chain? ─────
+//
+// These are the two properties that distinguish the fixed marking from the old picket comb,
+// and neither is visible in the perpendicular STRAY (a comb and a zigzag both swing ~1 hex off
+// the line).  They are what `tests/wall.loft` §6 asserts.
+//
+// ALONG-NESS.  For a marked edge between cells C and N, the vector C->N is PERPENDICULAR to the
+// edge.  An edge lying ALONG the wall therefore has C->N pointing ACROSS the wall — a small
+// `|C->N . wall_dir|`.  The old picket marked edges lying ACROSS the wall, whose C->N pointed
+// ALONG it — `|C->N . wall_dir| ~ 1`.  So the worst `|dot|` over the chain is the discriminator.
+pub fn wall_along_max(w: Wall, edges: EdgeSet, q0: integer, r0: integer,
+                      wq: integer, hq: integer) -> float {
+  worst = 0.0;
+  for wr in r0..r0 + hq {
+    for wqq in q0..q0 + wq {
+      for wd in 0..3 {
+        (nq, nr) = hex_neighbor(wqq, wr, wd);
+        if edge_mat(edges, wqq, wr, nq, nr) != 0 {
+          dx = cell_x_w(nq, nr) - cell_x_w(wqq, wr);
+          dy = cell_y_w(nq, nr) - cell_y_w(wqq, wr);
+          dl = sqrt(dx * dx + dy * dy) ?? 1.0;
+          dot = ((dx * w.wa_dx + dy * w.wa_dy) / dl) ?? 0.0;
+          ad = if dot < 0.0 { 0.0 - dot } else { dot };
+          if ad > worst { worst = ad; }
+        }
+      }
+    }
+  }
+  worst
+}
+
+// ONE CHAIN.  The marked edges form a connected path iff, keyed by their shared hex vertices
+// (exact triangle-lattice integers), exactly two vertices have degree 1 (the ends) and none has
+// degree > 2.  A picket comb of k disjoint edges has 2k degree-1 vertices — so this separates a
+// chain from a comb with no tolerance.  Returns the number of degree-1 vertices (2 for a single
+// chain, 0 for empty, 4 after a break, 2k for a comb).
+pub fn wall_chain_ends(edges: EdgeSet, q0: integer, r0: integer,
+                       wq: integer, hq: integer) -> integer {
+  va: vector<integer> = [];
+  vb: vector<integer> = [];
+  for wr in r0..r0 + hq {
+    for wqq in q0..q0 + wq {
+      for wd in 0..3 {
+        (nq, nr) = hex_neighbor(wqq, wr, wd);
+        if edge_mat(edges, wqq, wr, nq, nr) != 0 {
+          (e1, e2) = hex_edge_corners(wd);
+          va += [hex_corner_tri_a(wqq, wr, e1)];
+          vb += [hex_corner_tri_b(wqq, wr, e1)];
+          va += [hex_corner_tri_a(wqq, wr, e2)];
+          vb += [hex_corner_tri_b(wqq, wr, e2)];
+        }
+      }
+    }
+  }
+  ends = 0;
+  for i in 0..len(va) {
+    // count this vertex only at its first occurrence
+    first = true;
+    for k in 0..i {
+      if (va[k] ?? 0) == (va[i] ?? 0) && (vb[k] ?? 0) == (vb[i] ?? 0) { first = false; }
+    }
+    if first {
+      deg = 0;
+      for j in 0..len(va) {
+        if (va[j] ?? 0) == (va[i] ?? 0) && (vb[j] ?? 0) == (vb[i] ?? 0) { deg = deg + 1; }
+      }
+      if deg == 1 { ends = ends + 1; }
+    }
+  }
+  ends
+}
+
+// Any vertex where three or more marked edges meet — a branch, which a straight wall's boundary
+// never has.  Non-zero means the marking is not a simple path.
+pub fn wall_chain_branches(edges: EdgeSet, q0: integer, r0: integer,
+                           wq: integer, hq: integer) -> integer {
+  va: vector<integer> = [];
+  vb: vector<integer> = [];
+  for wr in r0..r0 + hq {
+    for wqq in q0..q0 + wq {
+      for wd in 0..3 {
+        (nq, nr) = hex_neighbor(wqq, wr, wd);
+        if edge_mat(edges, wqq, wr, nq, nr) != 0 {
+          (e1, e2) = hex_edge_corners(wd);
+          va += [hex_corner_tri_a(wqq, wr, e1)];
+          vb += [hex_corner_tri_b(wqq, wr, e1)];
+          va += [hex_corner_tri_a(wqq, wr, e2)];
+          vb += [hex_corner_tri_b(wqq, wr, e2)];
+        }
+      }
+    }
+  }
+  branches = 0;
+  for i in 0..len(va) {
+    first = true;
+    for k in 0..i {
+      if (va[k] ?? 0) == (va[i] ?? 0) && (vb[k] ?? 0) == (vb[i] ?? 0) { first = false; }
+    }
+    if first {
+      deg = 0;
+      for j in 0..len(va) {
+        if (va[j] ?? 0) == (va[i] ?? 0) && (vb[j] ?? 0) == (vb[i] ?? 0) { deg = deg + 1; }
+      }
+      if deg > 2 { branches = branches + 1; }
+    }
+  }
+  branches
+}
+
+// ── THE TRIANGLE LATTICE, AND WHY WIDTH CANNOT COME FROM IT ────────────────
+//
+// The wall band lives in the TRIANGLE lattice: equilateral, side = 1/3 of a hex edge, basis
+// U at 30 degrees and V at 90 degrees (DESIGN.md §10.6).  A doubled-coordinate step (k, m)
+// is the triangle-lattice vector (3k, 3(m-k)/2) — integral because every lattice point has
+// k = m (mod 2) — reduced here to its primitive form.
+//
+// THE POINT OF THIS BLOCK is one question: can a wall be made EXACTLY the same width in all
+// 24 directions by counting lattice rows?  It cannot, and the reason is an integer fact.
+// For a primitive lattice vector `v`, the parallel lattice lines in its direction are spaced
+//
+//     spacing = covolume / |v| = S^2*sqrt(3)/2 / (S*sqrt(N)) = S*sqrt(3) / (2*sqrt(N))
+//
+// where N = |v|^2 / S^2 = a^2 + ab + b^2, an INTEGER.  So two directions' spacings are in
+// ratio sqrt(N2/N1), and that is rational — the only way integer row-counts could ever make
+// the two widths equal — exactly when N1*N2 is a perfect square.  Among the 24 directions
+// only three values of N occur, and no pair of them multiplies to a square.
+fn igcd(x: integer, y: integer) -> integer {
+  a = if x < 0 { 0 - x } else { x };
+  b = if y < 0 { 0 - y } else { y };
+  // `b != 0` guards the modulo, but loft types `%` as nullable regardless (DN1), so the
+  // fallback is discharged here rather than left to leak into `b`.
+  while b != 0 { t = (a % b) ?? 0; a = b; b = t; }
+  a
+}
+
+// The primitive triangle-lattice vector of direction `d24`.
+pub fn tri_a(d24: integer) -> integer {
+  k = wall_step_k(d24);
+  m = wall_step_m(d24);
+  ta = 3 * k;
+  tb = 3 * (m - k) / 2;
+  g = igcd(ta, tb);
+  if g == 0 { return ta; }
+  (ta / g) ?? 0
+}
+
+pub fn tri_b(d24: integer) -> integer {
+  k = wall_step_k(d24);
+  m = wall_step_m(d24);
+  ta = 3 * k;
+  tb = 3 * (m - k) / 2;
+  g = igcd(ta, tb);
+  if g == 0 { return tb; }
+  (tb / g) ?? 0
+}
+
+// N = |v|^2 / S^2 for direction `d24` — an exact integer, never a float comparison.
+pub fn tri_n2(d24: integer) -> integer {
+  a = tri_a(d24);
+  b = tri_b(d24);
+  a * a + a * b + b * b
+}
+
+pub fn is_square(n: integer) -> boolean {
+  if n < 0 { return false; }
+  r = 0;
+  while r * r < n { r = r + 1; }
+  r * r == n
+}
+
+// Are the two directions' lattice-line spacings COMMENSURABLE — i.e. can integer counts of
+// rows in each ever be exactly equal?  Only if sqrt(N2/N1) is rational, i.e. N1*N2 square.
+pub fn commensurable(n1: integer, n2: integer) -> boolean { is_square(n1 * n2) }
+
+// ── WHERE A LINE MAY START AND END — the editor's doorstep (SPEC K-FIT) ────
+//
+// The editor can draw only straight lines, and the stored form is hex-edge marks.  moros'
+// emitter stands a quad on each marked edge, so THE MESH'S EXTREMITIES ARE HEX VERTICES —
+// an endpoint anywhere else simply cannot be represented, and the rebuilt wall would stop
+// at the nearest vertex instead.  So `fits?` for a line is exactly:
+//
+//     both endpoints are HEX VERTICES, and B - A is a whole number of the direction's
+//     vertex-to-vertex period.
+//
+// THE ARITHMETIC.  In triangle coordinates, hex vertices AND centres are precisely the
+// points with a = b = 0 (mod 3).  The class
+//
+//     c = ((a - b) / 3) mod 3
+//
+// separates them: c = 0 is a CENTRE (never an endpoint), c = 1 and c = 2 are the two vertex
+// sublattices of the honeycomb.  A primitive direction vector `v` never has both coordinates
+// divisible by 3, so a displacement `n*v` reaches a hex-scale point only when 3 | n — write
+// n = 3p, and the class then shifts by `p*(a_v - b_v) mod 3`.  Two cases follow, and they
+// are the whole answer:
+//
+//   (a_v - b_v) = 0 (mod 3)   the shift is always 0: EVERY p works, from EVERY vertex.
+//                             This is the N=3 class (0/60/120/...) and the N=21 in-between.
+//   otherwise                 the shift cycles: exactly TWO OF EVERY THREE p work, and
+//                             WHICH two depends on the start vertex's class.  This is the
+//                             N=1 class (30/90/150/...), where a line runs one hex edge,
+//                             another, and then meets a hex CENTRE — so p = 2 (mod 3) has
+//                             no endpoint to land on.
+fn imod3(v: integer) -> integer {
+  r = (v % 3) ?? 0;
+  if r < 0 { r + 3 } else { r }
+}
+
+// The class of a triangle-lattice point: 0 = hex centre, 1 and 2 = the two vertex classes.
+// Only meaningful once `tri_on_hex_scale` holds.
+pub fn tri_class(a: integer, b: integer) -> integer { imod3(((a - b) / 3) ?? 0) }
+
+pub fn tri_on_hex_scale(a: integer, b: integer) -> boolean {
+  imod3(a) == 0 && imod3(b) == 0
+}
+
+pub fn tri_is_vertex(a: integer, b: integer) -> boolean {
+  tri_on_hex_scale(a, b) && tri_class(a, b) != 0
+}
+
+// The endpoint of a run of `p` periods of direction `d24` from (a0, b0).  One period is
+// THREE primitive steps — the smallest displacement that can reach a hex-scale point at all.
+pub fn wall_end_a(d24: integer, a0: integer, p: integer) -> integer {
+  a0 + 3 * p * tri_a(d24)
+}
+
+pub fn wall_end_b(d24: integer, b0: integer, p: integer) -> integer {
+  b0 + 3 * p * tri_b(d24)
+}
+
+// THE DOORSTEP ITSELF.  `p` periods of `d24` from (a0,b0): admissible or not.
+pub fn wall_run_ok(d24: integer, a0: integer, b0: integer, p: integer) -> boolean {
+  if p <= 0 { return false; }
+  if !tri_is_vertex(a0, b0) { return false; }
+  tri_is_vertex(wall_end_a(d24, a0, p), wall_end_b(d24, b0, p))
+}
+
+// The smallest admissible run from this vertex in this direction — the editor's snap unit.
+// -1 if the start is not a vertex at all.
+pub fn wall_min_p(d24: integer, a0: integer, b0: integer) -> integer {
+  if !tri_is_vertex(a0, b0) { return -1; }
+  for mp in 1..4 { if wall_run_ok(d24, a0, b0, mp) { return mp; } }
+  -1
+}
+
+// A REFUSAL NAMES ITS RESTRICTION (K-FIT): given a wanted length in periods, the nearest
+// admissible one, searching outward so ties go to the shorter run.  0 if none exists.
+pub fn wall_snap_p(d24: integer, a0: integer, b0: integer, want: integer) -> integer {
+  if want < 1 { return 0; }
+  if wall_run_ok(d24, a0, b0, want) { return want; }
+  for sd in 1..4 {
+    if wall_run_ok(d24, a0, b0, want - sd) { return want - sd; }
+    if wall_run_ok(d24, a0, b0, want + sd) { return want + sd; }
+  }
+  0
+}
+
+// World position of a triangle-lattice point, in world units.
+pub fn tri_x(a: integer, _b: integer) -> float { (a as float) * 0.28867513459481287 }
+pub fn tri_y(a: integer, b: integer) -> float {
+  (a as float) / 6.0 + (b as float) / 3.0
+}
+
+// The world length of `p` periods of `d24`, in world units.
+pub fn wall_run_len(d24: integer, p: integer) -> float {
+  ra = 3 * p * tri_a(d24);
+  rb = 3 * p * tri_b(d24);
+  wx = tri_x(ra, rb);
+  wy = tri_y(ra, rb);
+  sqrt(wx * wx + wy * wy) ?? 0.0
+}
+
+// Build a wall from an ADMISSIBLE run: anchor vertex (a0,b0) in triangle coords, `p` periods of
+// direction `d24`.  The principled constructor — endpoints are hex vertices and the run is legal
+// (`wall_run_ok`), so the boundary chain terminates cleanly at both ends.  Defined here, below
+// `tri_x`/`wall_end_a`, so their float returns are known at the call site (see the note by
+// `wall_write`).
+pub fn wall_from_run(d24: integer, a0: integer, b0: integer, p: integer, mat: integer) -> Wall {
+  fea = wall_end_a(d24, a0, p);
+  feb = wall_end_b(d24, b0, p);
+  fax = tri_x(a0, b0);
+  fay = tri_y(a0, b0);
+  fbx = tri_x(fea, feb);
+  fby = tri_y(fea, feb);
+  fox = (fax + fbx) * 0.5;
+  foy = (fay + fby) * 0.5;
+  fvx = fbx - fax;
+  fvy = fby - fay;
+  fln = sqrt(fvx * fvx + fvy * fvy) ?? 0.0;
+  Wall { wa_ox: fox, wa_oy: foy, wa_dx: (fvx / fln) ?? 1.0, wa_dy: (fvy / fln) ?? 0.0,
+         wa_half: fln * 0.5, wa_mat: mat }
+}
+
+// ── FROM AN ARBITRARY POINT IN THE PLANE TO A LEGAL LINE ───────────────────
+//
+// The editor's real input is a mouse: two arbitrary float points, neither of them on
+// anything.  Two snaps turn that into a legal wall, and both are exact once the doorstep
+// above is known.
+//
+// SNAP 1 — the anchor.  Round to the nearest HEX-SCALE point (vertices and centres
+// together form a triangular lattice of spacing 1 wu, so this is one cube-rounding), then,
+// if that landed on a centre, take the nearest of its six neighbours — which are all
+// vertices.  That second step is complete, not a heuristic: the query point lies in the
+// rounded point's Voronoi cell (circumradius 1/sqrt(3) = 0.577), so every vertex outside
+// its six neighbours is at least sqrt(3) - 0.577 = 1.155 away while a neighbour is at most
+// 1 + 0.577 — the nearest vertex is always among the six.
+//
+// SNAP 2 — the far end.  For each of the 24 directions, project the target onto that
+// direction to get a real-valued period count, then test the few integers around it (the
+// N=1 directions refuse one in three, so the nearest legal `p` is not always the nearest
+// integer).  Keep the globally closest admissible endpoint over all 24.  That is exactly
+// "move towards any point that gives a correct line, in any of the 24 directions".
+//
+// `hex_round` is hex_grid's — the lattice rounding is the library's job, not ours (L11).
+const INV_SQ3 = 0.5773502691896258;
+
+// Nearest HEX-SCALE lattice point (vertex OR centre) to a world point, in triangle
+// coordinates.  The hex-scale lattice is spanned by e1 = (sqrt3/2, 1/2) and e2 = (0, 1),
+// which is (a,b) = (3i, 3j) — a triangular lattice of spacing 1 wu.
+pub fn hex_scale_round(x: float, y: float) -> (integer, integer) {
+  al = x * 2.0 * INV_SQ3;
+  be = y - x * INV_SQ3;
+  (ri, rj) = hex_round(al, be);
+  (3 * ri, 3 * rj)
+}
+
+// The six hex-scale neighbours, as triangle-coordinate deltas.
+fn hs_nb_a(n: integer) -> integer {
+  if n == 0 { return 3; }
+  if n == 1 { return 0; }
+  if n == 2 { return -3; }
+  if n == 3 { return -3; }
+  if n == 4 { return 0; }
+  3
+}
+
+fn hs_nb_b(n: integer) -> integer {
+  if n == 0 { return 0; }
+  if n == 1 { return 3; }
+  if n == 2 { return 3; }
+  if n == 3 { return 0; }
+  if n == 4 { return -3; }
+  -3
+}
+
+// SNAP 1: the nearest HEX VERTEX to an arbitrary world point, in triangle coordinates.
+pub fn nearest_vertex(x: float, y: float) -> (integer, integer) {
+  (ca, cb) = hex_scale_round(x, y);
+  if tri_is_vertex(ca, cb) { return (ca, cb); }
+  // it rounded onto a centre — the nearest vertex is one of the six neighbours
+  ba = ca;
+  bb = cb;
+  best = 1.0e30;
+  for nv in 0..6 {
+    na = ca + hs_nb_a(nv);
+    nb2 = cb + hs_nb_b(nv);
+    dx = tri_x(na, nb2) - x;
+    dy = tri_y(na, nb2) - y;
+    d2 = dx * dx + dy * dy;
+    if d2 < best { best = d2; ba = na; bb = nb2; }
+  }
+  (ba, bb)
+}
+
+// How far the endpoint of `p` periods of `d24` from (a0,b0) lands from a target point.
+pub fn run_end_dist(d24: integer, a0: integer, b0: integer, p: integer,
+                    tx: float, ty: float) -> float {
+  ea = wall_end_a(d24, a0, p);
+  eb = wall_end_b(d24, b0, p);
+  dx = tri_x(ea, eb) - tx;
+  dy = tri_y(ea, eb) - ty;
+  sqrt(dx * dx + dy * dy) ?? 0.0
+}
+
+// The period count that projects nearest to the target, for direction `d24` — real-valued,
+// rounded.  This is only a STARTING GUESS: the N=1 directions refuse one p in three, so
+// `snap_run_*` searches outward from here.
+fn project_p(d24: integer, a0: integer, b0: integer, tx: float, ty: float) -> integer {
+  pa = 3 * tri_a(d24);
+  pb = 3 * tri_b(d24);
+  px = tri_x(pa, pb);
+  py = tri_y(pa, pb);
+  vx = tx - tri_x(a0, b0);
+  vy = ty - tri_y(a0, b0);
+  den = px * px + py * py;
+  if den <= 0.0 { return 1; }
+  (round(((vx * px + vy * py) / den) ?? 0.0)) as integer
+}
+
+// How far either side of the projection to look for a legal p. Three is enough: the only
+// refusals are the N=1 classes' one-in-three, so a legal p is never more than 2 away.
+const SNAP_SPAN = 3;
+
+// SNAP 2, direction part: the direction whose best legal endpoint lands nearest the target.
+pub fn snap_run_d24(a0: integer, b0: integer, tx: float, ty: float) -> integer {
+  bestd = -1;
+  best = 1.0e30;
+  for sd in 0..D24 {
+    p0 = project_p(sd, a0, b0, tx, ty);
+    for sp in 0..2 * SNAP_SPAN + 1 {
+      pp = p0 - SNAP_SPAN + sp;
+      if wall_run_ok(sd, a0, b0, pp) {
+        dd = run_end_dist(sd, a0, b0, pp, tx, ty);
+        if dd < best { best = dd; bestd = sd; }
+      }
+    }
+  }
+  bestd
+}
+
+// SNAP 2, length part: the legal period count in that direction nearest the target.
+// 0 when nothing legal was found, which the caller must treat as a refusal.
+pub fn snap_run_p(d24: integer, a0: integer, b0: integer, tx: float, ty: float) -> integer {
+  bestp = 0;
+  best = 1.0e30;
+  p0 = project_p(d24, a0, b0, tx, ty);
+  for sq in 0..2 * SNAP_SPAN + 1 {
+    pq = p0 - SNAP_SPAN + sq;
+    if wall_run_ok(d24, a0, b0, pq) {
+      dq = run_end_dist(d24, a0, b0, pq, tx, ty);
+      if dq < best { best = dq; bestp = pq; }
+    }
+  }
+  bestp
+}
+
+// ── EVALUATING THE MARKS BACK TO THE MESH (crawler / moros' own rule) ───────
+//
+// This is the second half of the round trip, and it is NOT ours to invent: moros already
+// evaluates the three wall slots to geometry in `moros_render::emit_hex_walls`, and the
+// rule is one line — a marked edge becomes the quad standing on the segment between its
+// two corners.  `hex_edge_corners` is that segment, so the mesh a marked field produces is
+// fully determined here with no renderer, no `Mesh`, no graphics import.
+//
+// WHAT THAT MESH IS.  It is the SAWTOOTH — the chain of hex edges the band crossed — not
+// the straight line we drew.  That is the honest state of the round trip: the foxel stores
+// where the wall went, and recovering the straight line from it is `rebuild`'s job.  So
+// the measurement below is not "does the mesh equal the wall" (it cannot) but "how far
+// does the mesh stray from it", which is the quantity the recovery has to undo.
+//
+// Perpendicular distance from (px,py) to the wall's infinite centre line.
+pub fn wall_offset_of(w: Wall, px: float, py: float) -> float {
+  d = (px - w.wa_ox) * (0.0 - w.wa_dy) + (py - w.wa_oy) * w.wa_dx;
+  if d < 0.0 { 0.0 - d } else { d }
+}
+
+// The worst perpendicular stray of any emitted segment endpoint, over the marked field.
+// Only edges whose midpoint lies within the run are measured — past the ends there is no
+// line to be near.
+pub fn wall_mesh_stray(w: Wall, edges: EdgeSet, q0: integer, r0: integer,
+                       wq: integer, hq: integer) -> float {
+  worst = 0.0;
+  for wr in r0..r0 + hq {
+    for wqq in q0..q0 + wq {
+      for wd in 0..6 {
+        (nq, nr) = hex_neighbor(wqq, wr, wd);
+        if edge_mat(edges, wqq, wr, nq, nr) != 0 {
+          (e1, e2) = hex_edge_corners(wd);
+          ax = hex_corner_x(wqq, wr, e1);
+          ay = hex_corner_y(wqq, wr, e1);
+          bx = hex_corner_x(wqq, wr, e2);
+          by = hex_corner_y(wqq, wr, e2);
+          alo = ((ax + bx) / 2.0 - w.wa_ox) * w.wa_dx
+              + ((ay + by) / 2.0 - w.wa_oy) * w.wa_dy;
+          if alo < 0.0 { alo = 0.0 - alo; }
+          if alo <= w.wa_half {
+            da = wall_offset_of(w, ax, ay);
+            db = wall_offset_of(w, bx, by);
+            if da > worst { worst = da; }
+            if db > worst { worst = db; }
+          }
+        }
+      }
+    }
+  }
+  worst
+}
+
+// How many distinct segments the mesh emitter would produce for the marked field — the
+// vertex count of moros' wall mesh divided by the per-edge quad, i.e. the segment count.
+pub fn wall_mesh_segments(edges: EdgeSet, q0: integer, r0: integer,
+                          wq: integer, hq: integer) -> integer {
+  n = 0;
+  for wr in r0..r0 + hq {
+    for wqq in q0..q0 + wq {
+      for wd in 0..3 {
+        (nq, nr) = hex_neighbor(wqq, wr, wd);
+        if edge_mat(edges, wqq, wr, nq, nr) != 0 { n = n + 1; }
+      }
+    }
+  }
+  n
+}
+
+// ── READING A RUN BACK OUT OF THE FIELD ────────────────────────────────────
+//
+// The reader `OD-13` needs, and it is exact: **a run's two chain ENDS are its endpoints.**  A
+// marked run is one connected chain with exactly two degree-1 vertices (`X32`), those vertices are
+// hex VERTICES on the triangle lattice, and the doorstep put the authored endpoints on exactly
+// those points (§10.10).  So recovery is a degree count and one integer division — no averaging, no
+// tolerance, nothing to fit.
+//
+// ⚠ **USE `hex_neighbor` WITH `hex_edge_corners`, NEVER `nb_q`/`nb_r`.**  Both enumerate the same
+// six neighbours but in a DIFFERENT ORDER, so pairing `hex_edge_corners(d)` — indexed by hex_grid's
+// order — with `nb_q(q,r,d)` reads the corners of a different edge.  Three separate reader
+// instruments were wrong for exactly this reason before it was found, and it is `SPEC` **L11**'s
+// named hazard and `X26`'s failure mode: the counts stay plausible while the geometry is nonsense.
+
+// The two degree-1 vertices of the marked chain, in triangle coordinates.  `ok` is false unless
+// there are exactly two — a fragmented or branching marking is REFUSED, never averaged into an
+// answer.
+pub fn wall_read_ends(edges: EdgeSet, q0: integer, r0: integer, wq: integer, hq: integer)
+                      -> (integer, integer, integer, integer, boolean) {
+   va: vector<integer> = [];
+  vb: vector<integer> = [];
+  for rr in r0..r0 + hq {
+    for qq in q0..q0 + wq {
+      for dd in 0..3 {
+        (nq, nr) = hex_neighbor(qq, rr, dd);
+        if edge_mat(edges, qq, rr, nq, nr) != 0 {
+          (k1, k2) = hex_edge_corners(dd);
+          va += [hex_corner_tri_a(qq, rr, k1)];
+          vb += [hex_corner_tri_b(qq, rr, k1)];
+          va += [hex_corner_tri_a(qq, rr, k2)];
+          vb += [hex_corner_tri_b(qq, rr, k2)];
+        }
+      }
+    }
+  }
+  n = 0;
+  a1 = 0; b1 = 0; a2 = 0; b2 = 0;
+  for i in 0..len(va) {
+    first = true;
+    for k in 0..i {
+      if (va[k] ?? 0) == (va[i] ?? 0) && (vb[k] ?? 0) == (vb[i] ?? 0) { first = false; }
+    }
+    if first {
+      deg = 0;
+      for j in 0..len(va) {
+        if (va[j] ?? 0) == (va[i] ?? 0) && (vb[j] ?? 0) == (vb[i] ?? 0) { deg = deg + 1; }
+      }
+      if deg == 1 {
+        n = n + 1;
+        if n == 1 { a1 = va[i] ?? 0; b1 = vb[i] ?? 0; }
+        if n == 2 { a2 = va[i] ?? 0; b2 = vb[i] ?? 0; }
+      }
+    }
+  }
+  (a1, b1, a2, b2, n == 2)
+}
+
+// Recover the whole run: direction, anchor and period count, all exact integers.  One period of
+// `d24` displaces a run by `3·tri(d24)`, so the endpoint displacement pins both `d24` and `p`; the
+// answer is canonicalised to the end that gives `p > 0`.  `ok` is false when the marking is not a
+// single chain, or when no direction divides the displacement — an unreadable field is REFUSED, not
+// approximated (law **P4**).
+pub fn wall_read_run(edges: EdgeSet, q0: integer, r0: integer, wq: integer, hq: integer)
+                     -> (integer, integer, integer, integer, boolean) {
+  (a1, b1, a2, b2, okends) = wall_read_ends(edges, q0, r0, wq, hq);
+  if !okends { return (0, 0, 0, 0, false); }
+  for d in 0..24 {
+    ta = tri_a(d);
+    tb = tri_b(d);
+    da = a2 - a1;
+    db = b2 - b1;
+    // parallel? exact integer cross product
+    if da * tb - db * ta == 0 {
+      p = 0;
+      if ta != 0 { p = (da / (3 * ta)) ?? 0; } else { p = (db / (3 * tb)) ?? 0; }
+      if p > 0 && a1 + 3 * p * ta == a2 && b1 + 3 * p * tb == b2 {
+        return (d, a1, b1, p, true);
+      }
+    }
+  }
+  (0, 0, 0, 0, false)
+}

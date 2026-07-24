@@ -1,0 +1,12 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// hex_shape — the shape vocabulary — the line primitive, the box, the arc.
+//
+// The rest of `𝕄*` beside the turtle form: a WALL as a line primitive with a constant width
+// (never a count of lattice rows), the BOX in 12 directions with its two orbits, and the ARC
+// whose centre is exact and whose radius quantises to a realisable shell.
+//
+// Entry point: re-exports `hexwall`, `hexbox`, `hexarc`.
+use hexwall;
+use hexbox;
+use hexarc;

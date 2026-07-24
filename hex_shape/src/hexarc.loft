@@ -1,0 +1,201 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// hexarc — THE ROUND TOWER, AND WHAT OF AN ARC COMES BACK (rung A6, `OD-10`), plus the DOOR on it
+// (rung A7 — the doored tower; the A7 section is at the foot of the file).
+//
+// `OD-10` asks: from a run of slots marked ROUNDED, are the CENTRE and RADIUS recoverable exactly
+// (R1), or is that a fit (R2)?  Measured, the answer is split:
+//
+//   CENTRE   recoverable EXACTLY — it is the translation, and the field pins it.
+//   RADIUS   NOT recoverable exactly.  It is quantised to SHELLS: 161 radii sampled over
+//            0.5 .. 4.5 world units collapse to FOUR distinct fields.  Every radius inside a
+//            shell draws the same cells, so only the shell comes back.
+//
+// SO AN ARC IS R1 ON A QUANTISED PARAMETER GRID, not R1 on a continuous radius — the same shape of
+// answer as line endpoints (§10.10) and feature `t` (`X48`).  Three independent parameters, one
+// rule: **a continuous parameter must be quantised to what the field distinguishes, or it is
+// silently snapped rather than refused.**
+//
+// THE SHELLS ARE EXACT INTEGERS, so none of this needs a float.  A cell centre sits at
+// `(k·√3/2, m/2)`, so its squared distance from the origin is `(3k² + m²)/4` — and `3k² + m²` is
+// `hexform::vec_n2_4`, already in the tree.  A shell is therefore an integer `N`, the radius it
+// stands for is `√N / 2` world units, and "inside the disk" is the integer test `N' ≤ N`.
+use hex_field;
+use hex_form;
+
+// Fill the disk of shell `n24` about (cq, cr): every cell whose 4·squared-distance is at most
+// `n24`.  Entirely integer — the comparison that decides membership never touches a float.
+pub fn arc_fill(cq: integer, cr: integer, n24: integer, cells: HexSet) -> integer {
+  bk = lattice_k(cq, cr);
+  bm = lattice_m(cq, cr);
+  n = 0;
+  for ar in hexset_r0(cells)..hexset_r0(cells) + hexset_h(cells) {
+    for aq in hexset_q0(cells)..hexset_q0(cells) + hexset_w(cells) {
+      if vec_n2_4(lattice_k(aq, ar) - bk, lattice_m(aq, ar) - bm) <= n24 {
+        hexset_set(cells, aq, ar, true);
+        n = n + 1;
+      }
+    }
+  }
+  n
+}
+
+// The outermost shell actually occupied, measured about (cq, cr).  This is the recoverable radius
+// parameter — the largest `N` present, not the continuous radius that was authored.
+pub fn arc_shell_max(cells: HexSet, cq: integer, cr: integer) -> integer {
+  bk = lattice_k(cq, cr);
+  bm = lattice_m(cq, cr);
+  mx = -1;
+  for sr in hexset_r0(cells)..hexset_r0(cells) + hexset_h(cells) {
+    for sq in hexset_q0(cells)..hexset_q0(cells) + hexset_w(cells) {
+      if hexset_get(cells, sq, sr) {
+        d = vec_n2_4(lattice_k(sq, sr) - bk, lattice_m(sq, sr) - bm);
+        if d > mx { mx = d; }
+      }
+    }
+  }
+  mx
+}
+
+// Is the set EXACTLY the disk of its own outermost shell about (cq, cr)?  A tower must be, and a
+// blob will not be — this is what stops an arbitrary round-ish region being read as an arc.
+pub fn arc_is_disk(cells: HexSet, cq: integer, cr: integer) -> boolean {
+  n24 = arc_shell_max(cells, cq, cr);
+  if n24 < 0 { return false; }
+  bk = lattice_k(cq, cr);
+  bm = lattice_m(cq, cr);
+  for dr in hexset_r0(cells)..hexset_r0(cells) + hexset_h(cells) {
+    for dq in hexset_q0(cells)..hexset_q0(cells) + hexset_w(cells) {
+      inside = vec_n2_4(lattice_k(dq, dr) - bk, lattice_m(dq, dr) - bm) <= n24;
+      if inside != hexset_get(cells, dq, dr) { return false; }
+    }
+  }
+  true
+}
+
+// Recover the centre: the unique cell about which the set IS a disk.  Searched over the cells of
+// the set itself — a disk's centre is always one of its own cells — so this is O(cells²) and needs
+// no guess.  Returns `found = false` when the region is not a disk about any of them, which is the
+// R2 answer for a shape that is not an arc.
+pub fn arc_recover_centre(cells: HexSet) -> (integer, integer, boolean) {
+  for cr2 in hexset_r0(cells)..hexset_r0(cells) + hexset_h(cells) {
+    for cq2 in hexset_q0(cells)..hexset_q0(cells) + hexset_w(cells) {
+      if hexset_get(cells, cq2, cr2) {
+        if arc_is_disk(cells, cq2, cr2) { return (cq2, cr2, true); }
+      }
+    }
+  }
+  (0, 0, false)
+}
+
+// The shells that actually exist out to `n24`, ascending — the admissible radius grid, i.e. `Sep`
+// made concrete.  A value of `N` that no `(k,m)` realises is not a shell and cannot be authored.
+pub fn arc_shells_upto(n24: integer) -> vector<integer> {
+  out: vector<integer> = [];
+  for sk in -12..13 {
+    for sm in -24..25 {
+      // A REALISABLE offset, not merely a lattice point.  A cell-to-cell difference has
+      // `m = 3*dr`, so m must be divisible by THREE, and `k = 2*dq + parity(dr)`, so k must match
+      // the parity of `m/3`.  Taking only `k = m (mod 2)` admits offsets like `(0,2)` that no pair
+      // of cells realises, which invents shells (N = 4) whose disk is identical to the one below.
+      if ((sm % 3) + 3) % 3 == 0
+         && ((sk - ((sm / 3) ?? 0)) % 2 + 2) % 2 == 0 {
+        v = vec_n2_4(sk, sm);
+        if v <= n24 {
+          seen = false;
+          for oi in 0..len(out) { if (out[oi] ?? -1) == v { seen = true; } }
+          if !seen { out += [v]; }
+        }
+      }
+    }
+  }
+  for si in 1..len(out) {
+    ps = si;
+    while ps > 0 && (out[ps - 1] ?? 0) > (out[ps] ?? 0) {
+      t = out[ps - 1] ?? 0;
+      out[ps - 1] = out[ps] ?? 0;
+      out[ps] = t;
+      ps = ps - 1;
+    }
+  }
+  out
+}
+
+// ── A7 — A DOOR ON THE TOWER WALL ──────────────────────────────────────────
+//
+// The tower is a filled disk (above); its wall is the boundary edge loop (`draw_walls`).  A door
+// is a MATERIAL OVERRIDE on a contiguous span of those boundary edges — it re-materials them, it
+// NEVER deletes a cell or an edge.  This is the whole of A7, and it composes the arc (A6) with the
+// feature (A5) at no cost, because:
+//
+//   arc recovery (`arc_recover_centre`, `arc_shell_max`) consumes only the CELL set, and a door
+//   touches only edge MATERIALS — so the doored tower's cells are byte-identical to the plain
+//   tower's, and its centre and shell come back unchanged.  The doored tower is ONE arc.
+//
+// The door reads straight back off storage: a boundary edge carrying the door material IS a door
+// (ROUNDTRIP §2.4.1), so recovery is R1, not a fit.  Deleting the edges instead would fragment the
+// wall into k arcs — the doored-tower defect (design/FEATURES.md §3).  `arc_door_wedge` cannot
+// express that: it only writes a material, so the defect is unreachable through the door API and a
+// gate has to reach around it to reproduce the fault.
+//
+// The door's angular span is the wedge between two integer rays from the centre.  A positive-
+// diagonal map (k -> k·√3/2, m -> m/2) preserves the CCW cyclic order of directions, so the wedge
+// test is an exact integer cross product in lattice coords — `hexarc` stays float-free.
+
+// Cross product of two lattice-coordinate vectors — exact integer; its sign is the turn direction.
+fn arc_xprod(ak: integer, am: integer, bk: integer, bm: integer) -> integer { ak * bm - am * bk }
+
+// Is cell (q,r) inside the angular wedge running CCW from ray `lo` up to ray `hi`, about centre
+// (cq,cr)?  The wedge must span less than 180°, so `lo` and `hi` bound one contiguous arc.
+pub fn arc_wedge_has(cq: integer, cr: integer, q: integer, r: integer,
+                     lok: integer, lom: integer, hik: integer, him: integer) -> boolean {
+  ok = lattice_k(q, r) - lattice_k(cq, cr);
+  om = lattice_m(q, r) - lattice_m(cq, cr);
+  arc_xprod(lok, lom, ok, om) >= 0 && arc_xprod(ok, om, hik, him) > 0
+}
+
+// Place a door on the wall: re-material every boundary edge whose inside cell lies in the wedge to
+// `mat`.  Annotation only — no cell or edge is removed — so the disk, and therefore the recovered
+// centre and shell, are untouched.  Returns the number of edges marked.  The arc analog of
+// `place_opening`.
+pub fn arc_door_wedge(cells: HexSet, edges: EdgeSet, cq: integer, cr: integer,
+                      lok: integer, lom: integer, hik: integer, him: integer,
+                      mat: integer) -> integer {
+  n = 0;
+  for dr in hexset_r0(cells)..hexset_r0(cells) + hexset_h(cells) {
+    for dq in hexset_q0(cells)..hexset_q0(cells) + hexset_w(cells) {
+      if hexset_get(cells, dq, dr) && arc_wedge_has(cq, cr, dq, dr, lok, lom, hik, him) {
+        for dd in 0..6 {
+          nq = nb_q(dq, dr, dd);
+          nr = nb_r(dq, dr, dd);
+          if !hexset_get(cells, nq, nr) {
+            edge_set_mat(edges, dq, dr, nq, nr, mat);
+            n = n + 1;
+          }
+        }
+      }
+    }
+  }
+  n
+}
+
+// Recover the door: count the boundary edges carrying `mat`, each exactly once (only the inside
+// cell of a boundary edge is in the set, so iterating inside cells visits every boundary edge
+// once).  This is the R1 read of the feature straight off storage.
+pub fn arc_door_edges(cells: HexSet, edges: EdgeSet, mat: integer) -> integer {
+  n = 0;
+  for er in hexset_r0(cells)..hexset_r0(cells) + hexset_h(cells) {
+    for eq in hexset_q0(cells)..hexset_q0(cells) + hexset_w(cells) {
+      if hexset_get(cells, eq, er) {
+        for ed in 0..6 {
+          nq = nb_q(eq, er, ed);
+          nr = nb_r(eq, er, ed);
+          if !hexset_get(cells, nq, nr) && edge_mat(edges, eq, er, nq, nr) == mat {
+            n = n + 1;
+          }
+        }
+      }
+    }
+  }
+  n
+}

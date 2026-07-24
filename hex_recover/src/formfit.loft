@@ -1,0 +1,393 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// formfit — `rebuild` : 𝔽 → 𝕄*, LEVEL 1.  REGIME R1, SO IT IS A MATCH AND NOT A FIT.
+//
+// `ROUNDTRIP` §6: for a stencil WE AUTHORED the grammar is the prior, and it constrains the answer
+// to a FINITE set. Recovery is therefore an **exact integer match against that set** — `ρ = 0`, no
+// tolerance anywhere. Reaching for R2's machinery here (fitting a line to a shape whose complete
+// description we hold) would throw away an exact answer and reintroduce a knob nothing needs.
+//
+// WHAT MAKES THE MATCH LEGITIMATE is the S5 census, not an assumption: it DECIDED that level 1 is
+// finite and that law F holds over it, so an exact match is unique when it exists. `rebuild` does
+// not take that on trust either — it counts its matches and refuses to answer if more than one
+// candidate fits.
+//
+// WHEN NOTHING MATCHES, IT SAYS SO. A footprint that no grammar form draws is **R2** — arbitrary
+// cell-authored content, no `𝕋` behind it — and the one thing `rebuild` must never do is return a
+// confident R1 answer for it. It reports the regime and a residual instead.
+use hex_field;
+use hex_form;
+use formcensus;
+
+// A compact window: every level-1 shape is a handful of cells around the anchor.
+const FW = 25;
+const FH = 25;
+const FQ0 = -12;
+const FR0 = -12;
+
+pub const REGIME_R1 = 1;
+pub const REGIME_R2 = 2;
+
+pub struct Rebuilt {
+  rb_regime:  integer,   // REGIME_R1 (exact, unique) or REGIME_R2 (no grammar form draws this)
+  rb_form:    Form,      // the recovered model — meaningful only in R1
+  rb_rho:     integer,   // 0 in R1; the smallest unexplained-cell count in R2
+  rb_matches: integer,   // how many candidates matched exactly; >1 means the level is ambiguous
+}
+
+// ── the admitted set — the candidate space `rebuild` matches against ───────
+//
+// `LEVEL` is how far up the ladder recovery is claimed to work. It must be raised in step with the
+// corpus: a corpus entry whose form is above this level would find NO candidate and be reported as
+// R2 — a silent loss of an exact answer. `tests/trip.loft` covers every committed level, so that
+// mismatch fails the gate rather than passing quietly.
+pub const LEVEL = 2;
+
+// The candidate space: A1/A2 (3 sides, len <= LEVEL) plus A3 (side counts 4..6 at len 1).
+//
+// ENUMERATING THIS IS THE EXPENSIVE PART, so callers that recover many fields must build it ONCE
+// and pass it to `rebuild_with`. `rebuild` re-enumerates on every call, which is fine for a single
+// lookup and quadratic waste over a corpus.
+pub fn candidate_forms() -> vector<Form> {
+  out = forms_upto(LEVEL);
+  a3 = forms_a3();
+  for ai in 0..len(a3) { out += [a3[ai] ?? form_new(0, [], [])]; }
+  out
+}
+
+// Retained for the A1 gates: the level-1 enumeration on its own.
+pub fn level1_forms() -> vector<Form> {
+  out: vector<Form> = [];
+  texts: vector<text> = [];
+  for eh in 0..12 {
+    for ea in 1..12 {
+      for eb in 1..12 {
+        ec = 12 - ea - eb;
+        if ec >= 1 && ec <= 11 {
+          ef = form_new(eh, [1, 1, 1], [ea, eb, ec]);
+          if form_closes(ef) {
+            cf = form_canon(ef);
+            ct = form_write(cf, "a1");
+            seen = false;
+            for si in 0..len(texts) { if (texts[si] ?? "") == ct { seen = true; } }
+            if !seen { texts += [ct]; out += [cf]; }
+          }
+        }
+      }
+    }
+  }
+  out
+}
+
+// How many keys are in exactly one of the two sorted lists — the symmetric difference. This is
+// the R2 residual: cells the best grammar form cannot account for. It is a COUNT, not a distance,
+// so no tolerance is implied by it.
+fn sym_diff(a: vector<integer>, b: vector<integer>) -> integer {
+  n = 0;
+  for ai in 0..len(a) {
+    found = false;
+    for aj in 0..len(b) { if (a[ai] ?? 0) == (b[aj] ?? 0) { found = true; } }
+    if !found { n = n + 1; }
+  }
+  for bi in 0..len(b) {
+    found2 = false;
+    for bj in 0..len(a) { if (b[bi] ?? 0) == (a[bj] ?? 0) { found2 = true; } }
+    if !found2 { n = n + 1; }
+  }
+  n
+}
+
+// THE ROUTINE. Match the field against every admitted form, translation-normalised — WHERE it was
+// drawn is placement's business (the `place` element), not the stencil's.
+pub fn rebuild(cells: HexSet) -> Rebuilt { rebuild_with(candidate_forms(), cells) }
+
+// The core, with the candidate set supplied — build it once per gate run, not once per lookup.
+pub fn rebuild_with(cand: vector<Form>, cells: HexSet) -> Rebuilt {
+  want = field_norm(cells);
+  nmatch = 0;
+  best = form_new(0, [], []);
+  rho = -1;
+  for ci in 0..len(cand) {
+    cf = cand[ci] ?? form_new(0, [], []);
+    cc = hexset_chunk(FQ0, FR0, FW, FH);
+    form_fill(cf, 0, 0, cc);
+    got = field_norm(cc);
+    d = sym_diff(want, got);
+    if d == 0 {
+      nmatch = nmatch + 1;
+      best = cf;
+    }
+    if rho < 0 || d < rho { rho = d; }
+  }
+  if nmatch == 1 {
+    return Rebuilt { rb_regime: REGIME_R1, rb_form: best, rb_rho: 0, rb_matches: 1 };
+  }
+  // No unique grammar form draws this field: it is R2 content, and the residual is reported
+  // rather than swallowed. `rb_matches > 1` would mean law F failed at this level — the census
+  // says it does not, so the gate treats that as a hard error rather than an answer.
+  Rebuilt { rb_regime: REGIME_R2, rb_form: best, rb_rho: rho, rb_matches: nmatch }
+}
+
+// The round trip in one call: field -> model -> canonical text. Empty when recovery is not R1,
+// so a caller cannot accidentally spell an R2 guess as if it were an authored stencil.
+pub fn rebuild_text_with(cand: vector<Form>, cells: HexSet, name: text) -> text {
+  r = rebuild_with(cand, cells);
+  if r.rb_regime != REGIME_R1 { return ""; }
+  form_write(r.rb_form, name)
+}
+
+pub fn rebuild_text(cells: HexSet, name: text) -> text {
+  r = rebuild(cells);
+  if r.rb_regime != REGIME_R1 { return ""; }
+  form_write(r.rb_form, name)
+}
+
+// ── INDEXED RECOVERY — draw the candidates ONCE, then look up ──────────────
+//
+// `rebuild_with` re-DRAWS every candidate on every lookup: O(N) fills per field, O(N^2) over a
+// corpus — 14161 fills for the 119 entries we hold. Nothing about that is necessary. A candidate's
+// field never changes, so its digest can be computed once and put in a map keyed by the digest.
+// Recovery then becomes a single probe.
+//
+// WHAT THIS DOES AND DOES NOT BUY, stated plainly because the A3 write-up overstated it:
+//
+//   IT FIXES   the per-lookup cost — O(N) fills to build the index, O(1) per recovery afterwards.
+//   IT DOES NOT FIX   the cost of ENUMERATING the candidate space. Building the index still walks
+//                     every admissible form once, so the 4-sided house's class (~1.2M proposals,
+//                     `X43`) is exactly as far out of reach as before. Reaching THAT needs
+//                     CONSTRUCTIVE recovery — reading (h0, lens, turns) off the field's own
+//                     geometry — which is a different piece of work, not a faster table.
+//
+// LAW F IS CHECKED AT BUILD TIME, ONCE, INSTEAD OF ASSUMED PER LOOKUP. Two candidates sharing a
+// digest would silently overwrite each other in the map, so the build COUNTS such clashes and the
+// gate asserts zero. That is strictly better than the old per-lookup `rb_matches` count: it is
+// checked once, over the whole space, rather than only where a corpus entry happened to look.
+pub struct IdxEntry {
+  ix_digest: text,      // `field_norm_text` of the form's drawn field — NOT named `key`
+  ix_form:   Form,
+}
+
+pub struct RecoveryIndex {
+  ri_map:        hash<IdxEntry[ix_digest]>,
+  ri_count:      integer,   // entries indexed
+  ri_collisions: integer,   // candidates whose digest was already taken — a law F failure
+  ri_fills:      integer,   // draws performed to build it (the cost, reported not guessed)
+}
+
+pub fn index_build(cand: vector<Form>) -> RecoveryIndex {
+  idx = RecoveryIndex { ri_map: [], ri_count: 0, ri_collisions: 0, ri_fills: 0 };
+  for ii in 0..len(cand) {
+    cf = cand[ii] ?? form_new(0, [], []);
+    cc = hexset_chunk(FQ0, FR0, FW, FH);
+    form_fill(cf, 0, 0, cc);
+    idx.ri_fills = idx.ri_fills + 1;
+    dg = field_norm_text(cc);
+    prior = idx.ri_map[dg];
+    if prior == null {
+      idx.ri_map += [IdxEntry { ix_digest: dg, ix_form: cf }];
+      idx.ri_count = idx.ri_count + 1;
+    } else {
+      idx.ri_collisions = idx.ri_collisions + 1;
+    }
+  }
+  idx
+}
+
+// THE FAST PATH: one probe. A hit is an exact R1 answer — the digest IS the field, compared in
+// full, so this is the same exactness the scan gave, not a heuristic narrowing.
+//
+// A MISS falls back to the scan, and only then, purely to compute the R2 residual. R2 is the
+// exceptional path (content no grammar form draws), so paying O(N) there costs nothing in
+// practice and keeps `rho > 0` a real measurement rather than a placeholder.
+pub fn rebuild_indexed(idx: RecoveryIndex, cand: vector<Form>, cells: HexSet) -> Rebuilt {
+  hit = idx.ri_map[field_norm_text(cells)];
+  if hit != null {
+    return Rebuilt { rb_regime: REGIME_R1, rb_form: hit.ix_form, rb_rho: 0, rb_matches: 1 };
+  }
+  rebuild_with(cand, cells)
+}
+
+pub fn rebuild_indexed_text(idx: RecoveryIndex, cand: vector<Form>,
+                            cells: HexSet, name: text) -> text {
+  r = rebuild_indexed(idx, cand, cells);
+  if r.rb_regime != REGIME_R1 { return ""; }
+  form_write(r.rb_form, name)
+}
+
+// ── CONSTRUCTIVE RECOVERY — read the form off the field, no enumeration ────
+//
+// Indexed recovery removed the per-lookup cost but is BUILT BY the enumeration, so it left the
+// 4-sided house (~1.2M proposals, `X43`) exactly as far away. This does not enumerate at all: it
+// reads `(h0, lens, turns)` off the field's own geometry, in O(cells), independent of how large
+// the admissible space is.
+//
+// THE CONSTRUCTION, and why it is exact rather than a fit:
+//
+//   1. every admitted form is CONVEX.  Law J requires the turns to be positive and to sum to 12 —
+//      all exterior angles positive, exactly one revolution — which is the definition of a convex
+//      polygon.  (A4's non-convex forms need a negative turn, so they fall outside this and want
+//      boundary TRACING instead; stated as a limit, not discovered later.)
+//   2. the turtle walks CENTRE TO CENTRE, so every polygon vertex IS a hex centre (S3), and
+//      `form_fill` takes every hex on or inside.  For a convex polygon whose vertices are lattice
+//      points, the CONVEX HULL of the contained lattice points is the polygon itself — its corners
+//      are extreme points and cannot be hulled away.
+//   3. so: hull the filled cells in exact integer (k,m); the hull vertices ARE the turtle's
+//      corners, in order.  Collinear cells along a long side are interior to an edge and drop out,
+//      which is exactly right — they are not corners.
+//   4. each side vector is an exact integer multiple of one of the 12 heading steps, found by
+//      trying all 12.  No gcd reduction: `head_step(0)` is `(2,0)`, not `(1,0)`, so a primitive
+//      reduction would land off the table.
+//
+// THE HULL IS TAKEN IN (k,m), NOT IN WORLD COORDINATES, and that is safe: `(k,m) -> (k*sqrt3/2,
+// m/2)` is linear with determinant `sqrt3/4 > 0`, so it preserves convexity AND orientation. The
+// integer arithmetic is therefore exact — no floats enter the recovery at any point.
+//
+// AND IT STILL VERIFIES. The construction PROPOSES a form; one re-draw CONFIRMS it. That keeps
+// `ρ = 0` a measured fact rather than a claim, and sends anything that does not reproduce its own
+// field to R2 — where a hand-drawn blob belongs.
+const PK_OFF = 400;
+const PK_SPAN = 1600;
+
+fn pk(k: integer, m: integer) -> integer { (k + PK_OFF) * PK_SPAN + (m + PK_OFF) }
+fn pk_k(v: integer) -> integer { ((v / PK_SPAN) ?? 0) - PK_OFF }
+fn pk_m(v: integer) -> integer { ((v % PK_SPAN) ?? 0) - PK_OFF }
+
+fn sort_pk(v: vector<integer>) -> vector<integer> {
+  out: vector<integer> = [];
+  for si in 0..len(v) {
+    out += [v[si] ?? 0];
+    ps = len(out) - 1;
+    while ps > 0 && (out[ps - 1] ?? 0) > (out[ps] ?? 0) {
+      tmp = out[ps - 1] ?? 0;
+      out[ps - 1] = out[ps] ?? 0;
+      out[ps] = tmp;
+      ps = ps - 1;
+    }
+  }
+  out
+}
+
+// Twice the signed area of the triangle o->a->b. Positive when b is left of o->a (CCW).
+fn cross3(ok2: integer, om: integer, ak: integer, am: integer,
+          bk: integer, bm: integer) -> integer {
+  (ak - ok2) * (bm - om) - (am - om) * (bk - ok2)
+}
+
+// The convex hull of the filled cells, CCW, corners only — monotone chain in exact integers.
+// Collinear points are dropped (`<= 0` pops them), which is what makes long sides come back as one
+// side instead of a run of tiny ones.
+pub fn hull_keys(cells: HexSet) -> vector<integer> {
+  pts: vector<integer> = [];
+  for hr in hexset_r0(cells)..hexset_r0(cells) + hexset_h(cells) {
+    for hq in hexset_q0(cells)..hexset_q0(cells) + hexset_w(cells) {
+      if hexset_get(cells, hq, hr) { pts += [pk(lattice_k(hq, hr), lattice_m(hq, hr))]; }
+    }
+  }
+  sp = sort_pk(pts);
+  n = len(sp);
+  out: vector<integer> = [];
+  if n < 3 { return sp; }
+  // lower hull, then upper hull
+  st: vector<integer> = [];
+  top = 0;
+  for li in 0..n {
+    p = sp[li] ?? 0;
+    while top >= 2
+          && cross3(pk_k(st[top - 2] ?? 0), pk_m(st[top - 2] ?? 0),
+                    pk_k(st[top - 1] ?? 0), pk_m(st[top - 1] ?? 0),
+                    pk_k(p), pk_m(p)) <= 0 { top = top - 1; }
+    if top < len(st) { st[top] = p; } else { st += [p]; }
+    top = top + 1;
+  }
+  lower = top - 1;
+  for ui in 0..n {
+    p2 = sp[n - 1 - ui] ?? 0;
+    while top >= lower + 2
+          && cross3(pk_k(st[top - 2] ?? 0), pk_m(st[top - 2] ?? 0),
+                    pk_k(st[top - 1] ?? 0), pk_m(st[top - 1] ?? 0),
+                    pk_k(p2), pk_m(p2)) <= 0 { top = top - 1; }
+    if top < len(st) { st[top] = p2; } else { st += [p2]; }
+    top = top + 1;
+  }
+  for oi in 0..top - 1 { out += [st[oi] ?? 0]; }
+  out
+}
+
+// Which heading, and how many steps, is the vector (dk, dm)?  Tries all 12 — a constant — because
+// the heading table's steps are not primitive vectors and a gcd reduction would miss them.
+// Returns the heading, or -1 when the vector is not a whole number of steps in any heading.
+pub fn side_heading(dk: integer, dm: integer) -> integer {
+  for sh in 0..HEAD_N {
+    st = head_step(sh);
+    if st.0 == 0 {
+      if dk == 0 && st.1 != 0 && dm % st.1 == 0 && ((dm / st.1) ?? 0) > 0 { return sh; }
+    } else {
+      if dk % st.0 == 0 {
+        q = (dk / st.0) ?? 0;
+        if q > 0 && q * st.1 == dm { return sh; }
+      }
+    }
+  }
+  -1
+}
+
+pub fn side_len(dk: integer, dm: integer, h: integer) -> integer {
+  st = head_step(h);
+  if st.0 != 0 { return (dk / st.0) ?? 0; }
+  if st.1 != 0 { return (dm / st.1) ?? 0; }
+  0
+}
+
+// THE ROUTINE: recover the form from the field, then verify by re-drawing it.
+pub fn rebuild_construct(cells: HexSet) -> Rebuilt {
+  hk = hull_keys(cells);
+  nh = len(hk);
+  if nh < 3 {
+    return Rebuilt { rb_regime: REGIME_R2, rb_form: form_new(0, [], []),
+                     rb_rho: hexset_count(cells), rb_matches: 0 };
+  }
+  lens: vector<integer> = [];
+  hs: vector<integer> = [];
+  bad = false;
+  for ci in 0..nh {
+    ak = pk_k(hk[ci] ?? 0);
+    am = pk_m(hk[ci] ?? 0);
+    bk = pk_k(hk[(ci + 1) % nh] ?? 0);
+    bm = pk_m(hk[(ci + 1) % nh] ?? 0);
+    sh = side_heading(bk - ak, bm - am);
+    if sh < 0 { bad = true; }
+    else {
+      hs += [sh];
+      lens += [side_len(bk - ak, bm - am, sh)];
+    }
+  }
+  if bad || len(hs) != nh {
+    return Rebuilt { rb_regime: REGIME_R2, rb_form: form_new(0, [], []),
+                     rb_rho: hexset_count(cells), rb_matches: 0 };
+  }
+  turns: vector<integer> = [];
+  for ti in 0..nh {
+    d = head_norm((hs[(ti + 1) % nh] ?? 0) - (hs[ti] ?? 0));
+    if d == 0 { d = 12; }
+    turns += [d];
+  }
+  cf = form_canon(form_new(hs[0] ?? 0, lens, turns));
+  if !form_closes(cf) {
+    return Rebuilt { rb_regime: REGIME_R2, rb_form: form_new(0, [], []),
+                     rb_rho: hexset_count(cells), rb_matches: 0 };
+  }
+  // VERIFY by re-drawing. The construction proposes; this confirms, so `rho = 0` stays measured.
+  chk = hexset_chunk(FQ0, FR0, FW, FH);
+  form_fill(cf, 0, 0, chk);
+  d2 = sym_diff(field_norm(cells), field_norm(chk));
+  if d2 == 0 {
+    return Rebuilt { rb_regime: REGIME_R1, rb_form: cf, rb_rho: 0, rb_matches: 1 };
+  }
+  Rebuilt { rb_regime: REGIME_R2, rb_form: cf, rb_rho: d2, rb_matches: 0 }
+}
+
+pub fn rebuild_construct_text(cells: HexSet, name: text) -> text {
+  r = rebuild_construct(cells);
+  if r.rb_regime != REGIME_R1 { return ""; }
+  form_write(r.rb_form, name)
+}

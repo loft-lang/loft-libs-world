@@ -1,0 +1,161 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// formtext — THE CANONICAL TEXT `𝕋` FOR A CYCLE FORM, AND ITS PARSER.
+//
+// `write` and `read` for the S1 cycle form only: `stencil / h0 / side len turn`. Rules **C1–C5**
+// (`DESIGN.md` §3) — integers only, fixed order, reduced forms, fixed layout, defaults omitted.
+//
+// A MODEL HAS EXACTLY ONE SPELLING. That is the whole point of a canonical text: the round-trip
+// gate is a byte `diff` (`P3`), which only means anything if the same model cannot be written two
+// ways. Two things make a cycle ambiguous, and both have to be pinned:
+//
+//   the WINDING     a cycle walked the other way round is the same shape with turn total -12.
+//                   Law J already requires +12, so C3 picks one of the two — SETTLED at S1.
+//   the START CORNER  a closed cycle has no distinguished first corner: `[2,5,5]`, `[5,5,2]` and
+//                   `[5,2,5]` are one triangle walked from three places, at three different h0.
+//                   The S5 census MEASURED this — 183 collisions, every one a re-spelling — and
+//                   it is what `X38` records. Fixing the winding is necessary and NOT sufficient.
+//
+// THE RULE: of the n cyclic spellings, the canonical one is the lexicographically smallest
+// `(turns, lens, h0)`. Deterministic, total, and it needs no tie-break convention on top —
+// a fully periodic cycle like `[4,4,4]` has several spellings with identical turns, and the `h0`
+// component then decides.
+//
+// ORIENTATION IS NOT QUOTIENTED HERE, deliberately. `h0` is the stencil's own authored heading,
+// and placement carries `orient` separately (`DESIGN.md` §3's example). Two stencils differing
+// only by `h0` are different authorings that law **I** makes interchangeable at USE time — that is
+// placement's job, not the text's. After corner-canonicalisation the only multiplicity left among
+// the S5 forms is exactly `h0`, which is the clean decomposition.
+use hexform;
+
+// ── C2/C4: the layout ──────────────────────────────────────────────────────
+//
+// One element per line, single-space separators, no trailing space. Fields in declaration order:
+// `stencil <name> h0 <n>` then one `side <i> len <l> turn <t>` per side, in index order.
+pub fn form_write(f: Form, name: text) -> text {
+  lens = f.fm_len;
+  turns = f.fm_turn;
+  s = "stencil {name} h0 {f.fm_h0}";
+  for wi in 0..len(lens) {
+    s = s + "\nside {wi} len {lens[wi] ?? 0} turn {turns[wi] ?? 0}";
+  }
+  s
+}
+
+// ── the canonical spelling: fix the START CORNER (X38) ─────────────────────
+//
+// Spelling `s` starts the walk at corner `s`: the side and turn sequences rotate left by `s`, and
+// the starting heading advances by the turns that were skipped.
+fn shift_lens(lens: vector<integer>, s: integer) -> vector<integer> {
+  n = len(lens);
+  out: vector<integer> = [];
+  for li in 0..n { out += [lens[(li + s) % n] ?? 0]; }
+  out
+}
+
+fn shift_turns(turns: vector<integer>, s: integer) -> vector<integer> {
+  n = len(turns);
+  out: vector<integer> = [];
+  for ti in 0..n { out += [turns[(ti + s) % n] ?? 0]; }
+  out
+}
+
+fn shift_h0(f: Form, s: integer) -> integer {
+  turns = f.fm_turn;
+  h = f.fm_h0;
+  for hi in 0..s { h = h + (turns[hi] ?? 0); }
+  head_norm(h)
+}
+
+// Lexicographic compare on two equal-length integer vectors: -1, 0, +1.
+fn cmp_vec(a: vector<integer>, b: vector<integer>) -> integer {
+  n = len(a);
+  if len(b) < n { n = len(b); }
+  for ci in 0..n {
+    av = a[ci] ?? 0;
+    bv = b[ci] ?? 0;
+    if av < bv { return -1; }
+    if av > bv { return 1; }
+  }
+  if len(a) < len(b) { return -1; }
+  if len(a) > len(b) { return 1; }
+  0
+}
+
+// THE CANONICAL SPELLING — smallest `(turns, lens, h0)` over the n cyclic starts.
+pub fn form_canon(f: Form) -> Form {
+  n = len(f.fm_len);
+  if n == 0 { return f; }
+  bt = shift_turns(f.fm_turn, 0);
+  bl = shift_lens(f.fm_len, 0);
+  bh = shift_h0(f, 0);
+  for si in 1..n {
+    ct = shift_turns(f.fm_turn, si);
+    cl = shift_lens(f.fm_len, si);
+    ch = shift_h0(f, si);
+    ord = cmp_vec(ct, bt);
+    if ord == 0 { ord = cmp_vec(cl, bl); }
+    if ord == 0 {
+      if ch < bh { ord = -1; } else { ord = 1; }
+    }
+    if ord < 0 { bt = ct; bl = cl; bh = ch; }
+  }
+  form_new(bh, bl, bt)
+}
+
+// The canonical text of a form, whichever corner it happened to be written from.
+pub fn form_canon_text(f: Form, name: text) -> text { form_write(form_canon(f), name) }
+
+// ── the parser ─────────────────────────────────────────────────────────────
+//
+// Strict by design: the reader accepts exactly what `form_write` emits. A lenient reader would
+// let a non-canonical spelling in and the byte-diff gate would stop meaning anything — the text
+// IS the contract, so anything it cannot round-trip must be refused rather than repaired.
+fn nth_word(line: text, i: integer) -> text {
+  parts = line.split(' ');
+  parts[i] ?? ""
+}
+
+// The parens must NOT wrap the cast: loft wants the `??` discharged at the parse site
+// itself (`s as integer ?? 0`), not applied to an already-parenthesised fallible cast.
+fn word_int(line: text, i: integer) -> integer { nth_word(line, i) as integer ?? 0 }
+
+pub fn form_read_name(t: text) -> text {
+  lines = t.split('\n');
+  nth_word(lines[0] ?? "", 1)
+}
+
+// Parse a canonical text back into a Form. Returns a 0-sided form if the text does not have the
+// canonical shape — the caller checks, and the gate treats that as a refusal.
+pub fn form_read(t: text) -> Form {
+  lines = t.split('\n');
+  nl = len(lines);
+  if nl < 2 { return form_new(0, [], []); }
+  head = lines[0] ?? "";
+  if nth_word(head, 0) != "stencil" { return form_new(0, [], []); }
+  if nth_word(head, 2) != "h0" { return form_new(0, [], []); }
+  h0 = word_int(head, 3);
+  lens: vector<integer> = [];
+  turns: vector<integer> = [];
+  for ri in 1..nl {
+    ln = lines[ri] ?? "";
+    if nth_word(ln, 0) != "side" { return form_new(0, [], []); }
+    if nth_word(ln, 2) != "len" { return form_new(0, [], []); }
+    if nth_word(ln, 4) != "turn" { return form_new(0, [], []); }
+    if word_int(ln, 1) != ri - 1 { return form_new(0, [], []); }   // C2: index order
+    lens += [word_int(ln, 3)];
+    turns += [word_int(ln, 5)];
+  }
+  form_new(h0, lens, turns)
+}
+
+pub fn form_eq(a: Form, b: Form) -> boolean {
+  if a.fm_h0 != b.fm_h0 { return false; }
+  if len(a.fm_len) != len(b.fm_len) { return false; }
+  if len(a.fm_turn) != len(b.fm_turn) { return false; }
+  for ei in 0..len(a.fm_len) {
+    if (a.fm_len[ei] ?? 0) != (b.fm_len[ei] ?? 0) { return false; }
+    if (a.fm_turn[ei] ?? 0) != (b.fm_turn[ei] ?? 0) { return false; }
+  }
+  true
+}
