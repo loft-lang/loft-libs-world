@@ -1,0 +1,307 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// body — THE MOVING BODY: rigs, revolute joints, pure poses, and collision proxies.
+//
+// `G1`, the first brick of the body half (`plans/m1-moving-body/`).  The load-bearing decision,
+// from the user: **a body is a RIG — bones and the limits in the joints between them, never a
+// pose** (`SPEC` **I-POSE**).  So this module never stores a pose; it COMPUTES one from the current
+// joint values, and that computation is a **pure function** (`SPEC` **I6**).  Purity is not a
+// testability nicety here — it IS the scope boundary `L15` draws: hexbody answers *where a part is
+// NOW*, never *what it will do*, and a pose that depended on history would have smuggled in a
+// future.
+//
+// Re-measured from crawler's `hexwheel`/`wheeltest` (`T2 → T1`): the wheel's rolling identity holds
+// **by construction, not by tuning**, because the joint value is computed FROM travel rather than
+// accumulated.  Its own framing — *"phase is computed from the distance, so `Δφ·2πr = Δd` holds by
+// construction"* — is exactly `I6`.  ⚠ **Flex is joints, not deformation** (`I-POSE`): a part that
+// bends is more bones on more joints, so this survives a flexing wing unchanged and hexbody needs
+// no skinning.
+
+const TAU = 6.283185307179586;   // one turn, in radians
+
+fn fabs(x: float) -> float { if x < 0.0 { 0.0 - x } else { x } }
+
+// A REVOLUTE JOINT: its current value (in TURNS — a value of 1.0 is one revolution, the number a
+// contact point actually cares about) and its LIMITS.  The limits are the joint's `fits?` doorstep
+// (`K-FIT`): a joint value is ORDINAL, so a refusal owes an OFFER of the nearest admissible — unlike
+// a material id, which is nominal and offers nothing (`X68`).
+pub struct Joint {
+  jt_value: float,   // the joint value, in turns
+  jt_lo:    float,   // limit low  (turns)
+  jt_hi:    float,   // limit high (turns)
+}
+
+pub fn joint_new(value: float, lo: float, hi: float) -> Joint {
+  Joint { jt_value: value, jt_lo: lo, jt_hi: hi }
+}
+
+// FORWARD KINEMATICS (phase B): a point `(lx, ly)` in a part's LOCAL frame, posed by rotating it
+// through the joint's angle.  A PURE FUNCTION of `(value, lx, ly)` — it reads no stored state, no
+// elapsed time, no call count, and no previous value.  Two different paths to the same `value`
+// therefore give byte-identical output, which is `I6` and the precondition for `I9`'s replay.
+pub fn pose_of(value: float, lx: float, ly: float) -> (float, float) {
+  th = value * TAU;
+  c = cos(th);
+  s = sin(th);
+  (lx * c - ly * s, lx * s + ly * c)
+}
+
+// A WHEEL is a revolute joint whose value is DERIVED from how far it has travelled (phase C):
+// `value = travel / (2πr)`.  Because the value is a function of travel and not an accumulation of
+// steps, the no-slip identity is exact by construction.  `slip` is the deliberate defect knob —
+// 0 for a true roll; non-zero is a skid, and it is the control that keeps `wheel_skid` honest.
+pub fn wheel_value(travel: float, radius: float, slip: float) -> float {
+  if radius < 0.000000001 { return 0.0; }
+  (1.0 + slip) * (travel / (TAU * radius) ?? 0.0)
+}
+
+// The joint value as an ANGLE in radians.
+pub fn wheel_angle(value: float) -> float { value * TAU }
+
+// THE SKID — the contact point's slip, `|r·θ − travel|`.  For a value derived by `wheel_value`
+// with `slip = 0` this is **machine-ε, not algebraic zero** — and that distinction was measured,
+// not assumed: `travel → value → r·θ` is a float round-trip (a divide by `2πr` then a multiply by
+// it), which f64 does not close bit-for-bit, so the residual is ~1 ulp of `travel`.  This is the
+// BODY'S SOLE FLOAT STEP — the wheel's `ε_seam` (`SPEC` **I-FSEAM**, `X53`): the pose/roll
+// computation is exactly where imprecision is licensed, bounded by machine ε and nowhere else.
+// It is NOT a `P4` violation: `P4` governs the R1 geometry round trip, which is integer and exact;
+// a wheel's roll is kinematics, which is the float frame.  Drive `θ` independently of `travel` —
+// the spec's *"spin a wheel off-travel"* — and the skid is a real distance, orders of magnitude
+// above ε.
+pub fn wheel_skid(radius: float, value: float, travel: float) -> float {
+  fabs(radius * wheel_angle(value) - travel)
+}
+
+// THE DOORSTEP (`K-FIT` for a joint): a value inside the joint's limits fits.
+pub fn joint_fits(j: Joint, value: float) -> boolean {
+  value >= j.jt_lo && value <= j.jt_hi
+}
+
+// The OFFER a refusal owes — the nearest admissible value.  A joint value is ordinal, so clamping
+// to the limit is a real correction the editor can show, not a silent snap to a different thing.
+pub fn joint_offer(j: Joint, value: float) -> float {
+  if value < j.jt_lo { return j.jt_lo; }
+  if value > j.jt_hi { return j.jt_hi; }
+  value
+}
+
+// The residual an offer carries — how far the requested value was from admissible.
+pub fn joint_residual(j: Joint, value: float) -> float {
+  fabs(value - joint_offer(j, value))
+}
+
+// ── THE RIG, AND ITS CANONICAL TEXT (phase A of plans/m1-moving-body) ────────
+//
+// A body's `original` is a RIG — `⟨bones, joint limits⟩`, never a pose (`SPEC` **I-POSE**).  A
+// bone is a segment with a **joint at its base** connecting it to its PARENT bone; the root bone
+// has no parent.  This is the shape a **flexing wing** takes: not a soft bone but more bones on
+// more joints, so the rig is a tree and the flex is joint values along it (`I-POSE`).
+//
+// The rig is a DESCRIPTION, so it round-trips like a stencil's `Form`: `write(read(R)) = R`
+// **byte-for-byte**, and a malformed text is REFUSED rather than repaired.  A rig carries floats
+// (offsets, lengths, joint limits), and the float↔text round trip is byte-exact in loft, so the
+// text is exact with no tolerance (`I-EXACT`/`P4`: content we authored recovers exactly).
+//
+// INDEX ORDER IS THE CANONICAL LABELLING.  A tree can be relabelled and describe the same rig; the
+// canonical form fixes the labels by requiring **topological order** — the root is bone 0 and every
+// bone's parent is an EARLIER bone.  The parser enforces it (a bone out of order, or referring to a
+// forward/absent parent, is refused), the same way `form_read` fixes the start corner by index
+// order (`C2`).  Fuller canonicalisation — collapsing every relabelling — is the census-shaped
+// problem `S5`–`S8` solved for forms; phase A's contract is the byte round trip, which topological
+// order plus a strict parser delivers.
+
+pub struct Rig {
+  rg_parent: vector<integer>,   // parent bone index; -1 for the root
+  rg_ox:     vector<float>,     // joint offset in the parent's frame (x)
+  rg_oy:     vector<float>,     // joint offset in the parent's frame (y)
+  rg_len:    vector<float>,     // the bone's length from its joint
+  rg_lo:     vector<float>,     // the joint's limit low  (turns)
+  rg_hi:     vector<float>,     // the joint's limit high (turns)
+}
+
+pub fn rig_new() -> Rig {
+  Rig { rg_parent: [], rg_ox: [], rg_oy: [], rg_len: [], rg_lo: [], rg_hi: [] }
+}
+
+// Append one bone, growing the rig's parallel field vectors in place.
+pub fn rig_bone(r: Rig, parent: integer, ox: float, oy: float, len: float,
+                lo: float, hi: float) -> Rig {
+  r.rg_parent += [parent];
+  r.rg_ox += [ox]; r.rg_oy += [oy]; r.rg_len += [len];
+  r.rg_lo += [lo]; r.rg_hi += [hi];
+  r
+}
+
+pub fn rig_count(r: Rig) -> integer { len(r.rg_parent) }
+
+// The joint at bone `i`, as a `Joint` carrying its limits (value defaults to 0 — the neutral pose).
+pub fn rig_joint(r: Rig, i: integer) -> Joint {
+  joint_new(0.0, r.rg_lo[i] ?? 0.0, r.rg_hi[i] ?? 0.0)
+}
+
+// ADMISSIBLE — topological (root is bone 0 with parent -1, every other parent is earlier), and
+// every joint limit is ordered `lo <= hi`.  This is the rig's doorstep: `fits?` for a whole rig.
+pub fn rig_admissible(r: Rig) -> boolean {
+  n = len(r.rg_parent);
+  if n == 0 { return false; }
+  if (r.rg_parent[0] ?? 0) != -1 { return false; }
+  for i in 0..n {
+    p = r.rg_parent[i] ?? 0;
+    if i == 0 {
+      if p != -1 { return false; }
+    } else {
+      if p < 0 || p >= i { return false; }        // parent must be an EARLIER bone
+    }
+    if (r.rg_lo[i] ?? 0.0) > (r.rg_hi[i] ?? 0.0) { return false; }
+  }
+  true
+}
+
+pub fn rig_write(r: Rig, name: text) -> text {
+  n = len(r.rg_parent);
+  s = "rig {name} bones {n}";
+  for bi in 0..n {
+    s = s + "\nbone {bi} parent {r.rg_parent[bi] ?? 0} at {r.rg_ox[bi] ?? 0.0} {r.rg_oy[bi] ?? 0.0}"
+        + " len {r.rg_len[bi] ?? 0.0} lim {r.rg_lo[bi] ?? 0.0} {r.rg_hi[bi] ?? 0.0}";
+  }
+  s
+}
+
+fn rig_word(line: text, i: integer) -> text {
+  parts = line.split(' ');
+  parts[i] ?? ""
+}
+fn rig_word_int(line: text, i: integer) -> integer { rig_word(line, i) as integer ?? 0 }
+fn rig_word_float(line: text, i: integer) -> float { rig_word(line, i) as float ?? 0.0 }
+
+// STRICT PARSER — accepts exactly what `rig_write` emits, refuses anything else by returning an
+// empty rig (which `rig_admissible` then rejects).  A lenient reader would void the byte diff.
+pub fn rig_read(t: text) -> Rig {
+  lines = t.split('\n');
+  nl = len(lines);
+  if nl < 1 { return rig_new(); }
+  head = lines[0] ?? "";
+  if rig_word(head, 0) != "rig" { return rig_new(); }
+  if rig_word(head, 2) != "bones" { return rig_new(); }
+  nb = rig_word_int(head, 3);
+  if nl != nb + 1 { return rig_new(); }
+  out = rig_new();
+  for ri in 1..nl {
+    ln = lines[ri] ?? "";
+    if rig_word(ln, 0) != "bone" { return rig_new(); }
+    if rig_word_int(ln, 1) != ri - 1 { return rig_new(); }     // index order, like form C2
+    if rig_word(ln, 2) != "parent" { return rig_new(); }
+    if rig_word(ln, 4) != "at" { return rig_new(); }
+    if rig_word(ln, 7) != "len" { return rig_new(); }
+    if rig_word(ln, 9) != "lim" { return rig_new(); }
+    out = rig_bone(out, rig_word_int(ln, 3), rig_word_float(ln, 5), rig_word_float(ln, 6),
+                   rig_word_float(ln, 8), rig_word_float(ln, 10), rig_word_float(ln, 11));
+  }
+  out
+}
+
+// Byte-exact equality — floats compared with `==`, no tolerance (`I-EXACT`).
+pub fn rig_eq(a: Rig, b: Rig) -> boolean {
+  n = len(a.rg_parent);
+  if len(b.rg_parent) != n { return false; }
+  for ei in 0..n {
+    if (a.rg_parent[ei] ?? 0) != (b.rg_parent[ei] ?? 0) { return false; }
+    if (a.rg_ox[ei] ?? 0.0) != (b.rg_ox[ei] ?? 0.0) { return false; }
+    if (a.rg_oy[ei] ?? 0.0) != (b.rg_oy[ei] ?? 0.0) { return false; }
+    if (a.rg_len[ei] ?? 0.0) != (b.rg_len[ei] ?? 0.0) { return false; }
+    if (a.rg_lo[ei] ?? 0.0) != (b.rg_lo[ei] ?? 0.0) { return false; }
+    if (a.rg_hi[ei] ?? 0.0) != (b.rg_hi[ei] ?? 0.0) { return false; }
+  }
+  true
+}
+
+// ── THE COLLISION PROXY (phase D of plans/m1-moving-body) ────────────────────
+//
+// The project's founding claim, applied to the body: **a collision proxy is DERIVED from the
+// geometry itself**, not hand-authored.  A rig's geometry is its posed BONE SEGMENTS, so the proxy
+// is derived from those: each bone's SHAPE is the capsule (all points within a half-width `w` of
+// its segment), and its PROXY is the oriented box that bounds the capsule.  `SPEC` **I4**: a proxy
+// **⊇** its shape (never misses an overlap) and its overshoot is **bounded and stated**.
+//
+// The whole-body pose is FORWARD KINEMATICS up the tree — each bone's world frame composes its
+// parent's frame with its joint value — and it is a **PURE FUNCTION of the joint values** (`I6`),
+// because it composes `pose_of`, which is pure.  A flexing wing (more bones on more joints, `I-POSE`)
+// poses the same way; nothing here deforms.
+
+// The world segment of bone `i` at the given joint values: `(x0, y0)` its base, `(x1, y1)` its tip.
+// Composes the tree from the root (bones are topological, so ancestors are computed first).
+pub fn rig_world_seg(r: Rig, values: vector<float>, i: integer) -> (float, float, float, float) {
+  n = i + 1;
+  bx: vector<float> = [];
+  by: vector<float> = [];
+  th: vector<float> = [];
+  for k in 0..n {
+    v = values[k] ?? 0.0;
+    p = r.rg_parent[k] ?? -1;
+    if p < 0 {
+      bx += [0.0]; by += [0.0]; th += [v];
+    } else {
+      pth = th[p] ?? 0.0;
+      (rx, ry) = pose_of(pth, r.rg_ox[k] ?? 0.0, r.rg_oy[k] ?? 0.0);   // offset in parent's frame
+      bx += [(bx[p] ?? 0.0) + rx];
+      by += [(by[p] ?? 0.0) + ry];
+      th += [pth + v];                                                 // revolute joints add in 2D
+    }
+  }
+  x0 = bx[i] ?? 0.0;
+  y0 = by[i] ?? 0.0;
+  (ex, ey) = pose_of(th[i] ?? 0.0, r.rg_len[i] ?? 0.0, 0.0);           // tip = base + len along angle
+  (x0, y0, x0 + ex, y0 + ey)
+}
+
+// An oriented bounding box: centre, unit axis (along the bone), and half-extents.
+pub struct Obb {
+  ob_cx: float, ob_cy: float,   // centre
+  ob_ux: float, ob_uy: float,   // unit axis, along the segment
+  ob_hl: float,                 // half-length, along the axis
+  ob_hw: float,                 // half-width, perpendicular
+}
+
+// THE PROXY of bone `i`: the OBB that bounds its capsule of half-width `w`.  Length grows by `w`
+// at each end to cover the rounded caps; width is `w`.
+pub fn bone_obb(r: Rig, values: vector<float>, i: integer, w: float) -> Obb {
+  (x0, y0, x1, y1) = rig_world_seg(r, values, i);
+  dx = x1 - x0;
+  dy = y1 - y0;
+  seg = sqrt(dx * dx + dy * dy) ?? 0.0;
+  ux = 1.0;
+  uy = 0.0;
+  if seg > 0.000000001 { ux = dx / seg ?? 1.0; uy = dy / seg ?? 0.0; }
+  Obb { ob_cx: (x0 + x1) / 2.0, ob_cy: (y0 + y1) / 2.0,
+        ob_ux: ux, ob_uy: uy, ob_hl: seg / 2.0 + w, ob_hw: w }
+}
+
+// Is a world point inside the OBB?  Project onto the axis and its perpendicular.
+pub fn obb_contains(o: Obb, px: float, py: float) -> boolean {
+  dx = px - o.ob_cx;
+  dy = py - o.ob_cy;
+  along = dx * o.ob_ux + dy * o.ob_uy;
+  perp = 0.0 - dx * o.ob_uy + dy * o.ob_ux;
+  fabs(along) <= o.ob_hl && fabs(perp) <= o.ob_hw
+}
+
+// Distance from a point to a segment — the capsule test's core.
+pub fn seg_dist(x0: float, y0: float, x1: float, y1: float, px: float, py: float) -> float {
+  dx = x1 - x0;
+  dy = y1 - y0;
+  l2 = dx * dx + dy * dy;
+  if l2 < 0.000000000001 { return sqrt((px - x0) * (px - x0) + (py - y0) * (py - y0)) ?? 0.0; }
+  t = ((px - x0) * dx + (py - y0) * dy) / l2 ?? 0.0;
+  if t < 0.0 { t = 0.0; }
+  if t > 1.0 { t = 1.0; }
+  cx = x0 + t * dx;
+  cy = y0 + t * dy;
+  sqrt((px - cx) * (px - cx) + (py - cy) * (py - cy)) ?? 0.0
+}
+
+// The bone's SHAPE: is a world point within `w` of its segment (inside the capsule)?
+pub fn bone_shape_has(r: Rig, values: vector<float>, i: integer, w: float,
+                      px: float, py: float) -> boolean {
+  (x0, y0, x1, y1) = rig_world_seg(r, values, i);
+  seg_dist(x0, y0, x1, y1, px, py) <= w
+}

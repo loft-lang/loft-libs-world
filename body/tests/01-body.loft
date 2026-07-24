@@ -1,0 +1,95 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// body — the conformance tests: a pose is a PURE FUNCTION of joint values, a wheel rolls without
+// slip, a rig round-trips, and a bone's proxy contains its shape.
+//
+// These assert the library's CONTRACT.  The exhaustive measurement lives in hexbody's
+// `tests/joint.loft`, which prints its evidence and carries a control that fires; this is what CI
+// runs under `LOFT_DENY_WARNINGS=1`.
+use body;
+
+fn fabs2(x: float) -> float { if x < 0.0 { 0.0 - x } else { x } }
+
+fn main() {
+  (x, y) = pose_of(0.25, 1.0, 0.0);                  // quarter turn of (1,0) -> ~(0,1)
+  assert(fabs2(x) < 0.0001 && y > 0.9999, "a quarter turn takes (1,0) to (0,1)");
+}
+
+fn test_a_pose_is_a_pure_function_of_the_joint_value() {
+  // I6: two paths to the same value give a byte-identical pose. pose_of reads no history.
+  (ax, ay) = pose_of(0.37, 1.4, -0.6);
+  pose_of(0.1, 1.4, -0.6);                            // visit other values
+  pose_of(0.62, 1.4, -0.6);
+  (bx, by) = pose_of(0.37, 1.4, -0.6);
+  assert(ax == bx && ay == by, "the pose is byte-identical across two paths to the value");
+}
+
+fn test_a_wheel_rolls_without_slip() {
+  // The value is derived from travel, so skid = |r*theta - travel| is machine-eps.
+  r = 2.5;
+  worst = 0.0;
+  for i in 0..21 {
+    travel = (i as float) * 0.37;
+    sk = wheel_skid(r, wheel_value(travel, r, 0.0), travel);
+    if sk > worst { worst = sk; }
+  }
+  assert(worst < 0.000000000001, "a derived wheel value does not slip beyond machine eps");
+  // control: spin off-travel and it skids by whole units.
+  off = wheel_skid(r, wheel_value(10.0, r, 0.0), 3.0);
+  assert(off > 1.0, "an off-travel spin skids");
+}
+
+fn test_a_joint_refuses_out_of_range_with_an_offer() {
+  // K-FIT: a joint value is ordinal, so a refusal offers the nearest admissible.
+  h = joint_new(0.0, -0.25, 0.25);
+  assert(joint_fits(h, 0.1), "0.1 is within +-0.25");
+  assert(!joint_fits(h, 0.9), "0.9 is not");
+  assert(joint_offer(h, 0.9) == 0.25, "the offer is the nearest limit");
+  assert(joint_fits(h, joint_offer(h, 0.9)), "and the offer is itself admissible");
+}
+
+fn test_a_rig_round_trips_as_canonical_text() {
+  r = rig_new();
+  r = rig_bone(r, -1, 0.0, 0.0, 1.5, -0.5, 0.5);
+  r = rig_bone(r, 0, 0.8660254037844386, 0.25, 0.37, -0.125, 0.125);
+  t = rig_write(r, "arm");
+  back = rig_read(t);
+  assert(rig_eq(r, back), "write(read(R)) = R byte-for-byte, floats included");
+  assert(rig_write(back, "arm") == t, "and the bytes match");
+  assert(rig_admissible(r), "a topological rig with ordered limits is admissible");
+  // a reordered bone index is refused, not repaired.
+  bad = "rig arm bones 2\nbone 1 parent -1 at 0 0 len 1.0 lim 0 0\nbone 0 parent 0 at 0 0 len 1.0 lim 0 0";
+  assert(rig_count(rig_read(bad)) == 0, "a malformed rig is refused");
+}
+
+fn test_a_bone_proxy_contains_its_shape() {
+  // I4: the derived OBB proxy contains the bone's capsule; a shape point outside it would be a
+  // missed overlap.
+  r = rig_new();
+  r = rig_bone(r, -1, 0.0, 0.0, 3.0, -1.0, 1.0);
+  r = rig_bone(r, 0, 3.0, 0.0, 2.0, -0.25, 0.25);
+  vals = [0.0, 0.125];
+  w = 0.3;
+  o = bone_obb(r, vals, 1, w);
+  (x0, y0, x1, y1) = rig_world_seg(r, vals, 1);
+  miss = 0;
+  ns = 0;
+  for gi in 0..41 {
+    for gj in 0..29 {
+      gx = 2.0 + (gi as float) * 0.06;
+      gy = -0.5 + (gj as float) * 0.06;
+      if seg_dist(x0, y0, x1, y1, gx, gy) <= w {
+        ns = ns + 1;
+        if !obb_contains(o, gx, gy) { miss = miss + 1; }
+      }
+    }
+  }
+  assert(ns > 50, "the grid covers the bone");
+  assert(miss == 0, "every shape point is inside the proxy (proxy contains the shape)");
+  // control: a shrunk proxy no longer contains an edge point of the shape.
+  edge = obb_contains(o, o.ob_cx - 0.9 * w * o.ob_uy, o.ob_cy + 0.9 * w * o.ob_ux);
+  o2 = Obb { ob_cx: o.ob_cx, ob_cy: o.ob_cy, ob_ux: o.ob_ux, ob_uy: o.ob_uy,
+             ob_hl: o.ob_hl, ob_hw: w * 0.5 };
+  shrunk = obb_contains(o2, o.ob_cx - 0.9 * w * o.ob_uy, o.ob_cy + 0.9 * w * o.ob_ux);
+  assert(edge && !shrunk, "shrinking the proxy below the shape drops an edge point (a missed overlap)");
+}

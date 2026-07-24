@@ -1,0 +1,12 @@
+[package]
+name    = "body"
+version = "0.1.0"
+loft    = ">=0.8"
+
+[library]
+entry = "src/body.loft"
+
+# No dependencies: the body is pure continuous-space kinematics -- bones, joints, poses and
+# collision proxies -- with NO lattice dependency. It is the first library from the hexbody
+# workshop that is NOT part of the hex_* family, exactly because it does not use hex code
+# (the naming rule: hex_ iff it depends on the lattice). See hexbody plans/m1-moving-body.
