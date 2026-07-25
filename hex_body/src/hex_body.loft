@@ -1,6 +1,6 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
-// body — THE MOVING BODY: rigs, revolute joints, pure poses, and collision proxies.
+// hex_body — HEXBODY'S OWN BODY MODEL: rigs, revolute joints with computed limits, pure poses, proxies.
 //
 // `G1`, the first brick of the body half (`plans/m1-moving-body/`).  The load-bearing decision,
 // from the user: **a body is a RIG — bones and the limits in the joints between them, never a

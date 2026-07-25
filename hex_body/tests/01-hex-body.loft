@@ -6,7 +6,7 @@
 // These assert the library's CONTRACT.  The exhaustive measurement lives in hexbody's
 // `tests/joint.loft`, which prints its evidence and carries a control that fires; this is what CI
 // runs under `LOFT_DENY_WARNINGS=1`.
-use body;
+use hex_body;
 
 fn fabs2(x: float) -> float { if x < 0.0 { 0.0 - x } else { x } }
 

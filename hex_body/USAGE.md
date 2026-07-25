@@ -3,10 +3,10 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# Using `body`
+# Using `hex_body`
 
 > **The tests are the documentation that cannot rot.** Every claim here is a passing assertion in
-> [`tests/01-body.loft`](tests/01-body.loft); read that file for the exact, compiling form. The
+> [`tests/01-hex-body.loft`](tests/01-hex-body.loft); read that file for the exact, compiling form. The
 > `README.md` is the *why*; this is the map.
 
 ## The things you will reach for
