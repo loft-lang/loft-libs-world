@@ -1199,6 +1199,112 @@ pub fn stencil_stamp_edges(
   }
 }
 
+// ── un-stamping ──────────────────────────────────────────────────────────
+//
+// The inverse of a stamp: it clears exactly the slots the stamp WROTE, back to
+// the values a freshly-built field holds — cell false, height 0.0, label -1,
+// layer 0, edge material 0.
+//
+// ⚠ THIS RESTORES THE TARGET ONLY WHERE THE TARGET WAS PRISTINE.  A stamp is
+// last-writer-wins (see `stencil_stamp`), so it DESTROYS whatever payload sat
+// under its footprint; nothing here can bring that back, because the previous
+// value was never kept.  "Stamp then un-stamp is the identity" is therefore a
+// claim about placing on FREE ground — which is the case the editor needs, a
+// placement made and then taken back.  Un-stamping onto ground another stencil
+// already occupied leaves that other stencil's cells cleared too, and that is
+// the honest behaviour rather than a bug: the two stencils are indistinguishable
+// once merged, which is what merging into one field MEANS.  A consumer that
+// needs true undo over occupied ground must snapshot, not un-stamp.
+
+// Clear the cells, heights and labels a `stencil_stamp` wrote.
+pub fn stencil_unstamp(
+  dst: HexSet, dst_h: Heights, dst_l: Labels,
+  st: Stencil, aq: integer, ar: integer
+) {
+  dk = lattice_k(aq, ar);
+  dm = lattice_m(aq, ar);
+  q0 = hexset_q0(st.sn_cells); r0 = hexset_r0(st.sn_cells);
+  w  = hexset_w(st.sn_cells);  h  = hexset_h(st.sn_cells);
+  for iq in 0..w {
+    for ir in 0..h {
+      sq = q0 + iq;
+      sr = r0 + ir;
+      if hexset_get(st.sn_cells, sq, sr) {
+        (tq, tr) = lattice_to_cell(lattice_k(sq, sr) + dk, lattice_m(sq, sr) + dm);
+        hexset_set(dst, tq, tr, false);
+        if st.sn_has_h { height_set(dst_h, tq, tr, 0.0); }
+        if st.sn_has_l { label_set(dst_l, tq, tr, -1); }
+      }
+    }
+  }
+}
+
+// Clear the named layers too — the inverse of `stencil_stamp_layers`.
+//
+// The layer NAMES the stamp added to the target stay: a name is a property of
+// the field, not of one placement, and a second placement of the same part
+// would only add it back.  Only the VALUES under this footprint are cleared.
+pub fn stencil_unstamp_layers(
+  dst: HexSet, dst_h: Heights, dst_l: Labels, dst_y: Layers,
+  st: Stencil, aq: integer, ar: integer
+) {
+  stencil_unstamp(dst, dst_h, dst_l, st, aq, ar);
+  dk = lattice_k(aq, ar);
+  dm = lattice_m(aq, ar);
+  q0 = hexset_q0(st.sn_cells); r0 = hexset_r0(st.sn_cells);
+  w  = hexset_w(st.sn_cells);  h  = hexset_h(st.sn_cells);
+  for iq in 0..w {
+    for ir in 0..h {
+      sq = q0 + iq;
+      sr = r0 + ir;
+      if hexset_get(st.sn_cells, sq, sr) {
+        (tq, tr) = lattice_to_cell(lattice_k(sq, sr) + dk, lattice_m(sq, sr) + dm);
+        for li in 0..layer_count(st.sn_layers) {
+          nm = layer_name(st.sn_layers, li);
+          layer_set(dst_y, nm, tq, tr, 0);
+        }
+      }
+    }
+  }
+}
+
+// Everything at once — the inverse of `stencil_stamp_all`, and the form a
+// consumer should use, so one place knows the full payload in BOTH directions.
+//
+// Edges walk the same halo the stamp did, and clear only the slots the stencil
+// itself carried a material for.  Iterating the occupied cells instead would
+// leave the rim walls behind — the same blindness that once turned 18 edge
+// slots into 10 with every cell count still agreeing.
+pub fn stencil_unstamp_all(
+  dst: HexSet, dst_h: Heights, dst_l: Labels, dst_y: Layers, dst_e: EdgeSet,
+  st: Stencil, aq: integer, ar: integer
+) {
+  stencil_unstamp_layers(dst, dst_h, dst_l, dst_y, st, aq, ar);
+  if !st.sn_has_e { return; }
+  dk = lattice_k(aq, ar);
+  dm = lattice_m(aq, ar);
+  q0 = hexset_q0(st.sn_cells); r0 = hexset_r0(st.sn_cells);
+  w  = hexset_w(st.sn_cells);  h  = hexset_h(st.sn_cells);
+  for iq in -1..(w + 1) {
+    for ir in -1..(h + 1) {
+      cq = q0 + iq;
+      cr = r0 + ir;
+      for sl in 0..3 {
+        d = 0;
+        if sl == 1 { d = 2; }
+        if sl == 2 { d = 3; }
+        nq = nb_q(cq, cr, d);
+        nr = nb_r(cq, cr, d);
+        if edge_mat(st.sn_edges, cq, cr, nq, nr) != 0 {
+          (tq, tr) = lattice_to_cell(lattice_k(cq, cr) + dk, lattice_m(cq, cr) + dm);
+          (uq, ur) = lattice_to_cell(lattice_k(nq, nr) + dk, lattice_m(nq, nr) + dm);
+          edge_set_mat(dst_e, tq, tr, uq, ur, 0);
+        }
+      }
+    }
+  }
+}
+
 // ═══════════════════════════════════════════════════════════════════════
 // edges — the wall layer.
 //

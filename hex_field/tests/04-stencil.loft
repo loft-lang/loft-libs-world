@@ -93,6 +93,9 @@ fn test_stamp_lands_where_asked_on_an_odd_row() {
   assert(shoelace_of(dst) == 12 * hexset_count(dst), "stamped shape breaks the area identity");
 }
 
+// ⚠ AT DIFFERENT PLACES — and the last line is what says so.  The OVERLAPPING
+// case is a different claim with a different answer, and it is
+// `test_overlapping_stamps_are_order_free_only_in_occupancy` below.
 fn test_two_stamps_at_different_places_are_order_free() {
   st = ell();
   a1 = hexset_chunk(-8, -8, 30, 30); h1 = heights_new(-8, -8, 30, 30); l1 = labels_new(-8, -8, 30, 30);
@@ -214,6 +217,119 @@ fn test_mirror_loses_nothing_and_is_self_inverse() {
              "mirroring twice is not the identity at {q-1},{r-1}");
     }
   }
+}
+
+// ── what OVERLAP actually does ───────────────────────────────────────────
+//
+// ⚠ THE DESIGN SENTENCE WAS WRONG, AND MEASURING IT IS HOW WE KNOW.  moros#5
+// promised "two stencils overlapping at the same level arbitrate
+// deterministically AND ORDER-FREELY — stamping A then B equals B then A".
+// Half of that is true.  Stamped both ways with different payloads on the
+// shared cells, the occupancy agreed everywhere and SIX labels and SIX heights
+// did not: a stamp is last-writer-wins, so the payload carries the order.
+//
+// Order-freedom for the payload was never the right rule anyway — it would make
+// "place this on top of that" impossible, which is the one thing an editor's
+// stamp is for.  What survives is the pair below, and both halves are gated,
+// because a mechanism that quietly became order-DEPENDENT in its occupancy
+// would break stamping into a shared field and no count would notice.
+
+fn overlap_pair(lab: integer, hgt: float) -> Stencil {
+  s  = hexset_chunk(0, 0, 3, 3);
+  hz = heights_new(0, 0, 3, 3);
+  lb = labels_new(0, 0, 3, 3);
+  for q in 0..3 { for r in 0..3 {
+    hexset_set(s, q, r, true); label_set(lb, q, r, lab); height_set(hz, q, r, hgt);
+  } }
+  stencil_from(s, hz, lb, true, true)
+}
+
+fn test_overlapping_stamps_are_order_free_only_in_occupancy() {
+  a = overlap_pair(11, 1.5);
+  b = overlap_pair(22, 9.5);
+  c1 = hexset_chunk(-8,-8,30,30); h1 = heights_new(-8,-8,30,30); l1 = labels_new(-8,-8,30,30);
+  c2 = hexset_chunk(-8,-8,30,30); h2 = heights_new(-8,-8,30,30); l2 = labels_new(-8,-8,30,30);
+  stencil_stamp(c1, h1, l1, a, 0, 0);
+  stencil_stamp(c1, h1, l1, b, 1, 0);
+  stencil_stamp(c2, h2, l2, b, 1, 0);
+  stencil_stamp(c2, h2, l2, a, 0, 0);
+
+  // the two anchors are one apart, so the 3x3 blobs genuinely share cells —
+  // without this the test degrades into the disjoint case above and proves
+  // nothing about overlap at all
+  assert(hexset_count(c1) < 2 * 9, "the fixtures did not overlap: {hexset_count(c1)} cells");
+
+  shared = 0;
+  for qi in 0..30 { for ri in 0..30 {
+    q = qi - 8; r = ri - 8;
+    assert(hexset_get(c1,q,r) == hexset_get(c2,q,r), "occupancy depended on stamp order at {q},{r}");
+    if hexset_get(c1,q,r) && label_get(l1,q,r) != label_get(l2,q,r) { shared += 1; }
+  } }
+  assert(hexset_count(c1) == hexset_count(c2), "overlap changed the cell count with the order");
+  // and the payload DOES carry the order — the refuted half, pinned so that a
+  // future arbitration rule cannot land silently
+  assert(shared > 0, "labels no longer depend on stamp order — the last-writer-wins rule changed");
+}
+
+fn test_the_last_writer_owns_the_shared_payload() {
+  a = overlap_pair(11, 1.5);
+  b = overlap_pair(22, 9.5);
+  c = hexset_chunk(-8,-8,30,30); h = heights_new(-8,-8,30,30); l = labels_new(-8,-8,30,30);
+  stencil_stamp(c, h, l, a, 0, 0);
+  stencil_stamp(c, h, l, b, 1, 0);
+  // (1,0) is inside both footprints; B went second, so B owns it
+  assert(label_get(l, 1, 0) == 22, "the second stamp did not win the shared cell: {label_get(l, 1, 0)}");
+  assert(height_get(h, 1, 0) == 9.5, "the second stamp did not win the shared height");
+  // (0,0) is A's alone — B's footprint starts at its anchor
+  assert(label_get(l, 0, 0) == 11, "the second stamp reached a cell it does not cover");
+}
+
+// ── stamp then un-stamp, on free ground ──────────────────────────────────
+//
+// Invariant 3 of moros#5.  Stated over the WHOLE payload — cells, heights,
+// labels, named layers and the walls including the rim — because a version that
+// restored the cells and left the walls standing passes every cell count.
+// `walled_ring` is the fixture with something in every one of those, which is
+// why it is reused here.
+fn test_stamp_then_unstamp_restores_the_target_bit_for_bit() {
+  st = walled_ring();
+  c  = hexset_chunk(-8,-8,20,20); hz = heights_new(-8,-8,20,20); lb = labels_new(-8,-8,20,20);
+  ly = layers_new(-8,-8,20,20);   eg = edgeset_new(-8,-8,20,20);
+
+  // an ODD anchor row, the case a naive translation shears
+  stencil_stamp_all(c, hz, lb, ly, eg, st, 3, 3);
+  assert(hexset_count(c) == hexset_count(st.sn_cells), "the stamp did not land");
+  assert(edgeset_count_all(eg) > 0, "the stamp laid no walls, so un-stamping them proves nothing");
+
+  stencil_unstamp_all(c, hz, lb, ly, eg, st, 3, 3);
+
+  assert(hexset_count(c) == 0, "un-stamp left {hexset_count(c)} cells behind");
+  assert(edgeset_count_all(eg) == 0,
+         "un-stamp left {edgeset_count_all(eg)} edge slots behind — the rim walls survived");
+  for qi in 0..20 { for ri in 0..20 {
+    q = qi - 8; r = ri - 8;
+    assert(!hexset_get(c, q, r), "cell {q},{r} survived the un-stamp");
+    assert(height_get(hz, q, r) == 0.0, "height at {q},{r} is {height_get(hz, q, r)}, want 0.0");
+    assert(label_get(lb, q, r) == -1, "label at {q},{r} is {label_get(lb, q, r)}, want -1");
+    lv = layer_get(ly, "item", q, r);
+    assert(lv == 0, "layer at {q},{r} is {lv}, want 0");
+  } }
+}
+
+// The other half: an un-stamp must not reach past its own footprint.
+fn test_unstamp_leaves_the_rest_of_the_target_alone() {
+  st = walled_ring();
+  c  = hexset_chunk(0,0,20,20); hz = heights_new(0,0,20,20); lb = labels_new(0,0,20,20);
+  ly = layers_new(0,0,20,20);   eg = edgeset_new(0,0,20,20);
+  hexset_set(c, 15, 15, true);
+  label_set(lb, 15, 15, 999);
+  height_set(hz, 15, 15, 7.25);
+  stencil_stamp_all(c, hz, lb, ly, eg, st, 4, 4);
+  stencil_unstamp_all(c, hz, lb, ly, eg, st, 4, 4);
+  assert(hexset_get(c, 15, 15), "an unrelated cell was cleared by an un-stamp");
+  assert(label_get(lb, 15, 15) == 999, "an unrelated label was cleared: {label_get(lb, 15, 15)}");
+  assert(height_get(hz, 15, 15) == 7.25, "an unrelated height was cleared");
+  assert(hexset_count(c) == 1, "un-stamp left {hexset_count(c)} cells, want just the unrelated one");
 }
 
 // Six rotations, and the other six by flipping — the twelve the design promises.
