@@ -1,0 +1,116 @@
+// THE CROSS-LANGUAGE PARITY GATE — moros#3.
+//
+// `hex_grid` owns the convention, and it is implemented twice: here, and in
+// moros's `html/hex-lattice.js` for the browser world-map editor. Two
+// implementations of one convention is the silent-failure shape this library
+// exists to close — everything "works" until two components disagree about
+// which edge is north, and nothing reports it.
+//
+// So both sides read ONE committed file. `fixtures/lattice.tsv` is not generated
+// by either of them at test time; regenerating it to make a test pass is the one
+// move that defeats the whole arrangement.
+//
+// WHY THE FIXTURE IS INTEGERS. The obvious fixture is sampled (col,row) → (x,y)
+// floats, and it cannot be asserted exactly: the two sides reach the same centre
+// by different expression trees, so they may differ in the last ulp while both
+// being right. That forces a tolerance, and a tolerance is exactly where a real
+// half-hex error hides. The doubled integer lattice has no such problem —
+//
+//     k = 2*col + (row & 1)      m = 3*row      centre = (k*sqrt(3)/2, m/2)
+//
+// — a parity drift is a drift of 1 in k, and 1 is visible with no epsilon.
+// The float step is checked separately below, where a tolerance is honest
+// because the claim there is about SCALE, not about the lattice.
+use hex_grid;
+
+// Relative paths resolve from the TEST FILE's directory under `loft test`,
+// not the package root — a doubled `tests/` is the classic way to get this wrong.
+const FIXTURE = "fixtures/lattice.tsv";
+
+struct Row { rw_col: integer, rw_row: integer, rw_k: integer, rw_m: integer }
+
+fn load() -> vector<Row> {
+  out: vector<Row> = [];
+  f = file(FIXTURE);
+  for ln in lines(f) {
+    if len(ln) == 0 { continue; }
+    if (ln[0] ?? ' ') == '#' { continue; }
+    parts = split(ln, '\t');
+    if len(parts) < 4 { continue; }
+    out += [Row {
+      rw_col: (parts[0] ?? "") as integer ?? 0,
+      rw_row: (parts[1] ?? "") as integer ?? 0,
+      rw_k:   (parts[2] ?? "") as integer ?? 0,
+      rw_m:   (parts[3] ?? "") as integer ?? 0,
+    }];
+  }
+  out
+}
+
+// The fixture has to actually be there and actually have rows. A loader that
+// silently returned nothing would make every assertion below vacuously true —
+// the sweep would pass while measuring no cells at all.
+fn test_the_fixture_is_present_and_covers_both_signs() {
+  rows = load();
+  assert(len(rows) == 63, "fixture has {len(rows)} rows, want 63 — has it been regenerated?");
+  neg_odd = 0;
+  pos_odd = 0;
+  for r in rows {
+    if r.rw_row < 0 && (r.rw_row & 1) == 1 { neg_odd += 1; }
+    if r.rw_row > 0 && (r.rw_row & 1) == 1 { pos_odd += 1; }
+  }
+  assert(neg_odd > 0, "no ODD NEGATIVE rows in the fixture — the one case that keeps breaking");
+  assert(pos_odd > 0, "no odd positive rows in the fixture");
+}
+
+// The lattice claim, exactly: every sampled cell lands on the integer point the
+// fixture names. This is what the JavaScript side asserts too, against the same
+// bytes.
+fn test_every_fixture_cell_lands_on_its_integer_lattice_point() {
+  for r in load() {
+    k = 2 * r.rw_col + (r.rw_row & 1);
+    m = 3 * r.rw_row;
+    assert(k == r.rw_k, "cell {r.rw_col},{r.rw_row}: k is {k}, the fixture says {r.rw_k}");
+    assert(m == r.rw_m, "cell {r.rw_col},{r.rw_row}: m is {m}, the fixture says {r.rw_m}");
+    // and the lattice's own closure property, which a wrong parity shift breaks
+    assert((k - m) % 2 == 0, "cell {r.rw_col},{r.rw_row}: k={k} m={m} breaks k = m (mod 2)");
+  }
+}
+
+// `hex_to_px` is the function everything actually calls, so the fixture has to
+// reach it and not just the formula restated beside it. The tolerance is honest
+// here: the claim is that the published position is the lattice point times the
+// scale, and the two sides multiply in a different order.
+fn test_hex_to_px_agrees_with_the_fixture_lattice() {
+  for r in load() {
+    (x, y) = hex_to_px(r.rw_col, r.rw_row);
+    want_x = (r.rw_k as float) * SQRT3 / 2.0;
+    want_y = (r.rw_m as float) / 2.0;
+    assert(abs(x - want_x) < 0.000000001,
+           "cell {r.rw_col},{r.rw_row}: x is {x}, the fixture's lattice says {want_x}");
+    assert(abs(y - want_y) < 0.000000001,
+           "cell {r.rw_col},{r.rw_row}: y is {y}, the fixture's lattice says {want_y}");
+  }
+}
+
+// ⚠ THE CASE THE OTHER IMPLEMENTATION GOT WRONG. Stated on its own rather than
+// left inside the sweep, because this is the specific bug the fixture was built
+// to catch, and a reader should be able to find it by name.
+fn test_odd_negative_rows_are_shifted_like_odd_positive_ones() {
+  for i in 0..4 {
+    odd_neg = 0 - (2 * i + 1);
+    odd_pos = 2 * i + 1;
+    (xn, _yn) = hex_to_px(0, odd_neg);
+    (xp, _yp) = hex_to_px(0, odd_pos);
+    assert(abs(xn - xp) < 0.000000001,
+           "row {odd_neg} sits at x={xn} but row {odd_pos} at x={xp} — the shift stopped below zero");
+    assert(abs(xn - SQRT3 / 2.0) < 0.000000001,
+           "row {odd_neg} is not shifted half a hex: x={xn}");
+  }
+  // and the even rows must NOT be shifted, or the test above passes on a
+  // lattice that shifts everything
+  for i in 0..4 {
+    (xe, _ye) = hex_to_px(0, 0 - (2 * i + 2));
+    assert(abs(xe) < 0.000000001, "even row {0 - (2 * i + 2)} was shifted to x={xe}");
+  }
+}
