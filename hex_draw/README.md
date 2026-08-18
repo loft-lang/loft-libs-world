@@ -18,6 +18,9 @@ workshop that proves the family against an exact round trip.
 
 Add the dependency, `use hex_draw;`, and call the maps below. **`USAGE.md` is the worked guide**, with
 every example pointed at a passing test in `tests/01-hex-draw.loft` — the tests are the executable documentation.
+The seven things a caller gets wrong — beginning with drawing a wall as the strip of edges it is
+stored as — are worked one by one in `tests/02-worked-examples.loft` (`@HXD-001..007`), cited from
+the functions they belong to.
 
 Split from `ROUNDTRIP.md`'s objects and maps (`SPEC` **I-EXTEND**: a library defines its primitives
 from its own semantics, for consumers it will never meet). See hexbody's `plans/lib-split/`.

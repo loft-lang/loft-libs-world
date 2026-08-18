@@ -1,0 +1,499 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Worked examples for `hex_draw` (@PLN141).  Each `test_*` below is a REAL,
+// run-every-CI demonstration of a contract the signature cannot state; the
+// function documents itself by CITING the tag with `// Example: @HXD-00N`, and
+// `check_doc_drift.sh examples` fails if a citation goes dangling.  These are
+// teaching examples, distinct from the conformance suite in `01-hex-draw.loft`.
+//
+// WHAT THIS PACKAGE ASKS OF A CALLER.  It draws a model into a field of cells
+// and edges, and it reads a wall back out of that field as an analytic surface.
+// Both halves live in TWO number systems at once, and every trap here is one of
+// them leaking into the other:
+//
+//   the field    exact integers — a cell is (q,r), a corner is (k,m), an edge is
+//                a pair of cells.  Everything recovered from it is an exact
+//                rational, and nothing needs a tolerance
+//   the plan     a rectangle in world units, whose half-extents are irrational
+//                multiples of sqrt(3)/2 and land wherever they land on the lattice
+//
+// So a wall's DIRECTION is exact and its POSITION is a rational the plan cannot
+// name; a door is an integer material and never a hole; a feature's `t` is an
+// exact rational and never a float you chose.  Each of those is worked below.
+use hex_draw;
+use hex_field;
+use hex_form;
+use hex_grid;
+use hex_shape;
+use hex_way;
+use hex_roof;
+
+const W  = 41;
+const H  = 41;
+const Q0 = 0 - 20;
+const R0 = 0 - 20;
+const WALLMAT = 7;
+
+// The cottage every example is drawn from: 5 hex steps by 4, at the origin, unrotated.
+// 27 floor cells and 38 wall edges — 7.5 m by 6.0 m of real building.
+fn cottage() -> Plan { plan_new(0, 0, 5, 4, 0, false) }
+
+fn patch() -> HexSet { hexset_chunk(Q0, R0, W, H) }
+
+// The cottage's floor, filled.
+fn cottage_cells() -> HexSet {
+  cells = patch();
+  lb = labels_new(Q0, R0, W, H);
+  draw_floor(cottage(), cells, lb, 1);
+  cells
+}
+
+// How many floor cells touch the outside — the ring a wall drawn as a BAND OF CELLS
+// would have to consume.
+fn ring_cells(cells: HexSet) -> integer {
+  n = 0;
+  for r in R0..R0 + H {
+    for q in Q0..Q0 + W {
+      if hexset_get(cells, q, r) {
+        out = false;
+        for d in 0..6 { if !hexset_get(cells, nb_q(q, r, d), nb_r(q, r, d)) { out = true; } }
+        if out { n = n + 1; }
+      }
+    }
+  }
+  n
+}
+
+// The wall-edge count written the tempting way: only the three directions a cell
+// "owns", so every edge the OUTSIDE cell owns is missed.  Parameterised by which of
+// the two neighbour conventions is used, because they disagree about which three.
+fn count_three_dirs(cells: HexSet, edges: EdgeSet, hexgrid_order: boolean) -> integer {
+  n = 0;
+  for r in R0..R0 + H {
+    for q in Q0..Q0 + W {
+      if hexset_get(cells, q, r) {
+        for d in 0..3 {
+          nq = nb_q(q, r, d);
+          nr = nb_r(q, r, d);
+          if hexgrid_order { (nq, nr) = hex_neighbor(q, r, d); }
+          if !hexset_get(cells, nq, nr) && edge_mat(edges, q, r, nq, nr) != 0 { n = n + 1; }
+        }
+      }
+    }
+  }
+  n
+}
+
+// The distance between the end of side `a`'s drawn segment and the start of side `b`'s.
+fn span_gap(p: Plan, cells: HexSet, a: integer, b: integer) -> float {
+  (_x0, _y0, x1, y1) = surface_span(p, cells, a);
+  (u0, v0, _u1, _v1) = surface_span(p, cells, b);
+  sqrt((x1 - u0) * (x1 - u0) + (y1 - v0) * (y1 - v0)) ?? 0.0
+}
+
+fn quad_gap(p: Plan, cells: HexSet, a: integer, b: integer) -> float {
+  (_x0, _y0, x1, y1) = surface_quad(p, cells, a, 4);
+  (u0, v0, _u1, _v1) = surface_quad(p, cells, b, 4);
+  sqrt((x1 - u0) * (x1 - u0) + (y1 - v0) * (y1 - v0)) ?? 0.0
+}
+
+// A ridge along the plan's local u, extending `half` either side of the anchor.
+fn ridge_heights(p: Plan, cells: HexSet, half: float) -> Heights {
+  hz = heights_new(Q0, R0, W, H);
+  (x0, y0) = plan_to_world(p, 0.0 - half, 0.0);
+  (x1, y1) = plan_to_world(p, half, 0.0);
+  tr = track_new();
+  track_straight(tr, x0, y0, x1, y1);
+  roof_ridge(cells, hz, tr, 2.0 + 0.5 * plan_hd(p), 0.5, 1000000.0);
+  hz
+}
+
+// The smallest call that does something real: draw the cottage, and read one of its
+// walls back as a segment a renderer can draw.
+fn main() {
+  p = cottage();
+  cells = cottage_cells();
+  edges = edgeset_new(Q0, R0, W, H);
+  ne = draw_walls(cells, edges, WALLMAT);
+  assert(ne == 38, "the cottage has 38 wall edges, got {ne}");
+  w = surface_of(p, cells, 0);
+  assert(surface_is_exact(w), "and side 0 recovers as an exact surface");
+  (x0, y0, x1, y1) = surface_quad(p, cells, 0, 4);
+  len2 = sqrt((x1 - x0) * (x1 - x0) + (y1 - y0) * (y1 - y0)) ?? 0.0;
+  assert(len2 > 0.0, "which a renderer draws as one segment, {len2} world units long");
+}
+
+// @HXD-001 — A WALL IS ONE FLAT QUAD, NOT THE STRIP IT IS STORED AS.  The field
+// stores a wall as N separate boundary edges, and those edges ZIGZAG: they are
+// the sides of hexagons, so consecutive ones step sideways by an exact amount.
+// Draw them as they are stored and a nine-edge wall is nine quads with a visible
+// comb; draw the analytic surface and it is one.
+//
+// The surface is DERIVED by averaging, never fitted — the direction is the sum of
+// the edge vectors and the position the mean of their midpoints, both exact
+// integer sums — so there is no residual anywhere to threshold.  What the two
+// bands below measure is not error: it is the GEOMETRY of the strip, and it is an
+// exact algebraic constant per family, `sqrt(3)` apart.
+fn test_a_wall_is_one_quad_and_the_strip_it_replaces_has_a_width() {
+  p = cottage();
+  cells = cottage_cells();
+
+  // The two families, and their exact bands.
+  b0 = surface_band_corners(p, cells, 0);
+  b1 = surface_band_corners(p, cells, 1);
+  assert(abs(b0 - BAND_SIDES) < 1e-12, "a north-family side's strip is sqrt(3)/2 wide, got {b0}");
+  assert(abs(b1 - BAND_TOPS) < 1e-12, "an east-family side's is 1/2, got {b1}");
+  assert(abs((b0 / b1 ?? 0.0) - BAND_RATIO) < 1e-12, "and the ratio is exactly sqrt(3)");
+
+  // The quad that replaces the strip has no width at all: both its endpoints come
+  // off the derived line, so its perpendicular spread is zero.
+  assert(surface_fitted_spread(p, cells, 0) == 0.0, "the fitted quad is flat");
+  assert(surface_fitted_spread(p, cells, 1) == 0.0, "on both families");
+
+  // …to within the float it is presented in, which is NOT the same as "exactly 0"
+  // and is worth knowing before you write `== 0.0` into a gate.  The derivation is
+  // exact (integers and rationals); the world coordinates are f64, and projecting
+  // a point onto a line and back costs an ulp on the orientations where the
+  // arithmetic does not cancel.  Over the 12 orientations x 4 sides, 32 read
+  // exactly 0 and 16 read 2.22e-16 — fifteen orders of magnitude below the band
+  // they are being distinguished from, which is the comparison that means something.
+  worst = 0.0;
+  nexact = 0;
+  ninexact = 0;
+  for rot in 0..6 {
+    for mi in 0..2 {
+      q = plan_new(0, 0, 5, 4, rot, mi == 1);
+      c = patch();
+      lb = labels_new(Q0, R0, W, H);
+      draw_floor(q, c, lb, 1);
+      for side in 0..4 {
+        sp = surface_fitted_spread(q, c, side);
+        if sp == 0.0 { nexact = nexact + 1; } else { ninexact = ninexact + 1; }
+        if sp > worst { worst = sp; }
+      }
+    }
+  }
+  assert(nexact + ninexact == 48, "12 orientations x 4 sides");
+  assert(ninexact > 0, "an `== 0.0` assertion passes only on the orientations you tried");
+  assert(worst < 1e-15, "and the worst spread is still an ulp, got {worst}");
+  assert((worst / BAND_TOPS ?? 1.0) < 1e-14, "which is the flat-vs-strip comparison that holds");
+
+  // What the strip's zigzag actually is: on the east family the edge MIDPOINTS are
+  // exactly colinear and the corners alternate; on the north family the midpoints
+  // themselves stagger by the full band.  The corners hide that difference.
+  assert(surface_band_mids(p, cells, 1) == 0.0, "east-family midpoints are colinear");
+  assert(abs(surface_band_mids(p, cells, 0) - BAND_SIDES) < 1e-12,
+         "north-family midpoints span the whole band — the row stagger");
+
+  // And the control that "averaging, not fitting" is a real distinction: a least
+  // squares formulation would have a residual here to threshold, and the average
+  // has an exact answer instead.
+  assert(surface_lsq_residual(p, cells, 1) == 0.0, "nothing to fit on the east family");
+  assert(abs(surface_lsq_residual(p, cells, 0) - (11.0 / 12.0 ?? 0.0)) < 1e-12,
+         "and exactly 11/12 to threshold on the north one, got {surface_lsq_residual(p, cells, 0)}");
+}
+
+// @HXD-002 — THE EXACTNESS CHECK, AND THE TWO OBVIOUS WAYS TO WRITE IT WRONG.
+// The claim `surface_heading` makes is that the AVERAGED direction is exactly one
+// of the twelve headings — no residual perpendicular component — which in integers
+// is a zero CROSS PRODUCT against that heading's step.
+//
+// Both simpler-looking tests fail on geometry nobody doubts, and they fail in a
+// way that reads like a real defect:
+//
+//   "one component is zero"   only 4 of the 12 headings have one; a side running
+//                             NE is (1,3), both components non-zero and exact
+//   "an integer multiple"     the summed vector over a nine-edge run is (0,14)
+//                             where the heading step is (0,6) — the SUM is not a
+//                             whole number of steps, and never claimed to be
+//
+// The magnitude carries no claim at all: it is the run's length.
+fn test_exactness_is_a_cross_product_not_a_multiple() {
+  p = cottage();
+  cells = cottage_cells();
+
+  w = surface_of(p, cells, 0);
+  assert(surface_heading(w) == 3, "side 0 runs on heading 3");
+  assert(w.ws_dk == 0 && w.ws_dm == 14, "its summed vector is (0,14), got ({w.ws_dk},{w.ws_dm})");
+  st = head_step(3);
+  assert(st.0 == 0 && st.1 == 6, "and heading 3's step is (0,6)");
+  assert(w.ws_dk * st.1 - w.ws_dm * st.0 == 0, "the cross product is exactly zero — that is the claim");
+  assert((14 % 6 ?? 0) != 0, "while 14 is not a multiple of 6 — the sum is not a whole number of steps");
+
+  // Both wrong tests, counted over the six rotations x four sides.
+  nexact = 0;
+  fail_component = 0;
+  fail_multiple = 0;
+  for rot in 0..6 {
+    q = plan_new(0, 0, 5, 4, rot, false);
+    c = patch();
+    lb = labels_new(Q0, R0, W, H);
+    draw_floor(q, c, lb, 1);
+    for side in 0..4 {
+      v = surface_of(q, c, side);
+      hd = surface_heading(v);
+      if hd >= 0 { nexact = nexact + 1; }
+      if !(v.ws_dk == 0 || v.ws_dm == 0) { fail_component = fail_component + 1; }
+      sp = head_step(if hd >= 0 { hd } else { 0 });
+      ismult = false;
+      if sp.0 != 0 { ismult = (v.ws_dk % sp.0 ?? 1) == 0 && v.ws_dm * sp.0 == v.ws_dk * sp.1; }
+      if sp.0 == 0 { ismult = (v.ws_dm % sp.1 ?? 1) == 0 && v.ws_dk == 0; }
+      if !ismult { fail_multiple = fail_multiple + 1; }
+    }
+  }
+  assert(nexact == 24, "every one of the 24 surfaces is exact by the cross product, got {nexact}");
+  assert(fail_component == 16, "'one component is zero' rejects 16 of them, got {fail_component}");
+  assert(fail_multiple == 12, "'an integer multiple' rejects 12 of them, got {fail_multiple}");
+}
+
+// @HXD-003 — THE MITER CLOSES THE OUTLINE, AND ITS CORNER IS NOT THE PLAN'S.
+// Two adjacent surfaces are two lines; where they cross is the corner a renderer
+// should cut to, and `surface_quad` returns each side miter to miter.  Then
+// consecutive quads share an endpoint EXACTLY and the outline closes.  The
+// un-mitered `surface_span` — each side's own extent projected onto its own line —
+// leaves a real gap at every corner, and it is not a small one.
+//
+// What that corner is NOT is the corner of the `Plan`.  The recovered outline is
+// the face of the wall as DRAWN, and the drawn footprint is the plan quantised to
+// cells.  The two live in different number systems: the recovered corner is an
+// exact rational of the lattice (a multiple of 3/4 across the rows), while the
+// plan's half-depth is an irrational multiple of `sqrt(3)/2`.  They agree only at
+// the origin — so this is not an offset a caller can correct for, and swept over
+// plan sizes the difference is neither constant nor even consistently outward.
+fn test_the_miter_closes_the_outline_but_is_not_the_plans_corner() {
+  p = cottage();
+  cells = cottage_cells();
+
+  for side in 0..4 {
+    nx = (side + 1) % 4 ?? 0;
+    assert(quad_gap(p, cells, side, nx) == 0.0, "mitered sides {side}->{nx} share their endpoint");
+    assert(abs(span_gap(p, cells, side, nx) - 0.4589642122738423) < 1e-12,
+           "the un-mitered spans leave a corner gap, got {span_gap(p, cells, side, nx)}");
+  }
+
+  // Swept over plan sizes: the recovered corner never lands on the plan's, it is
+  // sometimes outside the plan rectangle and sometimes inside it, and the distance
+  // wanders with how the fill quantises.
+  noutside = 0;
+  ninside = 0;
+  nearest = 9.0;
+  for wid in 2..9 {
+    q = plan_new(0, 0, wid, wid - 1, 0, false);
+    c = patch();
+    lb = labels_new(Q0, R0, W, H);
+    draw_floor(q, c, lb, 1);
+    (mx, my, mok) = surface_miter(q, c, 3, 0);
+    assert(mok, "adjacent sides of a closed form always cross");
+    (cx, cy) = plan_side_point(q, 0, 0.0);
+    d = sqrt((mx - cx) * (mx - cx) + (my - cy) * (my - cy)) ?? 0.0;
+    if d < nearest { nearest = d; }
+    (_lu, lv) = plan_to_local(q, mx, my);
+    // the recovered corner sits on the row lattice: an exact multiple of 3/4
+    rows = (abs(lv) / 0.75) ?? 0.0;
+    assert(abs(rows - ((round(rows) ?? 0.0))) < 1e-12,
+           "the recovered corner is a rational of the lattice, got {abs(lv)}");
+    // the plan's half-depth is not — it is (dep * sqrt(3) / 2)
+    steps = (plan_hd(q) / 0.75) ?? 0.0;
+    assert(abs(steps - ((round(steps) ?? 0.0))) > 1e-6, "and the plan's half-depth is not");
+    if abs(lv) > plan_hd(q) { noutside = noutside + 1; } else { ninside = ninside + 1; }
+  }
+  assert(nearest > 0.4, "no plan size brings the two corners closer than {nearest} world units");
+  assert(noutside > 0 && ninside > 0,
+         "and the recovered corner is outside the plan on some sizes and inside on others");
+}
+
+// @HXD-004 — A DOOR IS A MATERIAL, AND NEVER A HOLE.  The field stores ONE
+// material per wall slot, so an opening REPLACES the wall material rather than
+// sitting in a channel beside it.  That leaves exactly one way to get it wrong,
+// and it is the way that looks simplest: write 0.
+//
+// `OPEN_NONE` is not "no opening" — it is the wall material 0, which means NO
+// WALL.  Writing it deletes the edge, and the wall stops being one closed run:
+// the boundary that had no loose ends grows two.  Everything downstream that
+// treats a wall as one run — recovery, collision, the surface above — is reading
+// a different shape from then on.
+//
+// `OPEN_GAP` is what "a hole in the wall" actually means here: the leaf is missing
+// entirely, nothing collides, and THE WALL IS STILL THERE.  An opening has
+// geometry of its own — a frame, a lintel, a ragged jamb — and absence has none.
+fn test_a_door_is_a_material_and_never_a_hole() {
+  p = cottage();
+  cells = cottage_cells();
+
+  for kind in [OPEN_DOOR, OPEN_WINDOW, OPEN_GAP, OPEN_NONE] {
+    edges = edgeset_new(Q0, R0, W, H);
+    ne = draw_walls(cells, edges, WALLMAT);
+    assert(ne == 38 && wall_chain_ends(edges, Q0, R0, W, H) == 0,
+           "the drawn wall is a closed loop before anything is placed");
+    placed = place_opening(p, cells, edges, 0, 0.5, 1, kind);
+    assert(placed == 1, "one edge takes the opening");
+    left = wall_edge_count(cells, edges);
+    ends = wall_chain_ends(edges, Q0, R0, W, H);
+    if kind == OPEN_NONE {
+      assert(left == 37, "material 0 DELETES the edge: 38 -> {left}");
+      assert(ends == 2, "and the closed loop grows two loose ends, got {ends}");
+    } else {
+      assert(left == 38, "an opening keeps its edge, got {left}");
+      assert(ends == 0, "so the wall is still one closed run, got {ends}");
+    }
+  }
+}
+
+// @HXD-005 — A WALL IS THE BOUNDARY OF A FILLED REGION, WHICH IS WHY IT COSTS NO
+// FLOOR.  Walls are edges between a cell of the region and a cell outside it, so
+// the boundary is a closed loop BY CONSTRUCTION at any size, orientation or tie —
+// and every floor cell survives.  Drawn instead as a band of cells along the
+// outline, this cottage would lose the 16 of its 27 cells that touch the outside:
+// 59% of the house, and the remaining room is not the room that was designed.
+//
+// Counting those edges has one trap, and it comes from the field's own symmetry:
+// a boundary edge belongs to a PAIR of cells, and the enumeration a caller writes
+// first — the three directions each cell "owns" — misses every edge whose owner is
+// the outside cell.  Both neighbour conventions in this family have such an
+// enumeration, and they are not the same three, so the same mistake reads 19 in one
+// and 17 in the other while the answer is 38.
+fn test_the_wall_costs_no_floor_and_the_count_needs_all_six() {
+  cells = cottage_cells();
+  assert(hexset_count(cells) == 27, "the cottage keeps all 27 floor cells");
+  edges = edgeset_new(Q0, R0, W, H);
+  ne = draw_walls(cells, edges, WALLMAT);
+  assert(ne == 38, "with 38 wall edges around them");
+  assert(ring_cells(cells) == 16, "16 of the 27 touch the outside — what a band wall would eat");
+
+  assert(wall_edge_count(cells, edges) == 38, "all six directions from every cell: 38");
+  assert(count_three_dirs(cells, edges, true) == 19, "the three a cell owns, hex_grid order: 19");
+  assert(count_three_dirs(cells, edges, false) == 17, "the same shortcut, hex_field order: 17");
+}
+
+// @HXD-006 — A FEATURE IS INDEXED BY ITS EXACT `t`, NEVER BY ITS POSITION IN THE
+// RUN.  The model puts a door at `(side, t)`; the field marks edges.  Along a run
+// of `n` edges the recoverable positions are the edge centres `(2i+1)/2n` — exact
+// rationals, odd numerator over `2n` — and `place_opening` snaps to the nearest,
+// which is what makes a feature survive the round trip (`hex_fit`'s @HXI-005 is
+// the doorstep that refuses the positions this cannot get back).
+//
+// The trap is the run's ORDER.  `side_edges` fills it in cell-scan order, which is
+// not `t` order: the numerators of this side come out `1 5 3 7 9 13 11 15 17`.  So
+// two edges that are ADJACENT along the wall can sit two apart in the run with a
+// plain wall edge between them — which is exactly what a two-edge window does here.
+// Read features with `feature_find`, which returns numerators in ascending `t`.
+fn test_a_feature_is_indexed_by_its_t_not_its_position() {
+  p = cottage();
+  cells = cottage_cells();
+  edges = edgeset_new(Q0, R0, W, H);
+  draw_walls(cells, edges, WALLMAT);
+
+  sr = side_edges(p, cells, 0);
+  n = side_run_len(sr);
+  assert(n == 9, "side 0 carries 9 edges, got {n}");
+  order = "";
+  for i in 0..n { order += "{feature_t_num(sr, i, n)} "; }
+  assert(order == "1 5 3 7 9 13 11 15 17 ", "the STORAGE order of the t numerators is [{order}]");
+
+  // A door in the middle, and a two-edge window near the far end.
+  assert(place_opening(p, cells, edges, 0, 0.5, 1, OPEN_DOOR) == 1, "one door edge");
+  assert(place_opening(p, cells, edges, 0, 0.1, 2, OPEN_WINDOW) == 2, "two window edges");
+
+  door = feature_find(p, cells, edges, 0, OPEN_DOOR);
+  window = feature_find(p, cells, edges, 0, OPEN_WINDOW);
+  assert(len(door) == 1 && (door[0] ?? 0) == 9, "the door is at t = 9/18, exactly the middle");
+  assert(len(window) == 2 && (window[0] ?? 0) == 1 && (window[1] ?? 0) == 3,
+         "the window took the two nearest centres to 0.1, t = 1/18 and 3/18");
+  assert(feature_t_admissible(9, 9) && !feature_t_admissible(8, 9),
+         "a legal t has an ODD numerator over 2n — an even one is a corner, not a centre");
+
+  // …and those two adjacent window edges are NOT adjacent in the run.
+  assert(surface_edge_mat(p, cells, edges, 0, 0) == OPEN_WINDOW, "run position 0 is window");
+  assert(surface_edge_mat(p, cells, edges, 0, 1) == WALLMAT, "position 1 is plain wall");
+  assert(surface_edge_mat(p, cells, edges, 0, 2) == OPEN_WINDOW, "position 2 is the window again");
+
+  // What a renderer draws is not the marked EDGE but its interval ON the surface:
+  // the wall is one quad and each feature is a sub-interval of it, so the zigzag
+  // never reaches the picture.  One edge is exactly 1.0 world unit of clear
+  // width — 0.87 m, a real domestic door, which a cell-thick wall could not express.
+  (ex0, ey0, ex1, ey1) = surface_edge_span(p, cells, 0, 0);
+  wide = sqrt((ex1 - ex0) * (ex1 - ex0) + (ey1 - ey0) * (ey1 - ey0)) ?? 0.0;
+  assert(abs(wide - 1.0) < 1e-12, "one edge opens 1.0 world unit of wall, got {wide}");
+  assert(abs(wide * 0.8660254037844386 - 0.8660254037844386) < 1e-12, "which is 0.87 m");
+  // and both its ends lie on the wall's own line, not on the zigzag
+  (sx0, sy0, sx1, sy1) = surface_span(p, cells, 0);
+  along = sqrt((sx1 - sx0) * (sx1 - sx0) + (sy1 - sy0) * (sy1 - sy0)) ?? 0.0;
+  assert(abs(ex0 - sx0) < 1e-12 && abs(ex1 - sx1) < 1e-12,
+         "the interval runs along the same line as the wall quad");
+  assert(along > wide, "and is a sub-interval of it: {wide} of {along}");
+}
+
+// @HXD-007 — THE RIDGE HAS TO RUN PAST THE GABLE ENDS.  A roof height is the
+// distance from a ridge LINE, so where a cell's nearest point on that line is an
+// ENDPOINT rather than a perpendicular foot, the distance goes radial and the roof
+// rolls over like a quarter cone.  Stopping the ridge at the wall — the obvious
+// thing to do — does exactly that, and the gable end drops by sqrt(3)/4 world
+// units, 0.375 m of bulge on a real building.
+//
+// It is also a lesson about the measurement.  Compare the two rules over the
+// MASSING alone and they are identical to the last bit, because no cell of the
+// massing is past the ridge's end.  The difference lives entirely in the halo ring
+// `grow_ring` adds — which is there because the eave has to interpolate against
+// cells outside the wall — so an instrument that skips the halo reports a perfect
+// result over the empty set.
+fn test_the_ridge_runs_past_the_gable_ends() {
+  p = cottage();
+  massing = cottage_cells();
+  hw = plan_hw(p);
+  hd = plan_hd(p);
+
+  // On the massing alone the two rules agree — the comparison has nowhere to bite.
+  past_m = ridge_heights(p, massing, hw + hd + HEX_LEN);
+  stop_m = ridge_heights(p, massing, hw);
+  worst_m = 0.0;
+  for r in R0..R0 + H {
+    for q in Q0..Q0 + W {
+      if hexset_get(massing, q, r) {
+        d = abs(height_get(past_m, q, r) - height_get(stop_m, q, r));
+        if d > worst_m { worst_m = d; }
+      }
+    }
+  }
+  assert(worst_m < 1e-12, "over the massing the two ridges agree — an empty measurement");
+
+  // With the halo the difference is the bulge.  `draw_roof` is the shipped rule —
+  // it runs the ridge past both ends — and the hand-built ridge below is the
+  // tempting one that stops at the wall.
+  grown = patch();
+  grow_ring(massing, grown);
+  assert(hexset_count(grown) == 49, "the halo takes 27 cells to 49, got {hexset_count(grown)}");
+  past = heights_new(Q0, R0, W, H);
+  draw_roof(p, grown, past, 2.0, 0.5, 0);
+  stop = ridge_heights(p, grown, hw);
+  worst = 0.0;
+  ndiff = 0;
+  for r in R0..R0 + H {
+    for q in Q0..Q0 + W {
+      if hexset_get(grown, q, r) {
+        d = abs(height_get(past, q, r) - height_get(stop, q, r));
+        if d > 1e-9 { ndiff = ndiff + 1; }
+        if d > worst { worst = d; }
+      }
+    }
+  }
+  assert(ndiff == 10, "10 of the 49 cells sit past the shortened ridge, got {ndiff}");
+  assert(abs(worst - 0.4330127018922193) < 1e-12,
+         "and the worst of them rolls over by sqrt(3)/4 units, got {worst}");
+  assert(abs(worst * 0.8660254037844386 - 0.375) < 1e-12, "which is 0.375 m of bulge");
+
+  // The rolling over is not a defect in `roof_ridge` — it is what a SHORT ridge
+  // means, and on a hip roof it is the shape you are asking for.  Same call, same
+  // mechanism, and the only difference is whether the ridge was meant to end there.
+  hip = heights_new(Q0, R0, W, H);
+  draw_roof(p, grown, hip, 2.0, 0.5, 2);
+  nlower = 0;
+  for r in R0..R0 + H {
+    for q in Q0..Q0 + W {
+      if hexset_get(grown, q, r) && height_get(hip, q, r) < height_get(past, q, r) - 1e-9 {
+        nlower = nlower + 1;
+      }
+    }
+  }
+  assert(nlower > 0, "a hip's shortened ridge lowers the ends deliberately, {nlower} cells");
+}

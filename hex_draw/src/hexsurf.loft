@@ -54,6 +54,8 @@ fn edge_corners_of(qa: integer, ra: integer, qb: integer, rb: integer) -> (integ
 
 // THE DERIVATION.  Sum the edge vectors; sum the doubled midpoints.  Both are integer sums, so the
 // surface is exact before any float is involved.
+//
+// Example: @HXD-001
 pub fn surface_of(p: Plan, cells: HexSet, side: integer) -> WallSurface {
   sr = side_edges(p, cells, side);
   n = side_run_len(sr);
@@ -92,6 +94,8 @@ pub fn surface_of(p: Plan, cells: HexSet, side: integer) -> WallSurface {
 // What §6.1 actually claims is that the DIRECTION is exact — no residual perpendicular component —
 // which is a zero CROSS PRODUCT against the heading step, in exact integers.  The magnitude is the
 // run's length and carries no claim.
+//
+// Example: @HXD-002
 pub fn surface_heading(w: WallSurface) -> integer {
   for sh in 0..HEAD_N {
     st = head_step(sh);
@@ -128,6 +132,8 @@ fn perp_y(w: WallSurface) -> float {
 }
 
 // The perpendicular extent of the run's CORNERS about the mean line — the band of §6.2.
+//
+// Example: @HXD-001
 pub fn surface_band_corners(p: Plan, cells: HexSet, side: integer) -> float {
   w = surface_of(p, cells, side);
   sr = side_edges(p, cells, side);
@@ -166,6 +172,8 @@ pub fn surface_band_corners(p: Plan, cells: HexSet, side: integer) -> float {
 // points returned lie ON the line by construction, so the quad the renderer builds from them has
 // perpendicular spread exactly **0** — which is `G2`'s check — while the strip it replaces spreads
 // by `surface_band_corners`.
+//
+// Example: @HXD-003
 pub fn surface_span(p: Plan, cells: HexSet, side: integer) -> (float, float, float, float) {
   w = surface_of(p, cells, side);
   sr = side_edges(p, cells, side);
@@ -196,9 +204,17 @@ pub fn surface_span(p: Plan, cells: HexSet, side: integer) -> (float, float, flo
 }
 
 // The perpendicular spread of the FITTED quad's own corners about its line — `G2`'s check.  Both
-// endpoints come off the line, so this is exactly 0 and is the number `eave_spread(fitted) = 0`
-// names.  Measured rather than asserted, so that if the span ever stops lying on the line the gate
-// says so.
+// endpoints come off the line, so this is the number `eave_spread(fitted) = 0` names.  Measured
+// rather than asserted, so that if the span ever stops lying on the line the gate says so.
+//
+// ⚠ *EXACTLY* 0 IS A CLAIM ABOUT FLOATS, AND IT IS ORIENTATION-DEPENDENT.  The derivation above is
+// exact — integer sums and rationals — but the span is projected through world coordinates, and on
+// the orientations where that arithmetic does not cancel the round trip costs an ulp.  Measured
+// over 12 orientations x 4 sides: 32 read exactly 0 and 16 read 2.22e-16.  So `== 0.0` passes only
+// on the orientations it was tried on; what holds everywhere is the comparison that means
+// something — flat against the STRIP's band, which is fifteen orders of magnitude larger.
+//
+// Example: @HXD-001
 pub fn surface_fitted_spread(p: Plan, cells: HexSet, side: integer) -> float {
   w = surface_of(p, cells, side);
   (sx0, sy0, sx1, sy1) = surface_span(p, cells, side);
@@ -216,12 +232,27 @@ pub fn surface_fitted_spread(p: Plan, cells: HexSet, side: integer) -> float {
 }
 
 // THE MITER POINT (`I-CORNER` part 4): where two adjacent fitted surfaces intersect.  This is the
-// corner the RENDER should use — each quad running miter-to-miter — and, more than that, it is a
-// recovery claim: the intersection of the two averaged lines must land on the **exact model
-// corner**, or the surfaces have drifted off the shape they were fitted to.
+// corner the RENDER should use — each quad running miter-to-miter, so consecutive sides share an
+// endpoint exactly and the outline closes with no gap.  That closure is the invariant, and it is
+// exact.
+//
+// ⚠ IT IS NOT THE `Plan`'S CORNER, and it never can be.  An earlier note here claimed the
+// intersection *"must land on the exact model corner, or the surfaces have drifted off the shape
+// they were fitted to"* — a check nobody ran.  Measured, it misses by 0.47 world units on the 5x4
+// cottage, and swept over plan sizes the miss is neither constant (0.465 .. 0.827) nor even
+// consistently outward.  The reason is structural rather than numerical: what these surfaces
+// recover is the face of the wall AS DRAWN, and the drawn footprint is the plan quantised to
+// cells, so the recovered corner is an exact rational of the lattice while the plan's half-depth
+// is an irrational multiple of `sqrt(3)/2`.  Two number systems that meet only at the origin.
+//
+// So a caller must never diff a recovered outline against plan geometry, and must not try to
+// correct for the offset either.  Use the recovered corner for anything that has to line up with
+// what was drawn.
 //
 // `ok` is false when the two lines are parallel, which for adjacent sides of a closed form cannot
 // happen — so a false here is a real defect, not a degenerate input to be shrugged at.
+//
+// Example: @HXD-003
 pub fn surface_miter(p: Plan, cells: HexSet, sa: integer, sb: integer)
                      -> (float, float, boolean) {
   wa = surface_of(p, cells, sa);
@@ -244,6 +275,8 @@ pub fn surface_miter(p: Plan, cells: HexSet, sa: integer, sb: integer)
 // consecutive sides share an endpoint exactly and the outline closes with no corner gap.  This is
 // what a renderer should draw; `surface_span` (the projected extent) leaves the gaps the fitted
 // render made visible.
+//
+// Example: @HXD-003
 pub fn surface_quad(p: Plan, cells: HexSet, side: integer, nsides: integer)
                     -> (float, float, float, float) {
   // `%` is FALLIBLE in loft, so `nsides = 0` types `prev`/`next` as `integer?` — and a null index
@@ -270,6 +303,8 @@ pub fn surface_quad(p: Plan, cells: HexSet, side: integer, nsides: integer)
 // `[s0,s1]` along an exact straight or arc"*, an interval on the analytic surface rather than a
 // stored edge.  The renderer draws the wall as one quad (`surface_span`) and each feature as a
 // sub-interval of it, so the zigzag never reaches the picture.
+//
+// Example: @HXD-006
 pub fn surface_edge_span(p: Plan, cells: HexSet, side: integer, i: integer)
                          -> (float, float, float, float) {
   w = surface_of(p, cells, side);
@@ -309,6 +344,8 @@ pub fn surface_edge_mat(p: Plan, cells: HexSet, edges: EdgeSet, side: integer,
 // The perpendicular extent of the MIDPOINTS about the mean line.  Not in §6.2, and it is not the
 // same as the corner band: on the east family the midpoints are exactly COLINEAR (0), while on the
 // north family they span the full band — the row stagger, which the corners hide.
+//
+// Example: @HXD-001
 pub fn surface_band_mids(p: Plan, cells: HexSet, side: integer) -> float {
   w = surface_of(p, cells, side);
   sr = side_edges(p, cells, side);
@@ -337,6 +374,8 @@ pub fn surface_band_mids(p: Plan, cells: HexSet, side: integer) -> float {
 // perpendicular deviations of the midpoints from the derived mean line.  Averaging names the same
 // geometry as an exact band constant and has nothing to tune; this is the control that the
 // distinction is real rather than rhetorical.
+//
+// Example: @HXD-001
 pub fn surface_lsq_residual(p: Plan, cells: HexSet, side: integer) -> float {
   w = surface_of(p, cells, side);
   sr = side_edges(p, cells, side);
@@ -383,6 +422,8 @@ pub fn surface_lsq_residual(p: Plan, cells: HexSet, side: integer) -> float {
 // The exact `t` of stored edge `i`, as the numerator over `2n`: an odd integer in `1 .. 2n-1`.
 // `sr_t` is a float only because `SideRun` holds it that way; the value is an exact rational and
 // this recovers the numerator without a tolerance being involved in the answer.
+//
+// Example: @HXD-006
 pub fn feature_t_num(sr: SideRun, i: integer, n: integer) -> integer {
   (round((sr.sr_t[i] ?? 0.0) * 2.0 * (n as float)) ?? 0.0) as integer
 }
@@ -394,6 +435,8 @@ pub fn feature_t_admissible(num: integer, n: integer) -> boolean {
 
 // Recover a feature from the field: the `t` numerators of every edge on `side` carrying `kind`,
 // in ascending `t` order (C2's ordering, not the storage order).
+//
+// Example: @HXD-006
 pub fn feature_find(p: Plan, cells: HexSet, edges: EdgeSet,
                     side: integer, kind: integer) -> vector<integer> {
   sr = side_edges(p, cells, side);
@@ -420,6 +463,8 @@ pub fn feature_find(p: Plan, cells: HexSet, edges: EdgeSet,
 
 // How many boundary edges carry a wall material at all — the run's length, which a re-materialled
 // feature must leave UNCHANGED.  Deleting an edge instead is what fragments a run.
+//
+// Example: @HXD-005
 pub fn wall_edge_count(cells: HexSet, edges: EdgeSet) -> integer {
   n = 0;
   for wr in hexset_r0(cells)..hexset_r0(cells) + hexset_h(cells) {

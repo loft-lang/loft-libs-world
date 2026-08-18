@@ -37,5 +37,10 @@ fn test_a_wall_recovers_as_one_exact_surface() {
   w = surface_of(p, cells, 0);
   assert(surface_is_exact(w), "side 0's surface is exact");
   spread = surface_fitted_spread(p, cells, 0);
-  assert(spread == 0.0, "the fitted surface has zero spread -- one flat quad, got {spread}");
+  // Exactly 0 at this orientation, and that is luck: the derivation is exact but the span is
+  // presented in floats, so 16 of the 12 orientations x 4 sides read one ulp instead (the
+  // worked examples measure the census).  What holds everywhere is flat against the STRIP's
+  // own width, which is fifteen orders of magnitude larger.
+  assert(spread < BAND_TOPS * 1e-14,
+         "the fitted surface is flat where the strip it replaces is {BAND_TOPS} wide, got {spread}");
 }

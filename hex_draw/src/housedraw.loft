@@ -100,6 +100,8 @@ pub fn draw_floor(p: Plan, cells: HexSet, types: Labels, floor_type: integer) ->
 // Every edge between a cell of the region and one outside it.  Closed by construction,
 // and it costs no floor at all: a 7.5 x 6.0 m cottage keeps all 27 of its cells, where
 // a wall drawn as a band of cells would eat 16 of them — 59% of the house.
+//
+// Example: @HXD-005
 pub fn draw_walls(cells: HexSet, edges: EdgeSet, wall_mat: integer) -> integer {
   n = 0;
   for wr in hexset_r0(cells)..hexset_r0(cells) + hexset_h(cells) {
@@ -129,6 +131,8 @@ pub fn draw_walls(cells: HexSet, edges: EdgeSet, wall_mat: integer) -> integer {
 //
 // The edge KEEPS its wall material; the opening goes in the surf slot.  Nothing is
 // deleted, so the wall still fits as one run.
+//
+// Example: @HXD-004
 pub fn place_opening(p: Plan, cells: HexSet, edges: EdgeSet,
                      side: integer, t: float, nedges: integer, kind: integer) -> integer {
   sr = side_edges(p, cells, side);
@@ -160,6 +164,8 @@ pub fn place_opening(p: Plan, cells: HexSet, edges: EdgeSet,
 // One ring of halo around the massing, because that ring is what makes the EAVE
 // interpolable: without it 38 of the 76 wall-edge samples face a cell with no stored
 // height, and the wall top has nothing to meet.
+//
+// Example: @HXD-007
 pub fn grow_ring(src: HexSet, dst: HexSet) {
   for gr in hexset_r0(src)..hexset_r0(src) + hexset_h(src) {
     for gq in hexset_q0(src)..hexset_q0(src) + hexset_w(src) {
@@ -175,6 +181,8 @@ pub fn grow_ring(src: HexSet, dst: HexSet) {
 // Stopping it at the wall makes the distance go radial past the tip, so the gable end
 // rolls over like a cone quadrant — 0.43 units, 0.37 m of bulge.  A hip is the same
 // call with the ridge shortened; then the conical ends are the feature, not a defect.
+//
+// Example: @HXD-007
 pub fn draw_roof(p: Plan, cells: HexSet, hz: Heights,
                  eave: float, pitch: float, hip_steps: integer) {
   hw = plan_hw(p);

@@ -14,13 +14,12 @@
 # packages, ~478 public functions — and it is geometry, which is the tier where a
 # call site teaches most.  The first pass took the tier-1 package (`hex_grid`, the
 # convention every other one is expressed in) and `hex_world`; `hex_form` (Phase E row 1)
-# `hex_place` (row 2), `hex_roof` (row 3), `hex_way` (row 4), `hex_shape` (row 5) and
-# `hex_fit` (row 8) followed.  The six rows below say what their examples would teach, so
-# the next pass starts from a list rather than a re-read.
+# `hex_place` (row 2), `hex_roof` (row 3), `hex_way` (row 4), `hex_shape` (row 5),
+# `hex_fit` (row 8) and `hex_draw` (row 9) followed.  The five rows below say what their
+# examples would teach, so the next pass starts from a list rather than a re-read.
 #
 # package	verdict	reason
 hex_body	deferred	A body is a RIG — bones and joint limits — never a pose, and the pose is COMPUTED from the current rig. That is the contract a caller gets wrong, and showing it needs a rig small enough to hand-compute a world frame for. Unblocked by picking that rig; 0.3.0 made the frame checkable (rig_world_seg3 was discarding it).
-hex_draw	deferred	The contract worth showing is the inverse read: a wall's analytic surface recovered as the exact average of its stored edges, so a wall renders as ONE flat quad rather than a strip. Needs a drawn Plan to demonstrate, so it follows hex_fit and hex_form rather than leading them.
 hex_edge	deferred	The example is already written as prose — the sweep_path resting-position trap from moros#10, now in this package's README: a caller must not come to rest exactly at the fraction returned, because that point is on the bisector and the next hex_at may round to the far side. Turning it into a tagged test is blocked on the design question the note ends with, which is the owner's: whether a sweep_path_skin belongs here or every caller keeps its own.
 hex_field	deferred	The largest surface in the repo (82 public functions) and the one with a real oracle — it must reproduce the Python's golden JSON byte for byte, which is possible only because the whole representation is INTEGER. That exactness is what an example should teach. Unblocked by choosing which golden fixture is small enough to read in a test.
 hex_recover	deferred	Law F is injectivity, and its coverage is a MEASUREMENT over an admitted space — a census, which is a long-running test rather than a teaching one. Unblocked by deciding what a fast readable subset of that census looks like.

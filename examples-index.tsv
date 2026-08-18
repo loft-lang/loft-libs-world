@@ -2,6 +2,13 @@
 # Regenerate: make examples-index    Verified in CI: check_doc_drift.sh examples-index
 # Every worked-example tag defined in this repo: where it lives + its git blob link.
 # tag	file:line	fn	blob_url
+@HXD-001	hex_draw/tests/02-worked-examples.loft:127	test_a_wall_is_one_quad_and_the_strip_it_replaces_has_a_width	https://github.com/loft-lang/loft-libs-world/blob/main/hex_draw/tests/02-worked-examples.loft#L127
+@HXD-002	hex_draw/tests/02-worked-examples.loft:197	test_exactness_is_a_cross_product_not_a_multiple	https://github.com/loft-lang/loft-libs-world/blob/main/hex_draw/tests/02-worked-examples.loft#L197
+@HXD-003	hex_draw/tests/02-worked-examples.loft:250	test_the_miter_closes_the_outline_but_is_not_the_plans_corner	https://github.com/loft-lang/loft-libs-world/blob/main/hex_draw/tests/02-worked-examples.loft#L250
+@HXD-004	hex_draw/tests/02-worked-examples.loft:306	test_a_door_is_a_material_and_never_a_hole	https://github.com/loft-lang/loft-libs-world/blob/main/hex_draw/tests/02-worked-examples.loft#L306
+@HXD-005	hex_draw/tests/02-worked-examples.loft:343	test_the_wall_costs_no_floor_and_the_count_needs_all_six	https://github.com/loft-lang/loft-libs-world/blob/main/hex_draw/tests/02-worked-examples.loft#L343
+@HXD-006	hex_draw/tests/02-worked-examples.loft:369	test_a_feature_is_indexed_by_its_t_not_its_position	https://github.com/loft-lang/loft-libs-world/blob/main/hex_draw/tests/02-worked-examples.loft#L369
+@HXD-007	hex_draw/tests/02-worked-examples.loft:427	test_the_ridge_runs_past_the_gable_ends	https://github.com/loft-lang/loft-libs-world/blob/main/hex_draw/tests/02-worked-examples.loft#L427
 @HXF-001	hex_form/tests/02-worked-examples.loft:33	test_the_text_is_a_fixed_layout_byte_for_byte	https://github.com/loft-lang/loft-libs-world/blob/main/hex_form/tests/02-worked-examples.loft#L33
 @HXF-002	hex_form/tests/02-worked-examples.loft:56	test_a_refusal_is_a_zero_sided_form_not_an_error	https://github.com/loft-lang/loft-libs-world/blob/main/hex_form/tests/02-worked-examples.loft#L56
 @HXF-003	hex_form/tests/02-worked-examples.loft:92	test_the_name_is_written_beside_the_model_not_into_it	https://github.com/loft-lang/loft-libs-world/blob/main/hex_form/tests/02-worked-examples.loft#L92
