@@ -58,6 +58,8 @@ pub fn head_step(h: integer) -> (integer, integer) {
 }
 
 // 4 * the squared world length of the step — EDGE_N2_4 or VERTEX_N2_4, exactly.
+//
+// Example: @HXF-007
 pub fn head_n2_4(h: integer) -> integer {
   st = head_step(h);
   3 * st.0 * st.0 + st.1 * st.1
@@ -153,6 +155,8 @@ pub fn form_close(f: Form) -> (integer, integer) {
 }
 
 // Law J.  Both conditions, and a side count that can bound a region at all.
+//
+// Example: @HXF-006
 pub fn form_closes(f: Form) -> boolean {
   if form_sides(f) < 3 { return false; }
   res = form_close(f);
@@ -536,6 +540,8 @@ pub const REBUILD_LANDED = true;
 // A convex form is exactly one whose turns are all POSITIVE: every exterior angle turning the same
 // way, summing to one revolution.  A turn of 0 is a straight join, which is a re-spelling of a
 // longer side rather than a corner, so it is refused too.
+//
+// Example: @HXF-005
 pub fn form_is_convex(f: Form) -> boolean {
   turns = f.fm_turn;
   for ci in 0..len(turns) { if (turns[ci] ?? 0) <= 0 { return false; } }
@@ -559,6 +565,8 @@ pub fn form_is_simple(f: Form) -> boolean {
 }
 
 // THE ADMISSION RULE, as A4 leaves it: closed (law J), simple, and convex.
+//
+// Example: @HXF-005
 pub fn form_admissible(f: Form) -> boolean {
   form_closes(f) && form_is_simple(f) && form_is_convex(f)
 }

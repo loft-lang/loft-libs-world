@@ -2,6 +2,13 @@
 # Regenerate: make examples-index    Verified in CI: check_doc_drift.sh examples-index
 # Every worked-example tag defined in this repo: where it lives + its git blob link.
 # tag	file:line	fn	blob_url
+@HXF-001	hex_form/tests/02-worked-examples.loft:33	test_the_text_is_a_fixed_layout_byte_for_byte	https://github.com/loft-lang/loft-libs-world/blob/main/hex_form/tests/02-worked-examples.loft#L33
+@HXF-002	hex_form/tests/02-worked-examples.loft:56	test_a_refusal_is_a_zero_sided_form_not_an_error	https://github.com/loft-lang/loft-libs-world/blob/main/hex_form/tests/02-worked-examples.loft#L56
+@HXF-003	hex_form/tests/02-worked-examples.loft:92	test_the_name_is_written_beside_the_model_not_into_it	https://github.com/loft-lang/loft-libs-world/blob/main/hex_form/tests/02-worked-examples.loft#L92
+@HXF-004	hex_form/tests/02-worked-examples.loft:114	test_one_shape_has_one_canonical_text_from_any_corner	https://github.com/loft-lang/loft-libs-world/blob/main/hex_form/tests/02-worked-examples.loft#L114
+@HXF-005	hex_form/tests/02-worked-examples.loft:151	test_a_turn_of_zero_is_a_respelling_not_a_corner	https://github.com/loft-lang/loft-libs-world/blob/main/hex_form/tests/02-worked-examples.loft#L151
+@HXF-006	hex_form/tests/02-worked-examples.loft:177	test_closing_is_two_conditions_neither_implying_the_other	https://github.com/loft-lang/loft-libs-world/blob/main/hex_form/tests/02-worked-examples.loft#L177
+@HXF-007	hex_form/tests/02-worked-examples.loft:201	test_a_length_is_a_step_count_not_a_distance	https://github.com/loft-lang/loft-libs-world/blob/main/hex_form/tests/02-worked-examples.loft#L201
 @HXG-001	hex_grid/tests/03-worked-examples.loft:35	test_hex_round_answers_axial_not_offset	https://github.com/loft-lang/loft-libs-world/blob/main/hex_grid/tests/03-worked-examples.loft#L35
 @HXG-002	hex_grid/tests/03-worked-examples.loft:72	test_neighbor_deltas_depend_on_row_parity	https://github.com/loft-lang/loft-libs-world/blob/main/hex_grid/tests/03-worked-examples.loft#L72
 @HXG-003	hex_grid/tests/03-worked-examples.loft:105	test_one_wall_has_exactly_one_canonical_slot	https://github.com/loft-lang/loft-libs-world/blob/main/hex_grid/tests/03-worked-examples.loft#L105

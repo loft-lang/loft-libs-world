@@ -32,6 +32,8 @@ use hexform;
 //
 // One element per line, single-space separators, no trailing space. Fields in declaration order:
 // `stencil <name> h0 <n>` then one `side <i> len <l> turn <t>` per side, in index order.
+//
+// Example: @HXF-001
 pub fn form_write(f: Form, name: text) -> text {
   lens = f.fm_len;
   turns = f.fm_turn;
@@ -83,6 +85,8 @@ fn cmp_vec(a: vector<integer>, b: vector<integer>) -> integer {
 }
 
 // THE CANONICAL SPELLING — smallest `(turns, lens, h0)` over the n cyclic starts.
+//
+// Example: @HXF-004
 pub fn form_canon(f: Form) -> Form {
   n = len(f.fm_len);
   if n == 0 { return f; }
@@ -104,6 +108,8 @@ pub fn form_canon(f: Form) -> Form {
 }
 
 // The canonical text of a form, whichever corner it happened to be written from.
+//
+// Example: @HXF-004
 pub fn form_canon_text(f: Form, name: text) -> text { form_write(form_canon(f), name) }
 
 // ── the parser ─────────────────────────────────────────────────────────────
@@ -111,6 +117,16 @@ pub fn form_canon_text(f: Form, name: text) -> text { form_write(form_canon(f), 
 // Strict by design: the reader accepts exactly what `form_write` emits. A lenient reader would
 // let a non-canonical spelling in and the byte-diff gate would stop meaning anything — the text
 // IS the contract, so anything it cannot round-trip must be refused rather than repaired.
+//
+// THAT WAS A CLAIM BEFORE IT WAS A TEST, and the claim was wrong in seven ways: a trailing
+// space, an extra field, junk after the header, a non-integer length, an empty length, an
+// unnormalised `h0` and a non-integer `h0` were all ADMITTED and then re-written differently.
+// Six of those were spelling; one was not — `len x` became `len 0`, a side that is not there,
+// admitted into the model without a word. What pins it now is a RE-SPELLING IDENTITY: a field
+// is an integer only if printing the parse reproduces the original characters, and a line is a
+// record only if it carries exactly the fields the writer emits.
+//
+// Example: @HXF-002
 fn nth_word(line: text, i: integer) -> text {
   parts = line.split(' ');
   parts[i] ?? ""
@@ -120,6 +136,28 @@ fn nth_word(line: text, i: integer) -> text {
 // itself (`s as integer ?? 0`), not applied to an already-parenthesised fallible cast.
 fn word_int(line: text, i: integer) -> integer { nth_word(line, i) as integer ?? 0 }
 
+// How many space-separated fields the line has. The layout (C4) fixes this per record, so a
+// line carrying MORE is a different line — trailing junk and a trailing space both land here.
+fn word_count(line: text) -> integer { len(line.split(' ')) }
+
+// Is field `i` an integer SPELLED THE WAY `form_write` spells one?
+//
+// Not a character class: the parse has to reproduce the original characters. That is the C1
+// rule ("integers only") and the C4 rule ("fixed layout") in one test, and it refuses `""`,
+// `x`, `007` and `+1` — each of which a fallible cast would otherwise hand back as a plausible
+// number. `x` becoming `0` was the sharpest of them: not a spelling slip but a SIDE THAT IS
+// NOT THERE, admitted into the model without a word.
+fn word_is_int(line: text, i: integer) -> boolean {
+  w = nth_word(line, i);
+  v = w as integer ?? 0;
+  "{v}" == w
+}
+
+// The name a text was written with. It is NOT part of the model — `Form` has no name field —
+// so a round trip carries it only if the caller carries it.  Names are ONE WORD: the layout puts
+// `h0` in the third field, so a name with a space writes a text this reader refuses.
+//
+// Example: @HXF-003
 pub fn form_read_name(t: text) -> text {
   lines = t.split('\n');
   nth_word(lines[0] ?? "", 1)
@@ -127,21 +165,30 @@ pub fn form_read_name(t: text) -> text {
 
 // Parse a canonical text back into a Form. Returns a 0-sided form if the text does not have the
 // canonical shape — the caller checks, and the gate treats that as a refusal.
+//
+// Example: @HXF-002
 pub fn form_read(t: text) -> Form {
   lines = t.split('\n');
   nl = len(lines);
   if nl < 2 { return form_new(0, [], []); }
   head = lines[0] ?? "";
+  if word_count(head) != 4 { return form_new(0, [], []); }        // C4: `stencil <name> h0 <n>`
   if nth_word(head, 0) != "stencil" { return form_new(0, [], []); }
   if nth_word(head, 2) != "h0" { return form_new(0, [], []); }
+  if !word_is_int(head, 3) { return form_new(0, [], []); }        // C1: integers only
   h0 = word_int(head, 3);
+  if head_norm(h0) != h0 { return form_new(0, [], []); }          // C3: one heading, one spelling
   lens: vector<integer> = [];
   turns: vector<integer> = [];
   for ri in 1..nl {
     ln = lines[ri] ?? "";
+    if word_count(ln) != 6 { return form_new(0, [], []); }         // C4: `side <i> len <l> turn <t>`
     if nth_word(ln, 0) != "side" { return form_new(0, [], []); }
     if nth_word(ln, 2) != "len" { return form_new(0, [], []); }
     if nth_word(ln, 4) != "turn" { return form_new(0, [], []); }
+    if !word_is_int(ln, 1) { return form_new(0, [], []); }         // C1: integers only
+    if !word_is_int(ln, 3) { return form_new(0, [], []); }
+    if !word_is_int(ln, 5) { return form_new(0, [], []); }
     if word_int(ln, 1) != ri - 1 { return form_new(0, [], []); }   // C2: index order
     lens += [word_int(ln, 3)];
     turns += [word_int(ln, 5)];

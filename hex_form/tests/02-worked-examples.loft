@@ -1,0 +1,227 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Worked examples for `hex_form` (@PLN141).  Each `test_*` below is a REAL,
+// run-every-CI demonstration of a contract the signature cannot state; the
+// function documents itself by CITING the tag with `// Example: @HXF-00N`, and
+// `check_doc_drift.sh examples` fails if a citation goes dangling.  These are
+// teaching examples, distinct from the conformance suite in `01-hex-form.loft`.
+//
+// WHAT THIS PACKAGE ASKS OF A CALLER, and why a signature cannot carry it.  A
+// form is a walk, and its canonical text is the walk written down.  Both sides
+// travel as bare integers:
+//
+//   fm_h0                 a heading 0..11, where EVEN is an edge neighbour and
+//                         ODD a vertex direction — two different step lengths
+//   fm_len[i]             a COUNT of steps in side i's own heading, never a
+//                         distance: `len 1` is a different length on an even
+//                         heading than on an odd one, by exactly sqrt(3)
+//   fm_turn[i]            twelfths of a revolution, and the sum must be +12
+//
+// and the text they are written to has five rules (C1-C5, `DESIGN.md` §3):
+// integers only, fixed order, reduced forms, fixed layout, defaults omitted.
+// Every one of them is a way a HAND-WRITTEN form parses and means something
+// else, so every one of them is worked below.
+use hex_form;
+use hex_field;
+
+// A patch of lattice big enough to hold every shape here, well clear of its edges:
+// `form_fill` counts only cells inside the patch, so a patch that clipped the shape
+// would make an assertion about the count silently measure the patch instead.
+fn patch() -> HexSet { hexset_chunk(0 - 12, 0 - 12, 25, 25) }
+
+// @HXF-001 — the canonical text is a FIXED LAYOUT (C2, C4), and the bytes are
+// the contract.  One record per line, fields in declaration order, single-space
+// separated, no trailing space and no trailing newline.  This matters because
+// the round-trip gate is a byte `diff`: a project file is diffable, and an undo
+// history is exact, only because one model has exactly one spelling.  If you
+// are generating this text from somewhere else, generate THESE bytes.
+fn test_the_text_is_a_fixed_layout_byte_for_byte() {
+  f = form_new(0, [1, 1, 1], [4, 4, 4]);          // the unit equilateral triangle
+  t = form_write(f, "tri");
+
+  // Pinned exactly — including the newline placement and the absence of a
+  // trailing one.  Read it as the format's specification, in the format.
+  want = "stencil tri h0 0\nside 0 len 1 turn 4\nside 1 len 1 turn 4\nside 2 len 1 turn 4";
+  assert(t == want, "the exact bytes; got\n[{t}]");
+
+  // And the round trip is on the BYTES, not merely on the model: reading and
+  // re-writing reproduces the same text, which is what makes a `diff` mean
+  // "the model changed" rather than "the file was rewritten".
+  g = form_read(t);
+  assert(form_eq(f, g), "read(write(f)) is f");
+  assert(form_write(g, "tri") == t, "write(read(t)) is t, byte for byte");
+}
+
+// @HXF-002 — the reader accepts EXACTLY what the writer emits, and a refusal
+// arrives as a ZERO-SIDED FORM, not as an error.  `form_read` returns `Form`
+// unconditionally, so nothing in the signature tells you a parse can fail:
+// the check is yours to write, and it is `form_sides(f) == 0`.
+//
+// The rule the refusals enforce is C1 (integers only) and C4 (fixed layout).
+// Both are ordinary things to get wrong by hand — a trailing space survives
+// most editors, and a length that is not a number is a typo — and neither is
+// repaired.  Repairing them is what would break the byte diff, so a text this
+// library cannot write is a text it will not read.
+fn test_a_refusal_is_a_zero_sided_form_not_an_error() {
+  good = "stencil tri h0 0\nside 0 len 1 turn 4\nside 1 len 1 turn 4\nside 2 len 1 turn 4";
+  assert(form_sides(form_read(good)) == 3, "the canonical text reads three sides");
+
+  // C4 — a trailing space is invisible in an editor and is not the layout.
+  trailing = "stencil tri h0 0\nside 0 len 1 turn 4 \nside 1 len 1 turn 4\nside 2 len 1 turn 4";
+  assert(form_sides(form_read(trailing)) == 0, "a trailing space is refused");
+
+  // C4 — so is an extra field, however harmless it looks.
+  junk = "stencil tri h0 0\nside 0 len 1 turn 4 note\nside 1 len 1 turn 4\nside 2 len 1 turn 4";
+  assert(form_sides(form_read(junk)) == 0, "an extra field is refused");
+
+  // C1 — the sharpest one.  A length that is not an integer is not a spelling
+  // slip: repaired to 0 it would be a SIDE THAT IS NOT THERE, admitted into the
+  // model without a word.  It is refused instead.
+  typo = "stencil tri h0 0\nside 0 len x turn 4\nside 1 len 1 turn 4\nside 2 len 1 turn 4";
+  assert(form_sides(form_read(typo)) == 0, "a non-integer length is refused, not read as 0");
+
+  // C1 again, on the header — a heading is spelled 0..11 and nothing else, even
+  // though 99 and 3 name the same direction.  Two spellings of one heading would
+  // be two texts for one model.
+  wide = "stencil tri h0 99\nside 0 len 1 turn 4\nside 1 len 1 turn 4\nside 2 len 1 turn 4";
+  assert(form_sides(form_read(wide)) == 0, "an unnormalised heading is refused");
+  assert(form_sides(form_read(good)) == 3, "and the good text still reads");
+}
+
+// @HXF-003 — the NAME is not part of the model, and it has to be one word.
+// `form_write` takes a name and `form_read_name` gives it back, but `Form` has
+// no name field: two stencils that differ only by name are the same form, and
+// the name you get out is the name you last wrote in.  The trap is the space —
+// `form_write` will happily emit `stencil my house h0 0`, and nothing will read
+// it back, because the layout puts `h0` in the third field.
+fn test_the_name_is_written_beside_the_model_not_into_it() {
+  f = form_new(0, [1, 1, 1], [4, 4, 4]);
+  t = form_write(f, "house");
+  assert(form_read_name(t) == "house", "the name comes back from the text");
+
+  // The model round-trips without it, so the name has to be carried by you.
+  g = form_read(t);
+  assert(form_eq(f, g), "the form is the same form");
+  assert(form_write(g, "shed") != t, "the name is a write-time argument, not stored");
+
+  // A name with a space writes a text that cannot be read back — a zero-sided
+  // form, silently.  Names are one word; validate yours before you write it.
+  spaced = form_write(f, "my house");
+  assert(form_sides(form_read(spaced)) == 0, "a multi-word name does not round-trip");
+}
+
+// @HXF-004 — one shape, one text, WHICHEVER CORNER it was drawn from (C3).
+// A closed cycle has no distinguished first corner, so the same shape drawn
+// starting at a different vertex is a different `Form` with the same outline:
+// the side and turn lists rotate, and the starting heading advances by the
+// turns that were skipped.  `form_canon` picks one of those spellings — the
+// lexicographically smallest `(turns, lens, h0)` — so `form_canon_text` is what
+// two authors of one shape both produce.  `form_write` is NOT that: it writes
+// the spelling you happen to hold.
+fn test_one_shape_has_one_canonical_text_from_any_corner() {
+  // A 2x3 rhombus, walked from corner 0 and from corner 1.  Corner 1 rotates
+  // both lists left by one AND advances h0 by the turn that was skipped (4).
+  a = form_new(0, [2, 3, 2, 3], [4, 2, 4, 2]);
+  b = form_new(4, [3, 2, 3, 2], [2, 4, 2, 4]);
+  assert(form_admissible(a) && form_admissible(b), "both spellings are admissible");
+
+  // Same outline, so the same cells — the fill cannot tell them apart.
+  na = form_fill(a, 0, 0, patch());
+  nb = form_fill(b, 0, 0, patch());
+  assert(na == 12 && nb == 12, "both fill rhombus_cells(2,3) = {rhombus_cells(2, 3)}");
+
+  // But the raw texts differ, and only the canonical one is stable.
+  assert(form_write(a, "r") != form_write(b, "r"), "the raw spellings differ");
+  ca = form_canon_text(a, "r");
+  assert(ca == form_canon_text(b, "r"), "one shape, one canonical text");
+  want = "stencil r h0 4\nside 0 len 3 turn 2\nside 1 len 2 turn 4\nside 2 len 3 turn 2\nside 3 len 2 turn 4";
+  assert(ca == want, "and it is this text; got\n[{ca}]");
+
+  // THE TRAP.  Rotating the lists by hand and leaving `h0` alone is not the
+  // same shape — it is that shape turned in place.  It still closes, it is
+  // still admissible, and it still fills twelve cells, so nothing downstream
+  // objects.  The canonical text is what notices.
+  c = form_new(0, [3, 2, 3, 2], [2, 4, 2, 4]);
+  assert(form_admissible(c), "the mis-shifted spelling is admissible too");
+  assert(form_fill(c, 0, 0, patch()) == 12, "and fills the same number of cells");
+  assert(form_canon_text(c, "r") != ca, "but it is a different shape, and the text says so");
+}
+
+// @HXF-005 — REDUCED FORMS (C3's companion rule): a turn of 0 is not a corner.
+// Walking straight through a vertex re-spells one long side as two short ones,
+// which is a second way to write one region — exactly what the canonical text
+// exists to prevent.  So `form_admissible` refuses it, even though the walk
+// closes, is simple, and fills precisely the same cells.
+//
+// This is the reason to call `form_admissible` and not `form_closes`: the fill
+// will not tell you, because the two spellings ARE the same region.
+fn test_a_turn_of_zero_is_a_respelling_not_a_corner() {
+  reduced   = form_new(0, [2, 2, 2], [4, 4, 4]);            // side-2 triangle, 3 corners
+  unreduced = form_new(0, [1, 1, 2, 2], [0, 4, 4, 4]);      // its first side, walked in two
+
+  // The unreduced spelling passes every test law J has to offer.
+  assert(form_closes(unreduced), "it closes");
+  assert(form_is_simple(unreduced), "it visits no point twice");
+  assert(!form_is_convex(unreduced), "but a turn of 0 is not a corner");
+  assert(!form_admissible(unreduced), "so it is not an admissible form");
+  assert(form_admissible(reduced), "the reduced spelling is");
+
+  // And the regions are identical, which is why the fill is no help here.
+  n1 = form_fill(reduced, 0, 0, patch());
+  n2 = form_fill(unreduced, 0, 0, patch());
+  assert(n1 == 6, "the side-2 triangle is tri_cells(2) = {tri_cells(2)} cells");
+  assert(n2 == n1, "and the unreduced spelling draws the same {n1}");
+}
+
+// @HXF-006 — law J is TWO INDEPENDENT conditions, and each catches what the
+// other cannot.  A walk closes when the step vectors sum to zero AND the turns
+// sum to one full revolution; neither implies the other, so checking one is
+// not a cheap version of checking both.
+//
+// The asymmetry is worth seeing once: the last turn happens AFTER the last
+// side, so it cannot move the endpoint.  Get it wrong and the walk still ends
+// where it started.
+fn test_closing_is_two_conditions_neither_implying_the_other() {
+  // A wrong final turn: the endpoint is perfect, the revolution is not.
+  bad_turn = form_new(0, [2, 2, 2], [4, 4, 5]);
+  end = form_close(bad_turn);
+  assert(end.0 == 0 && end.1 == 0, "the walk still ends where it started");
+  assert(form_turn_sum(bad_turn) == 13, "but it turned {form_turn_sum(bad_turn)} twelfths, not 12");
+  assert(!form_closes(bad_turn), "only the turn total catches this");
+
+  // A wrong length: the revolution is perfect, the endpoint is not.
+  bad_len = form_new(0, [2, 2, 3], [4, 4, 4]);
+  off = form_close(bad_len);
+  assert(form_turn_sum(bad_len) == 12, "one full revolution, exactly");
+  assert(off.0 == 0 - 1 && off.1 == 0 - 3, "but it ends at ({off.0},{off.1}), not the start");
+  assert(!form_closes(bad_len), "only the vector sum catches this");
+}
+
+// @HXF-007 — INTEGERS ONLY (C1), and the reason it is possible: a length in
+// this model is a COUNT of steps in that side's own heading, never a distance.
+// The twelve headings come in two classes — even ones step to an edge
+// neighbour, odd ones to a vertex — and their world lengths differ by exactly
+// sqrt(3).  So `len 1` on heading 0 and `len 1` on heading 1 are two different
+// distances written with the same integer, and a caller that compares lengths
+// across the classes as floats is comparing an irrational ratio.
+//
+// The library hands you that ratio as an INTEGER instead: `head_n2_4` is four
+// times the squared world length, which is 12 for an edge step and 36 for a
+// vertex one — exactly three times, with no rounding anywhere.
+fn test_a_length_is_a_step_count_not_a_distance() {
+  assert(head_n2_4(0) == 12, "an edge step: 4 * len^2 = 12");
+  assert(head_n2_4(1) == 36, "a vertex step: 4 * len^2 = 36");
+  assert(head_n2_4(1) == 3 * head_n2_4(0), "exactly 3x — the sqrt(3), squared and exact");
+  assert(head_is_edge(0) && !head_is_edge(1), "even headings are the edge neighbours");
+
+  // A parallelogram whose sides alternate between the two classes.  It is a
+  // perfectly ordinary admissible form, and its four lengths are written 2, 1,
+  // 2, 1 — two of those integers count edge steps and two count vertex steps.
+  p = form_new(0, [2, 1, 2, 1], [1, 5, 1, 5]);
+  assert(form_admissible(p), "alternating classes is an ordinary form");
+  assert(form_heading(p, 0) == 0, "side 0 runs on an edge heading");
+  assert(form_heading(p, 1) == 1, "side 1 runs on a vertex heading");
+  assert(head_is_edge(form_heading(p, 0)) != head_is_edge(form_heading(p, 1)),
+         "so `len 2` and `len 1` here are counts in different units");
+}

@@ -18,6 +18,9 @@ workshop that proves the family against an exact round trip.
 
 Add the dependency, `use hex_form;`, and call the maps below. **`USAGE.md` is the worked guide**, with
 every example pointed at a passing test in `tests/01-hex-form.loft` — the tests are the executable documentation.
+The five rules of the canonical text — C1–C5, and every one of them a way a hand-written form parses
+and means something else — are worked one by one in `tests/02-worked-examples.loft` (`@HXF-001..007`),
+cited from the functions they belong to.
 
 Split from `ROUNDTRIP.md`'s objects and maps (`SPEC` **I-EXTEND**: a library defines its primitives
 from its own semantics, for consumers it will never meet). See hexbody's `plans/lib-split/`.

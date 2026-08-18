@@ -23,6 +23,19 @@ what makes a project file diffable and an undo history exact.
 
 ## The worked examples, in the tests
 
+[`tests/02-worked-examples.loft`](tests/02-worked-examples.loft) takes the seven things a caller
+gets wrong and works each one as a running test, cited from the function it belongs to:
+
+| tag | what it teaches |
+|---|---|
+| `@HXF-001` | the canonical text is a **fixed layout**, pinned byte for byte — generate *these* bytes |
+| `@HXF-002` | the reader accepts exactly what the writer emits, and a refusal arrives as a **zero-sided form**, not an error |
+| `@HXF-003` | the **name** is written beside the model, not into it — and it has to be one word |
+| `@HXF-004` | one shape, one canonical text, from any corner — and shifting a corner by hand means shifting `h0` too |
+| `@HXF-005` | a **turn of 0** is a re-spelling, not a corner: both spellings fill the same cells, only one is admissible |
+| `@HXF-006` | closing is **two independent conditions**, and each catches what the other cannot |
+| `@HXF-007` | a length is a **step count**, never a distance — edge and vertex steps differ by exactly `sqrt(3)` |
+
 Each `fn test_*` in [`tests/01-hex-form.loft`](tests/01-hex-form.loft) is a small, complete program you can copy:
 
 - `fn main()` — the smallest call that does something real.
@@ -39,3 +52,7 @@ Run them yourself: `loft --interpret --tests tests` from the `hex_form/` directo
   a *reason* and an *offer*, and your editor should show them rather than treating the call as failed.
 - **No `ε` in an R1 comparison.** For content you authored, recovery is exact; a tolerance there is
   a defect, not a knob (`SPEC` **P4**).
+- **Hand-written text is refused, not repaired.** A trailing space, an extra field, a length that is
+  not a number, an `h0` outside `0..11` — each yields a zero-sided form rather than a guess. Check
+  `form_sides(f) == 0` after every `form_read`; the signature cannot tell you the parse failed
+  (`@HXF-002`).

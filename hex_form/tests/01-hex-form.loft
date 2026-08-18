@@ -30,11 +30,16 @@ fn test_the_text_round_trips_byte_for_byte() {
 }
 
 fn test_the_canonical_text_is_start_corner_invariant() {
-  // The same cycle written from three corners collapses to one canonical text -- this is what
-  // makes a project file diffable: two authors of the same shape produce the same bytes.
+  // The same cycle written from its three corners collapses to one canonical text -- this is
+  // what makes a project file diffable: two authors of the same shape produce the same bytes.
+  // A corner shift rotates the side and turn lists and advances h0 by the turns it skipped;
+  // this cycle is fully periodic, so the lists come back unchanged and h0 alone moves.
   a = form_new(0, [1, 1, 1], [4, 4, 4]);
-  b = form_new(0, [1, 1, 1], [4, 4, 4]);
+  b = form_new(4, [1, 1, 1], [4, 4, 4]);
+  c = form_new(8, [1, 1, 1], [4, 4, 4]);
+  assert(form_write(a, "s") != form_write(b, "s"), "three corners, three texts");
   assert(form_canon_text(a, "s") == form_canon_text(b, "s"), "one shape, one canonical text");
+  assert(form_canon_text(a, "s") == form_canon_text(c, "s"), "from every corner");
 }
 
 fn test_a_non_closing_walk_is_refused() {
