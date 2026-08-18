@@ -28,11 +28,36 @@ moros and dryopea (see `CONVERGENCE.md` at the repo root).
   shorelines; every course carves an additive, slope-shaped valley and the
   carved mouth floods — the sea comes inland, proportional to river size.
 
-## The invariant
+## The invariant, and the half it does not cover
 
-**Window independence**: every sample is a pure function of
-`(terrain, types, params, rivers, x, y)`. No hidden state, no sequential RNG.
-The tests rebuild the world from the same seed and assert sampled equality.
+**Sampling is pure**: a sample is a function of `(terrain, types, params, rivers,
+x, y)` and nothing else — no hidden state, no sequential RNG, no raster
+propagation — so the fine world derives on demand, in any order, from any
+viewport. That is what "window independence" names, and the tests hold it by
+rebuilding the world from the same seed and asserting sampled equality.
+
+**The record itself is NOT independent of the map's extent**, and the phrase
+invites the opposite reading. Hydrology is a global pass and flow accumulation is
+a catchment property, so widening the map raises accumulation everywhere, which
+flips cells to water, zeroes their relief, and moves the fine surface through the
+blend kernel. Measured on one authored ramp: a 5×5 window and an 8×8 window
+differ at 24 of 27 interior sample points, by up to 15.1 m, and the smaller map
+has no rivers at all where the bigger one has five. **Generate the overland map
+once, at its full extent; a window is a unit of sampling, never a unit of
+generation.**
+
+## The worked examples
+
+`tests/02-worked-examples.loft` works the eight things a caller gets wrong
+(`@HXT-001..008`), cited from the functions they belong to: the overland lattice
+is a THIRD lattice and is measured in metres (`@HXT-001`); sampling is pure but
+the record is not extent-independent (`@HXT-002`); hydrology rewrites the heights
+you authored and the passes have an order (`@HXT-003`); relief compounds by the
+COUNT of steep neighbours and water takes none (`@HXT-004`); a cell's own centre
+does not read its own height, because the kernel overlaps on purpose (`@HXT-005`);
+outside the map is a plateau, never a refusal (`@HXT-006`); the shoreline and the
+finished water are two different questions (`@HXT-007`); and a type boundary is a
+line, not a crossfade (`@HXT-008`).
 
 ## Use
 

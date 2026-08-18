@@ -30,10 +30,21 @@
 //    slope-shaped: gorges in steep land, wide floodplains on the flats) and a
 //    near-sea-level depth bonus floods the carved mouth: the sea comes inland.
 //
-// THE INVARIANT (window independence): every sampled value is a pure function
-// of (terrain data, params, types, x, y).  No hidden state, no sequential RNG,
-// no raster propagation — the package's tests re-derive samples from scratch
-// and assert equality.
+// THE INVARIANT, AND THE HALF IT DOES NOT COVER.  SAMPLING is pure: a sampled
+// value is a function of (terrain data, params, types, x, y) and nothing else —
+// no hidden state, no sequential RNG, no raster propagation — so the fine world
+// derives on demand, in any order, from any viewport.  That is what "window
+// independence" names, and the tests hold it by re-deriving samples from scratch.
+//
+// ⚠ THE RECORD ITSELF IS NOT INDEPENDENT OF THE MAP'S EXTENT, and the phrase
+// invites the opposite reading.  Hydrology is a GLOBAL pass and accumulation is
+// a catchment property, so widening the map raises accumulation everywhere,
+// which flips cells to water, which zeroes their relief, which moves the fine
+// surface through the blend kernel.  Measured on one authored ramp: a 5x5 and an
+// 8x8 window differ at 24 of 27 interior sample points, by up to 15.1 m, and the
+// smaller map has NO rivers where the bigger one has five.  So generate the
+// overland map ONCE, at its full extent — a window is a unit of SAMPLING, never
+// a unit of generation.
 //
 // Style: globally-unique pub names (terrain_*); pre-allocated vectors with
 // index writes for hot data; no struct-literal comprehensions (loft#319); no
@@ -124,6 +135,8 @@ pub fn terrain_idx(t: Terrain, c: integer, r: integer) -> integer {
 
 // Cell center in world meters — hex_grid's odd-r lattice scaled so the
 // horizontal pitch equals tp_tile (hex_grid's unit pitch is SQRT3).
+//
+// Example: @HXT-001
 pub fn terrain_center(p: TerrainParams, c: integer, r: integer) -> (float, float) {
   (hx, hy) = hex_to_px(c, r);
   s = p.tp_tile / SQRT3;
@@ -213,6 +226,8 @@ pub fn terrain_ridge_at(p: TerrainParams, x: float, y: float) -> float {
 // every land cell drains to the sea; cells the flood raised by more than
 // tp_lake_fill become lakes (material set to lake_mat).  Selection-based
 // flood (O(n^2)) — overland grids are small and this runs once at gen time.
+//
+// Example: @HXT-003
 pub fn terrain_hydrology(t: Terrain, p: TerrainParams, lake_mat: integer) {
   nx = t.tr_nx;
   ny = t.tr_ny;
@@ -347,6 +362,8 @@ pub fn terrain_hydrology(t: Terrain, p: TerrainParams, lake_mat: integer) {
 
 // Wet flags + the compounded neighbor relief.  Call AFTER the caller has
 // classified land materials (relief reads the final wet set).
+//
+// Example: @HXT-004
 pub fn terrain_relief_pass(t: Terrain, types: vector<TerrainType>, p: TerrainParams) {
   nx = t.tr_nx;
   ny = t.tr_ny;
@@ -410,6 +427,9 @@ pub struct TerrainSurf {
 
 // Smooth kernel blend of the overland cells around (x, y) + the boundary-line
 // contest + the fine height.  Pure function — THE seam invariant lives here.
+//
+// Example: @HXT-002
+// Example: @HXT-008
 pub fn terrain_surface_at(t: Terrain, types: vector<TerrainType>, p: TerrainParams, x: float, y: float) -> TerrainSurf {
   nt = len(types);
   wm: vector<float> = [];
@@ -521,6 +541,9 @@ pub fn terrain_surface_at(t: Terrain, types: vector<TerrainType>, p: TerrainPara
 }
 
 // Lightweight coarse-blend height only (for slopes along river courses).
+//
+// Example: @HXT-005
+// Example: @HXT-006
 pub fn terrain_blend_h(t: Terrain, p: TerrainParams, x: float, y: float) -> float {
   s = p.tp_tile / SQRT3;
   vs = 1.5 * s;
@@ -558,6 +581,8 @@ pub fn terrain_lake_field(p: TerrainParams, x: float, y: float, lakey: float) ->
 
 // Is (x, y) open water (sea by the fine height contour, or lake)?  PRE-carve —
 // this is the shoreline rivers attach to.
+//
+// Example: @HXT-007
 pub fn terrain_water_at(t: Terrain, types: vector<TerrainType>, p: TerrainParams, x: float, y: float) -> boolean {
   sf = terrain_surface_at(t, types, p, x, y);
   sf.sf_h <= p.tp_sea || terrain_lake_field(p, x, y, sf.sf_lakey) >= 0.5
@@ -728,6 +753,8 @@ fn th_shape_river(t: Terrain, p: TerrainParams, vx: vector<float>, vy: vector<fl
 // All river course pieces, fully shaped: anchors (edge bits + control points)
 // -> fractal displacement -> corner-cut smoothing -> shoreline trim -> width/
 // depth/valley-width per vertex (slope-shaped + the estuary depth bonus).
+//
+// Example: @HXT-002
 pub fn terrain_rivers(t: Terrain, types: vector<TerrainType>, p: TerrainParams) -> vector<TerrainRiver> {
   nx = t.tr_nx;
   ny = t.tr_ny;
@@ -899,6 +926,8 @@ pub struct TerrainSample {
 // The full sample: surface + ADDITIVE valley carving from every course near
 // the point + the water classification (sea floods the carved mouth).  Pure
 // function of (t, types, p, rivers, x, y) — THE window-independence invariant.
+//
+// Example: @HXT-007
 pub fn terrain_sample(t: Terrain, types: vector<TerrainType>, p: TerrainParams, rivers: vector<TerrainRiver>, x: float, y: float) -> TerrainSample {
   sf = terrain_surface_at(t, types, p, x, y);
   carve = 0.0;

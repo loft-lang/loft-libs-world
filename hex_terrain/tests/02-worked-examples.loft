@@ -1,0 +1,390 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Worked examples for `hex_terrain` (@PLN141).  Each `test_*` below is a REAL,
+// run-every-CI demonstration of a contract the signature cannot state; the
+// function documents itself by CITING the tag with `// Example: @HXT-00N`, and
+// `check_doc_drift.sh examples` fails if a citation goes dangling.  These are
+// teaching examples, distinct from the conformance suite in `01-hex-terrain.loft`.
+//
+// WHAT THIS PACKAGE ASKS OF A CALLER, and why a signature cannot carry it.
+// `hex_terrain` is the OVERLAND layer: one cell is hundreds of metres and is the
+// terrain AUTHORITY, while the world you walk through is fine.  Everything hard
+// about using it is that boundary:
+//
+//   the lattice   cells are `(c, r)` on a coarse hex grid — the THIRD lattice in
+//                 this repo, and its integers mean nothing to the other two
+//   the sampling  every `*_at` / `terrain_sample` call takes METRES, and there
+//                 is no coordinate it will refuse
+//   the passes    hydrology and relief are GLOBAL, run once over the whole map,
+//                 and they rewrite the record the pure sampling reads
+//
+// The fixture below is a hand-authored ramp: `h(c, r) = 100c + 10r` with a sea
+// column at `c = 0`, 500 m tiles, so every number in these tests is arithmetic
+// you can redo on paper.
+use hex_terrain;
+use hex_grid;
+
+TILE = 500.0;
+SEED = 7;
+
+// Material indices into the type table below.
+SEA   = 0;
+LAKE  = 1;
+PLAIN = 2;
+ROCK  = 3;
+
+fn types4() -> vector<TerrainType> {
+  ts: vector<TerrainType> = [];
+  ts += [TerrainType { tt_key: "sea",   tt_rise: 0.0,   tt_steep: 0.0,  tt_wet: true }];
+  ts += [TerrainType { tt_key: "lake",  tt_rise: 0.0,   tt_steep: 0.0,  tt_wet: true }];
+  ts += [TerrainType { tt_key: "plain", tt_rise: 10.0,  tt_steep: 2.0,  tt_wet: false }];
+  ts += [TerrainType { tt_key: "rock",  tt_rise: 140.0, tt_steep: 98.0, tt_wet: false }];
+  ts
+}
+
+// The fixture: a ramp climbing east, a sea column at c = 0, optionally one PIT.
+// The CONTENT is the caller's — this library supplies the mechanism only — so a
+// terrain is authored by writing the vectors and then running the passes.
+fn ramp(nx: integer, ny: integer, pit: boolean) -> Terrain {
+  t = terrain_new(nx, ny);
+  th = &t.tr_h;
+  tm = &t.tr_mat;
+  for r in 0..ny {
+    for c in 0..nx {
+      i = r * nx + c;
+      if c == 0 {
+        th[i] = 0.0 - 50.0;
+        tm[i] = SEA;
+      } else {
+        th[i] = 100.0 * (c as float) + 10.0 * (r as float);
+        tm[i] = PLAIN;
+      }
+    }
+  }
+  if pit { th[2 * nx + 2] = 5.0; }
+  t
+}
+
+// The same fixture with both global passes run — what a caller actually samples.
+fn cooked(nx: integer, ny: integer, pit: boolean) -> Terrain {
+  t = ramp(nx, ny, pit);
+  terrain_hydrology(t, terrain_params(SEED, TILE), LAKE);
+  terrain_relief_pass(t, types4(), terrain_params(SEED, TILE));
+  t
+}
+
+// The smallest call that does something real: author a ramp, run the passes, and
+// sample a point in metres.
+fn main() {
+  p = terrain_params(SEED, TILE);
+  t = cooked(5, 5, false);
+  (x, y) = terrain_center(p, 2, 2);           // cell (2,2) in METRES
+  s = terrain_surface_at(t, types4(), p, x, y);
+  assert(s.sf_mat == PLAIN, "the middle of the ramp is plain land");
+  assert(s.sf_h > 200.0 && s.sf_h < 240.0, "at about the cell's own 220 m, got {s.sf_h}");
+}
+
+// @HXT-001 — THREE LATTICES IN ONE REPO, AND ONLY ONE OF THEM IS METRES.
+// `hex_grid` walks a fine lattice; `hex_world`'s axial coordinates are a second;
+// this package's `(c, r)` is a third — a coarse OVERLAND grid whose pitch is
+// `tp_tile` metres.  The integers look identical and mean nothing to each other,
+// and `terrain_center` is the ONE bridge across.
+//
+// Two things bite.  First, "500 m tiles" does not make a 500 m square grid: the
+// column pitch is exactly the tile, and the ROW pitch is `tile * sqrt(3)/2` with
+// odd rows offset by half a tile — this is a hex lattice, not a raster.  Second,
+// every sampling entry point takes METRES and will refuse nothing, so a
+// coordinate that crossed the boundary — cell indices, or a walked position in
+// world units — returns a real height from a real place that is not the place
+// you meant.
+fn test_the_overland_lattice_is_a_third_one_and_it_is_in_metres() {
+  p = terrain_params(SEED, TILE);
+
+  (x0, y0) = terrain_center(p, 0, 0);
+  (x1, y1) = terrain_center(p, 1, 0);
+  (x2, y2) = terrain_center(p, 0, 1);
+  assert(x0 == 0.0 && y0 == 0.0, "cell (0,0) is the origin");
+  assert(abs(x1 - TILE) < 1e-9 && y1 == 0.0, "the COLUMN pitch is exactly the tile, got {x1}");
+  assert(abs(y2 - TILE * 0.8660254037844386) < 1e-9,
+         "the ROW pitch is tile * sqrt(3)/2 = 433.01 m, not 500, got {y2}");
+  assert(abs(x2 - TILE * 0.5) < 1e-9, "and an odd row is offset half a tile, got {x2}");
+
+  // The same integers in the WALKED lattice are a different place entirely.
+  (cx, cy) = terrain_center(p, 3, 2);
+  (wx, wy) = hex_to_px(3, 2);
+  assert(abs(cx - 1500.0) < 1e-9 && abs(cy - 866.0254037844386) < 1e-9,
+         "overland (3,2) is 1500 m east and 866 m north, got ({cx},{cy})");
+  assert(wx < 6.0 && wy < 4.0, "hex_grid's own (3,2) is ({wx},{wy}) — its own units, its own lattice");
+
+  // What a crossed coordinate costs: a height, from somewhere else, with no complaint.
+  t = cooked(5, 5, false);
+  here = terrain_blend_h(t, p, cx, cy);
+  as_index = terrain_blend_h(t, p, 3.0, 2.0);
+  as_walked = terrain_blend_h(t, p, wx, wy);
+  assert(here > 300.0, "the cell's own centre reads about 320 m, got {here}");
+  assert(as_index < 0.0, "the INDEX read as metres lands in the sea column, got {as_index}");
+  assert(as_walked < 0.0, "and so does a walked position, got {as_walked}");
+  assert(as_index != as_walked, "two different wrong places, both perfectly plausible");
+}
+
+// @HXT-002 — "WINDOW INDEPENDENCE" IS DETERMINISM, NOT EXTENT-INDEPENDENCE, AND
+// THE DIFFERENCE DECIDES HOW YOU GENERATE A WORLD.  What holds is that sampling
+// is a PURE function of the terrain record: the same point answers the same
+// value whatever else you sampled before it, in any order, from any viewport.
+// That is what makes the fine world derivable on demand and it is worked first
+// below.
+//
+// What does NOT hold is that the record is independent of the map's EXTENT.
+// Hydrology is a global pass and flow ACCUMULATION is a catchment property — it
+// counts every cell upstream — so widening the map raises accumulation
+// everywhere, which flips cells to water, which zeroes their relief, which moves
+// the fine surface through the blend kernel.  The same authored content in a
+// 5x5 and an 8x8 window is not the same terrain.
+//
+// So: generate the overland map ONCE, at its full extent.  A window is a unit of
+// SAMPLING, never a unit of generation.
+fn test_sampling_is_pure_but_the_record_depends_on_the_whole_map() {
+  p = terrain_params(SEED, TILE);
+  ty = types4();
+  big = cooked(8, 8, false);
+  (qx, qy) = terrain_center(p, 2, 2);
+
+  // The half that holds: order and viewport independence.
+  first = terrain_surface_at(big, ty, p, qx + 41.0, qy + 17.0);
+  elsewhere = terrain_surface_at(big, ty, p, 12345.0, 6789.0);
+  again = terrain_surface_at(big, ty, p, qx + 41.0, qy + 17.0);
+  assert(first.sf_h == again.sf_h, "the same point answers the same value, exactly");
+  assert(elsewhere.sf_h != first.sf_h, "and an unrelated sample in between changes nothing");
+
+  // The half that does not: the same content, two extents.
+  small = cooked(5, 5, false);
+  ia = terrain_idx(small, 2, 1);
+  ib = terrain_idx(big, 2, 1);
+  assert((small.tr_acc[ia] ?? 0.0) == 5.0 && (big.tr_acc[ib] ?? 0.0) == 11.0,
+         "cell (2,1) drains 5 tiles in the small map and 11 in the big one");
+  assert(!(small.tr_wet[ia] ?? true) && (big.tr_wet[ib] ?? false),
+         "which crosses tp_acc_min = 6, so the big map calls that cell water");
+  assert((small.tr_relief[ia] ?? 0.0) == 154.0 && (big.tr_relief[ib] ?? 0.0) == 0.0,
+         "and a water cell contributes ZERO relief");
+
+  // …and that reaches the fine surface, well inside both windows.
+  worst = 0.0;
+  ndiff = 0;
+  nsame = 0;
+  for r in 1..4 {
+    for c in 1..4 {
+      (bx, by) = terrain_center(p, c, r);
+      for k in 0..3 {
+        px = bx + (k as float) * 90.0;
+        py = by + (k as float) * 60.0;
+        sa = terrain_surface_at(small, ty, p, px, py);
+        sb = terrain_surface_at(big, ty, p, px, py);
+        d = abs(sa.sf_h - sb.sf_h);
+        if d > worst { worst = d; }
+        if sa.sf_h == sb.sf_h { nsame = nsame + 1; } else { ndiff = ndiff + 1; }
+      }
+    }
+  }
+  assert(nsame + ndiff == 27, "27 interior samples");
+  assert(ndiff == 24, "24 of them differ between the two extents, got {ndiff}");
+  assert(abs(worst - 15.103122697077197) < 1e-9, "by up to 15.1 m, got {worst}");
+
+  // The number that makes it concrete: the small map has no rivers at all, and
+  // the big one has five — same content, same seed, same parameters.
+  assert(len(terrain_rivers(small, ty, p)) == 0, "no course reaches tp_acc_min in the 5x5");
+  assert(len(terrain_rivers(big, ty, p)) == 5, "five do in the 8x8");
+}
+
+// @HXT-003 — THE PASSES HAVE AN ORDER, AND HYDROLOGY REWRITES THE HEIGHTS YOU
+// AUTHORED.  `terrain_hydrology` is a priority-flood: it raises every pit until
+// the whole map drains, and it writes that FILLED surface back into `tr_h`.  The
+// height you wrote is gone, and nothing in the record says a pass has run — no
+// flag, no version, no second vector.
+//
+// The order is hydrology, then the caller's land classification, then
+// `terrain_relief_pass`, then `terrain_rivers`.  Relief reads the wetness
+// hydrology computed; rivers read the flow and accumulation it computed.  Run
+// them out of order and every one of them answers plausibly from stale data.
+fn test_hydrology_rewrites_the_heights_and_the_passes_have_an_order() {
+  p = terrain_params(SEED, TILE);
+  t = ramp(5, 5, true);
+  i = terrain_idx(t, 2, 2);
+  assert((t.tr_h[i] ?? 0.0) == 5.0, "the pit is authored at 5 m");
+  assert((t.tr_flow[i] ?? 0) == -1, "and before hydrology nothing has a flow direction");
+  assert((t.tr_mat[i] ?? 0) == PLAIN, "nor is it water");
+
+  terrain_hydrology(t, p, LAKE);
+
+  // The pit's lowest rim is cell (1,1) at 110 m, and the flood adds its epsilon.
+  assert(abs((t.tr_h[i] ?? 0.0) - 110.05) < 1e-9,
+         "the pit comes back at its lowest rim + 0.05, got {t.tr_h[i] ?? 0.0}");
+  assert((t.tr_mat[i] ?? 0) == LAKE, "and a raise that large makes it a lake");
+  assert((t.tr_flow[i] ?? -1) >= 0, "everything drains now");
+
+  // Every land cell drains, and following the flow strictly descends.
+  descends = true;
+  for r in 1..4 {
+    for c in 1..4 {
+      j = terrain_idx(t, c, r);
+      (nc, nr) = terrain_flow_to(t, c, r);
+      if (t.tr_h[terrain_idx(t, nc, nr)] ?? 0.0) >= (t.tr_h[j] ?? 0.0) { descends = false; }
+    }
+  }
+  assert(descends, "flow strictly descends on the FILLED surface — no pits, no cycles");
+}
+
+// @HXT-004 — RELIEF IS COMPOUNDED BY THE COUNT OF STEEP NEIGHBOURS, AND WATER
+// CONTRIBUTES NOTHING.  A cell's relief is its largest height difference to a
+// neighbour, multiplied by `tp_nb_base + tp_nb_boost * (steep neighbours)` — so
+// a cell in a busy neighbourhood gets more relief than the same drop in a quiet
+// one, which is what makes ridges gather instead of speckling.
+//
+// A water-flow cell takes ZERO relief, and that is the rivers-cut-deep-for-free
+// rule: the dry land rises around a course while the course itself stays put.
+fn test_relief_compounds_by_the_number_of_steep_neighbours() {
+  p = terrain_params(SEED, TILE);
+  t = cooked(5, 5, true);
+  assert(p.tp_nb_base == 0.6 && p.tp_nb_boost == 0.2 && p.tp_steep_delta == 60.0,
+         "the defaults this arithmetic uses");
+
+  // Cell (1,0) = 100 m.  Its neighbours are the sea at -50 (twice, a 150 m drop,
+  // both steep), 200 to the east (100 m, steep) and 110 to the south-east (10 m,
+  // not steep): max 150, three steep -> 150 * (0.6 + 3 * 0.2) = 180.
+  a = terrain_idx(t, 1, 0);
+  assert(abs((t.tr_relief[a] ?? 0.0) - 180.0) < 1e-9,
+         "150 * (0.6 + 3*0.2) = 180, got {t.tr_relief[a] ?? 0.0}");
+
+  // Cell (3,2) = 320 m, beside the filled lake at 110.05: max 209.95 with four
+  // steep neighbours -> 209.95 * (0.6 + 4 * 0.2) = 293.93.
+  b = terrain_idx(t, 3, 2);
+  assert(abs((t.tr_relief[b] ?? 0.0) - 293.93) < 1e-9,
+         "209.95 * 1.4 = 293.93, got {t.tr_relief[b] ?? 0.0}");
+
+  // The lake itself, and the sea column, take none.
+  lake = terrain_idx(t, 2, 2);
+  sea = terrain_idx(t, 0, 2);
+  assert((t.tr_wet[lake] ?? false) && (t.tr_relief[lake] ?? 1.0) == 0.0, "the lake takes no relief");
+  assert((t.tr_wet[sea] ?? false) && (t.tr_relief[sea] ?? 1.0) == 0.0, "nor does the sea");
+}
+
+// @HXT-005 — SAMPLING A CELL'S OWN CENTRE DOES NOT RETURN THAT CELL'S HEIGHT.
+// The blend kernel has radius `1.02 * tile`, so it always overlaps the six
+// neighbours — that overlap is exactly what makes two adjacent tiles merge with
+// no seam and no stitching anywhere.  The price is that a cell's authored value
+// is diluted toward its neighbours, at its own centre, by about 0.9%.
+//
+// It is not an error term to be tuned away: it is the same weight that carries
+// the merge.  Author a value expecting to read it back and you will be wrong by
+// a fixed, computable fraction, and by more where the neighbours differ more.
+fn test_a_cell_centre_does_not_read_the_cells_own_height() {
+  p = terrain_params(SEED, TILE);
+  t = terrain_new(5, 5);
+  th = &t.tr_h;
+  for r in 0..5 { for c in 0..5 { th[r * 5 + c] = 0.0; } }
+  th[2 * 5 + 2] = 100.0;
+
+  // The kernel weight of a neighbour at exactly one tile: (1 - 1/1.02^2)^2.
+  w = 1.0 - (1.0 / (1.02 * 1.02) ?? 0.0);
+  w = w * w;
+  assert(abs(w - 0.001507863550543432) < 1e-15, "the neighbour weight, got {w}");
+
+  (cx, cy) = terrain_center(p, 2, 2);
+  own = terrain_blend_h(t, p, cx, cy);
+  assert(abs(own - (100.0 / (1.0 + 6.0 * w) ?? 0.0)) < 1e-12,
+         "its own centre reads 100/(1+6w) = 99.103, not 100 — got {own}");
+  assert(own < 100.0 && own > 99.0, "a 0.9% dilution");
+
+  // …and the neighbour picks up exactly what this cell lost.
+  (nx1, ny1) = terrain_center(p, 3, 2);
+  nb = terrain_blend_h(t, p, nx1, ny1);
+  assert(abs(nb - (100.0 * w / (1.0 + 6.0 * w) ?? 0.0)) < 1e-12,
+         "the neighbour's centre reads 100w/(1+6w) = 0.149, got {nb}");
+  assert(abs((own + 6.0 * nb) - 100.0) < 1e-9, "the seven readings account for the whole 100 m");
+}
+
+// @HXT-006 — OUTSIDE THE MAP THERE IS NO EDGE, ONLY A PLATEAU.  The kernel
+// clamps its cell indices, so a coordinate beyond the authored extent reads the
+// nearest edge cell — forever, in every direction, with no complaint.  Ten
+// kilometres past a five-cell map you still get a height, and it is a perfectly
+// ordinary number.
+//
+// So bound your own queries.  The library has no concept of "outside", which is
+// the same reason a crossed coordinate (@HXT-001) is silent: there is no
+// coordinate this API can refuse.
+fn test_outside_the_map_is_a_plateau_and_never_a_refusal() {
+  p = terrain_params(SEED, TILE);
+  t = cooked(5, 5, false);
+  edge = terrain_idx(t, 4, 2);
+  (ex, ey) = terrain_center(p, 4, 2);
+  assert((t.tr_h[edge] ?? 0.0) == 420.0, "the eastern edge cell is 420 m");
+
+  inside = terrain_blend_h(t, p, ex, ey);
+  assert(inside < 420.0, "at its own centre the blend is still diluted, got {inside}");
+  for k in [1.0, 2.0, 4.0, 20.0] {
+    out = terrain_blend_h(t, p, ex + k * TILE, ey);
+    assert(abs(out - 420.0) < 1e-9, "{k} tiles past the edge still reads 420 m, got {out}");
+  }
+  // …flatter outside than inside: every cell the kernel finds is the same clamped one.
+  far = terrain_blend_h(t, p, ex + 20.0 * TILE, ey);
+  assert(far > inside, "the plateau is the edge cell UNDILUTED, {far} against {inside}");
+}
+
+// @HXT-007 — THERE ARE TWO WATER ANSWERS AND THEY DISAGREE ON PURPOSE.
+// `terrain_water_at` is the PRE-CARVE shoreline: the coast and lakes as the
+// blended surface has them, which is the line river courses are trimmed to
+// attach to.  `terrain_sample(...).ts_water` is the finished world: it includes
+// the river itself and the mouth its carve floods.
+//
+// At a point on a river both are correct and they answer differently.  Ask the
+// first when you need the shoreline, the second when you need to know whether
+// something can stand there.
+fn test_the_shoreline_and_the_finished_water_are_two_questions() {
+  p = terrain_params(SEED, TILE);
+  ty = types4();
+  t = cooked(8, 8, false);
+  rivers = terrain_rivers(t, ty, p);
+  assert(len(rivers) > 0, "the 8x8 map carries courses");
+
+  r0 = rivers[0];
+  n = len(r0.rv_x);
+  mid = (n / 2) ?? 0;
+  mx = r0.rv_x[mid] ?? 0.0;
+  my = r0.rv_y[mid] ?? 0.0;
+
+  sf = terrain_surface_at(t, ty, p, mx, my);
+  sm = terrain_sample(t, ty, p, rivers, mx, my);
+  assert(sm.ts_h < sf.sf_h, "the course carves its valley: {sm.ts_h} below {sf.sf_h}");
+  assert(!terrain_water_at(t, ty, p, mx, my), "the PRE-carve shoreline says this is land");
+  assert(sm.ts_water != 0, "and the finished sample says it is water, kind {sm.ts_water}");
+}
+
+// @HXT-008 — A TYPE BOUNDARY IS A LINE, NOT A CROSSFADE, AND THE STEEPER TYPE
+// WINS IT.  Two terrain types meeting do not blend over a wide band: the winner
+// is decided per sample by `sqrt(steep)`-weighted proximity, so the transition
+// is a crisp fractal line with a narrow softening zone around it.  `sf_mix`
+// reports how decisively the winner won — 1.0 is well inside a type, 0.5 is the
+// contested line itself.
+fn test_a_type_boundary_is_a_line_and_the_steeper_type_wins() {
+  p = terrain_params(SEED, TILE);
+  ty = types4();
+  t = cooked(8, 8, false);
+  tm = &t.tr_mat;
+  for r in 0..8 { for c in 3..8 { if c > 0 { tm[r * 8 + c] = ROCK; } } }
+
+  (ax, ay) = terrain_center(p, 2, 2);
+  (bx, _by) = terrain_center(p, 3, 2);
+  flips = 0;
+  soft = 0;
+  prev = 0 - 1;
+  for k in 0..41 {
+    x = ax + ((bx - ax) * (k as float) / 40.0 ?? 0.0);
+    s = terrain_surface_at(t, ty, p, x, ay);
+    if prev >= 0 && s.sf_mat != prev { flips = flips + 1; }
+    prev = s.sf_mat;
+    if s.sf_mix < 0.999 { soft = soft + 1; }
+    assert(s.sf_mix >= 0.5 && s.sf_mix <= 1.0, "mix stays in 0.5..1, got {s.sf_mix}");
+  }
+  assert(flips == 1, "41 samples across one tile cross the boundary exactly once, got {flips}");
+  assert(soft <= 4, "and only {soft} of them are inside the softening zone — a line, not a fade");
+}
