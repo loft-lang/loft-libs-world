@@ -54,6 +54,23 @@ pub fn track_arc(t: Track, cx: float, cy: float, r: float, a0: float, a1: float)
 
 fn pv(t: Track, i: integer, j: integer) -> float { t.tk_p[i * 6 + j] ?? 0.0 }
 
+// An angle difference brought into [0, 2pi).
+//
+// Example: @HXY-007
+//
+// ⚠ **BOTH DIRECTIONS, AND THE FILE USED TO HAVE ONE OF EACH.** `seg_param` has always
+// wrapped up AND down; `seg_distance` wrapped only up — `while aa < lo { aa += 2pi }`
+// with no companion — so an arc authored below -2pi answered that points lying ON it
+// were a radius away. One curve, two footprints: the same quarter arc marked 5 cells
+// authored at [0, pi/2] and 1 at [-2pi, -2pi+pi/2]. A guard that works in one direction
+// reads exactly like a guard.
+fn ang_wrap(d: float) -> float {
+  v = d;
+  while v < 0.0 { v = v + 6.283185307179586; }
+  while v >= 6.283185307179586 { v = v - 6.283185307179586; }
+  v
+}
+
 pub fn seg_len(t: Track, i: integer) -> float {
   if (t.tk_kind[i] ?? 0) == WAY_STRAIGHT {
     dx = pv(t, i, 2) - pv(t, i, 0);
@@ -192,9 +209,11 @@ pub fn seg_distance(t: Track, i: integer, px: float, py: float) -> float {
   a = atan2(dy, dx);
   lo = pv(t, i, 3); hi = pv(t, i, 4);
   if hi < lo { tmp = lo; lo = hi; hi = tmp; }
-  aa = a;
-  while aa < lo { aa = aa + 6.283185307179586; }
-  if aa <= hi {
+  // ⚠ THE OFFSET FROM `lo`, WRAPPED, AGAINST THE SPAN — never a slide up to `lo` alone.
+  //
+  // Example: @HXY-007
+  // A sweep of 2pi or more covers the circle, and `da <= span` says so without a case.
+  if ang_wrap(a - lo) <= hi - lo {
     v = dd - r;
     if v < 0.0 { v = 0.0 - v; }
     return v;
@@ -365,10 +384,8 @@ pub fn seg_param(t: Track, i: integer, px: float, py: float) -> float {
   a1 = t.tk_p[i * 6 + 4] ?? 0.0;
   a = atan2(py - cy, px - cx);
   sweep = a1 - a0;
-  da = a - a0;
   // Bring the offset into [0, 2pi), then measure it ALONG the arc's own direction.
-  while da < 0.0 { da = da + 6.283185307179586; }
-  while da >= 6.283185307179586 { da = da - 6.283185307179586; }
+  da = ang_wrap(a - a0);
   span = sweep;
   if span < 0.0 { span = 0.0 - span; }
   tp = da;
