@@ -62,6 +62,8 @@ pub fn fit_reason(code: integer) -> text {
 
 // The admissible positions on a side, in the order the run stores them — which is NOT t order
 // (`A5`: index a feature by its exact `t`, never by its position in the `SideRun`).
+//
+// Example: @HXI-005
 pub fn feature_grid(p: Plan, cells: HexSet, side: integer) -> vector<float> {
   out: vector<float> = [];
   if side < 0 || side >= 4 { return out; }
@@ -72,6 +74,8 @@ pub fn feature_grid(p: Plan, cells: HexSet, side: integer) -> vector<float> {
 
 // THE DOORSTEP.  `t` must be exactly an edge centre of this side — no tolerance (`P4`), because in
 // regime R1 an epsilon is a defect signal and not a knob.
+//
+// Example: @HXI-005
 pub fn feature_fits(p: Plan, cells: HexSet, side: integer, t: float, nedges: integer) -> integer {
   g = feature_grid(p, cells, side);
   n = len(g);
@@ -125,7 +129,10 @@ pub fn arc_fits(n24: integer) -> integer {
 // author asked for (N = 11 is offered 12, not 0).  That is deliberate and differs from what the
 // unrefused value would have drawn: an off-grid N silently draws the shell BELOW it, so `arc_fill`
 // would have given 0.  Offering the nearest and showing the residual is the point — the author sees
-// both candidates' cost instead of being quietly rounded down.  Ties go DOWN, to the smaller shell.
+// both candidates' cost — `arc_snap_n` is the other one — instead of being quietly rounded down.
+// Ties go DOWN, to the smaller shell.
+//
+// Example: @HXI-006
 pub fn arc_fit_n(n24: integer) -> integer {
   if n24 <= 0 { return 0; }
   sh = arc_shells_upto(n24 * 2 + 4);
@@ -146,6 +153,24 @@ pub fn arc_fit_residual(n24: integer) -> integer {
   d
 }
 
+// THE OTHER CANDIDATE, and the reason the comment above can say *both*.  This is the shell an
+// UNREFUSED radius actually draws — the largest realisable one at or below `n24` — so an editor
+// can show the author what the silent snap would have cost beside what the offer costs.  The two
+// are not close: `N = 35` is offered 36 at a residual of 1 and would have drawn **12**, an error
+// of 23 in the same units, because 12 and 36 are neighbouring shells.  Verified against
+// `arc_fill` over every radius 0..64 rather than against the formula it shares with `arc_fits`.
+//
+// Example: @HXI-006
+pub fn arc_snap_n(n24: integer) -> integer {
+  if n24 <= 0 { return 0; }
+  sh = arc_shells_upto(n24);
+  best = 0;
+  for i in 0..len(sh) { if (sh[i] ?? 0) > best { best = sh[i] ?? 0; } }
+  best
+}
+
+pub fn arc_snap_residual(n24: integer) -> integer { n24 - arc_snap_n(n24) }
+
 // ── LEVELS — MEASURED TO HAVE NOTHING TO REFUSE ─────────────────────────────
 //
 // A level is the topological SHEET (`X58`), stored as an integer (`ha_cy` / `ck_cy`) and used as a
@@ -156,6 +181,8 @@ pub fn arc_fit_residual(n24: integer) -> integer {
 // This returns `FIT_OK` unconditionally, and that is a RESULT, not an omission.  `tests/fit.loft`
 // keeps it honest the only way an always-true predicate can be kept honest: by showing that the
 // SAME doorstep refuses the other parameters, so "accepts every level" is not "accepts everything".
+//
+// Example: @HXI-008
 pub fn level_fits(lv: integer) -> integer {
   if lv == lv { return FIT_OK; }
   FIT_OK
@@ -178,6 +205,8 @@ pub const MAT_MAX = 255;
 // to 256 is 255, and 255 is a *different material* — offering it would be worse than a blank no,
 // because it looks like a small correction and is not.  So this refusal names its restriction and
 // stops there.  The author must pick a material, not accept a rounding.
+//
+// Example: @HXI-007
 pub fn mat_fits(m: integer) -> integer {
   if m <= 0 || m > MAT_MAX { return FIT_BAD_MAT; }
   FIT_OK
@@ -213,6 +242,8 @@ pub fn height_from_units(u: integer) -> float { (u as float) * HEIGHT_SCALE }
 // THE DOORSTEP.  A height must land exactly on the voxel's grid; off it, the store truncates and
 // `X59`'s returned residual would be wrong by the truncation — which is the one thing `SPEC` **G5**
 // says must never happen silently.
+//
+// Example: @HXI-008
 pub fn seat_fits(z: float) -> integer {
   if height_from_units(height_units(z)) == z { return FIT_OK; }
   FIT_BAD_HEIGHT

@@ -31,6 +31,11 @@
 //
 // SCOPE: **one** embedded run per stencil.  Several would need the interior edges split into
 // connected components first, which is a separate step and is not pretended here.
+//
+// AND THE HALF THAT WAS MISSING FROM THE TEXT SIDE: a model must have exactly ONE spelling or a
+// `diff` stops meaning *the model changed*.  The form half has had that since `form_canon`; the
+// run half had nothing, and a run has two spellings that mark the identical edges.  `draft_canon`
+// closes it by asking the field which one it answers with.
 use hex_field;
 use hex_grid;
 use hex_form;
@@ -58,9 +63,32 @@ fn nth_word(line: text, i: integer) -> text {
 }
 fn word_int(line: text, i: integer) -> integer { nth_word(line, i) as integer ?? 0 }
 
-// The canonical text: the form's spelling, then — if there is one — a single `wall` line.
+// How many space-separated fields the line has.  The layout fixes this per record, so a line
+// carrying MORE is a different line — trailing junk and a trailing space both land here.
+fn word_count(line: text) -> integer { len(line.split(' ')) }
+
+// Is field `i` an integer SPELLED THE WAY `draft_write` spells one?  Not a character class: the
+// parse has to reproduce the original characters, which refuses ``, `x`, `007` and `+1` in one
+// test — see the measurement above `draft_read`.
+fn word_is_int(line: text, i: integer) -> boolean {
+  w = nth_word(line, i);
+  v = w as integer ?? 0;
+  "{v}" == w
+}
+
+// A refusal, in the one shape this reader has for one: a stencil with an EMPTY form.  Nothing in
+// `-> Draft` says the parse can fail, so the caller's check is `form_sides(s.df_form) == 0`.
+fn draft_refused() -> Draft { draft_new(form_new(0, [], []), 0 - 1, 0, 0, 0) }
+
+// The text of a stencil: the form's spelling, then — if there is one — a single `wall` line.
 // One line, one record, same shape as `side`: the reader refuses anything else rather than
 // repairing it (`X39`).
+//
+// ⚠ THIS IS NOT THE CANONICAL TEXT.  It writes the spelling it is GIVEN, and both the form's
+// start corner and the run's direction are choices the model does not fix — so two calls can
+// spell one stencil two ways.  A round trip diffs against `draft_canon_text`.
+//
+// Example: @HXI-001
 pub fn draft_write(s: Draft, name: text) -> text {
   base = form_write(s.df_form, name);
   if s.df_d < 0 { return base; }
@@ -69,6 +97,20 @@ pub fn draft_write(s: Draft, name: text) -> text {
 
 // Parse.  The `side` lines go to `form_read` unchanged; a trailing `wall` line is this layer's.
 // A malformed record yields a stencil with an empty form — REFUSED, never repaired.
+//
+// THAT WAS A CLAIM BEFORE IT WAS A TEST, and it was wrong the same way `hex_form`'s reader was
+// (that one was measured first; this line inherited both the `word_int(…) ?? 0` helper and the
+// gap).  A nineteen-cell acceptance matrix admitted ten texts `draft_write` cannot emit and
+// re-wrote each of them differently: a trailing space, an extra field, `+3`, `003`, a `wall`
+// line placed between two `side` lines — and, sharper than any spelling, a field that is not a
+// number at all.  `wall d x a -6 b 9 p 1` became `d 0`: not a wall that is missing, A WALL
+// POINTING SOMEWHERE ELSE, admitted into the model without a word.  `a x` moved it instead.
+//
+// What pins it now is the same RE-SPELLING IDENTITY: a field is an integer only if printing the
+// parse reproduces the original characters, a line is a record only if it carries exactly the
+// fields the writer emits, and the `wall` line is LAST because that is where the writer puts it.
+//
+// Example: @HXI-003
 pub fn draft_read(t: text) -> Draft {
   lines = t.split('\n');
   nl = len(lines);
@@ -82,9 +124,15 @@ pub fn draft_read(t: text) -> Draft {
     ln = lines[i] ?? "";
     if nth_word(ln, 0) == "wall" {
       nwall = nwall + 1;
+      if i != nl - 1 { return draft_refused(); }             // the writer appends it LAST
+      if word_count(ln) != 9 { return draft_refused(); }     // `wall d <d> a <a> b <b> p <p>`
       if nth_word(ln, 1) != "d" || nth_word(ln, 3) != "a" || nth_word(ln, 5) != "b"
          || nth_word(ln, 7) != "p" {
-        return draft_new(form_new(0, [], []), 0 - 1, 0, 0, 0);
+        return draft_refused();
+      }
+      if !word_is_int(ln, 2) || !word_is_int(ln, 4) || !word_is_int(ln, 6)
+         || !word_is_int(ln, 8) {
+        return draft_refused();                              // integers, spelled as we spell them
       }
       d = word_int(ln, 2);
       a = word_int(ln, 4);
@@ -94,7 +142,7 @@ pub fn draft_read(t: text) -> Draft {
       if i == 0 { ftext = ln; } else { ftext = ftext + "\n" + ln; }
     }
   }
-  if nwall > 1 { return draft_new(form_new(0, [], []), 0 - 1, 0, 0, 0); }
+  if nwall > 1 { return draft_refused(); }
   draft_new(form_read(ftext), d, a, b, p)
 }
 
@@ -153,6 +201,11 @@ pub fn draft_interior(cells: HexSet, edges: EdgeSet, embedmat: integer) -> EdgeS
 // REBUILD, INCLUDING THE RUN.  The form comes from the cells (constructive recovery, `X45`); the
 // run comes from the interior edges (`wall_read_run`, `X60`) — two recoveries reading disjoint
 // slots.  An unreadable run is REFUSED, so it is dropped loudly by a text diff rather than silently.
+//
+// ⚠ DIFF THIS AGAINST `draft_canon_text`, NOT against `draft_write`.  What comes back is the
+// spelling the FIELD answers with, and for the run half that is one of two — see the note there.
+//
+// Example: @HXI-002
 pub fn draft_rebuild_text(cells: HexSet, edges: EdgeSet, name: text, embedmat: integer) -> text {
   base = rebuild_construct_text(cells, name);
   if base == "" { return ""; }
@@ -161,6 +214,51 @@ pub fn draft_rebuild_text(cells: HexSet, edges: EdgeSet, name: text, embedmat: i
                                    hexset_w(cells), hexset_h(cells));
   if !ok { return base; }
   base + "\nwall d {d} a {a} b {b} p {p}"
+}
+
+// ── ONE MODEL, ONE TEXT — the canonical spelling ───────────────────────────
+//
+// The format's premise is that a `diff` means *the model changed*, which needs every model to
+// have exactly ONE text.  The form half has that: a shape has n cyclic spellings and `form_canon`
+// picks the smallest, which is why `rebuild_construct_text` and `form_canon_text` agree.
+//
+// THE RUN HALF HAD NO SUCH RULE, and a run has exactly TWO spellings — `(d, A, p)` and
+// `(d + 12, B, p)` — because A-to-B and B-to-A mark the identical edges and the field stores no
+// orientation (`wall_read_run`'s own note).  Measured over all 24 directions: the two spellings
+// draw fields that differ in ZERO edges, and **exactly one of them survives a text round trip**,
+// never both and never neither.  So an author who wrote the wall from the other end got *the
+// model changed* out of a byte diff on a model that had not changed at all.
+//
+// The canonical spelling is therefore READ OFF THE FIELD rather than chosen by a rule — the same
+// discipline `hexfit`'s feature grid is built on (`SPEC` **L11**: consult the table that owns the
+// answer), and the only definition that cannot drift from what `draft_rebuild_text` will answer,
+// since it is that same reader.
+//
+// Example: @HXI-001
+pub fn draft_canon(s: Draft, cells: HexSet) -> Draft {
+  cf = form_canon(s.df_form);
+  if s.df_d < 0 { return draft_new(cf, 0 - 1, 0, 0, 0); }
+  q0 = hexset_q0(cells);
+  r0 = hexset_r0(cells);
+  gw = hexset_w(cells);
+  gh = hexset_h(cells);
+  ew = edgeset_new(q0, r0, gw, gh);
+  w = wall_from_run(s.df_d, s.df_a, s.df_b, s.df_p, 1);
+  if wall_write(w, ew, q0, r0, gw, gh) <= 0 {
+    return draft_new(cf, s.df_d, s.df_a, s.df_b, s.df_p);
+  }
+  (rd, ra, rb, rp, ok) = wall_read_run(ew, q0, r0, gw, gh);
+  if !ok { return draft_new(cf, s.df_d, s.df_a, s.df_b, s.df_p); }
+  draft_new(cf, rd, ra, rb, rp)
+}
+
+// The one text a round trip can be diffed against.  A run that does not FIT is left as written —
+// the canon is a spelling rule, not a doorstep, and refusing here would hide which of the two is
+// wrong.
+//
+// Example: @HXI-001
+pub fn draft_canon_text(s: Draft, cells: HexSet, name: text) -> text {
+  draft_write(draft_canon(s, cells), name)
 }
 
 // ── THE DOORSTEP (`fits?`, law C₁ / `K-FIT`) ───────────────────────────────
@@ -220,6 +318,8 @@ fn run_is_inside(cells: HexSet, d: integer, a: integer, b: integer, p: integer) 
 
 // THE DOORSTEP.  `cells` is the form's own footprint.  Returns a reason code — `FIT_OK` or the
 // specific restriction, never a bare false.
+//
+// Example: @HXI-004
 pub fn draft_fits(s: Draft, cells: HexSet) -> integer {
   if !form_admissible(s.df_form) { return FIT_NO_FORM; }
   if s.df_d < 0 { return FIT_OK; }
@@ -234,6 +334,8 @@ pub fn draft_fits(s: Draft, cells: HexSet) -> integer {
 // AND THE ALTERNATIVE THE REFUSAL OWES (`K-FIT`): the longest run from this anchor, in this
 // direction, that IS admissible and fits — searching downward so the offer is never longer than
 // what was asked for.  0 when nothing fits, which is itself a usable answer: move the anchor.
+//
+// Example: @HXI-004
 pub fn draft_fit_p(s: Draft, cells: HexSet) -> integer {
   if s.df_d < 0 || s.df_d >= 24 { return 0; }
   if !tri_is_vertex(s.df_a, s.df_b) { return 0; }

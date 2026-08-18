@@ -1,0 +1,409 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Worked examples for `hex_fit` (@PLN141).  Each `test_*` below is a REAL,
+// run-every-CI demonstration of a contract the signature cannot state; the
+// function documents itself by CITING the tag with `// Example: @HXI-00N`, and
+// `check_doc_drift.sh examples` fails if a citation goes dangling.  These are
+// teaching examples, distinct from the conformance suite in `01-hex-fit.loft`.
+//
+// WHAT THIS PACKAGE IS FOR.  Everything a caller authors here is CONTINUOUS —
+// a radius, a position along a wall, a height, a direction — and the field it
+// is stored in is not.  An off-grid value is therefore SNAPPED, silently, and
+// the round trip then reports success on a model nobody wrote.  `hex_fit` is
+// the doorstep that refuses such a value at authoring time, with a NAMED
+// reason, an OFFER, and the RESIDUAL to show the author.
+//
+// Two things follow that a signature cannot carry, and both are worked below:
+//
+//   a refusal is DATA, not an error   every `fits` map returns an integer code,
+//                                     never a bare false and never a raise
+//   the grid is READ OFF THE FIELD    never computed from a formula — the field
+//                                     owns the answer, and a private copy of it
+//                                     has already been wrong once (see @HXI-005)
+use hex_fit;
+use hex_field;
+use hex_form;
+use hex_draw;
+use hex_grid;
+use hex_shape;
+use hex_recover;
+
+const W  = 41;
+const H  = 41;
+const Q0 = 0 - 20;
+const R0 = 0 - 20;
+const WALLMAT = 1;      // the stencil's own outline
+const EMBED   = 5;      // the embedded run — a DIFFERENT material, on interior edges only
+
+// The stencil every draft example is written on: a regular hexagon, six sides of six steps.
+// It is written the way `form_write` writes one, so it is already its own canonical text.
+fn hexagon() -> text {
+  "stencil h4 h0 0\nside 0 len 6 turn 2\nside 1 len 6 turn 2\nside 2 len 6 turn 2"
+  + "\nside 3 len 6 turn 2\nside 4 len 6 turn 2\nside 5 len 6 turn 2"
+}
+
+// A patch of lattice big enough to hold the hexagon well clear of its edges.
+fn patch() -> HexSet { hexset_chunk(Q0, R0, W, H) }
+
+// How many edges the two fields disagree about — 0 means they are the same drawing.
+fn edge_diff(ea: EdgeSet, eb: EdgeSet) -> integer {
+  n = 0;
+  for r in R0..R0 + H {
+    for q in Q0..Q0 + W {
+      for d in 0..3 {
+        (nq, nr) = hex_neighbor(q, r, d);
+        if edge_mat(ea, q, r, nq, nr) != edge_mat(eb, q, r, nq, nr) { n = n + 1; }
+      }
+    }
+  }
+  n
+}
+
+// Is `t` one of the admissible positions?  A membership test, because `feature_grid` returns
+// them in the order the field stores them and NOT in `t` order.
+fn grid_has(g: vector<float>, t: float) -> boolean {
+  for i in 0..len(g) { if abs((g[i] ?? -1.0) - t) < 1e-12 { return true; } }
+  false
+}
+
+// The smallest call that does something real: author a stencil, ask the doorstep, draw it,
+// and check the drawing spells the same stencil back.
+fn main() {
+  f = form_read(hexagon());
+  cells = patch();
+  form_fill(f, 0, 0, cells);
+  s = draft_new(f, 3, 0 - 6, 9, 1);                       // one period of direction 3
+  assert(draft_fits(s, cells) == FIT_OK, "the doorstep admits it: {fit_reason(draft_fits(s, cells))}");
+  edges = edgeset_new(Q0, R0, W, H);
+  draft_draw(s, 0, 0, cells, edges, WALLMAT, EMBED);
+  assert(draft_rebuild_text(cells, edges, "h4", EMBED) == draft_canon_text(s, cells, "h4"),
+         "what was drawn spells the stencil back");
+}
+
+// @HXI-001 — ONE MODEL, ONE TEXT, and a run has two spellings.  The whole format
+// exists so that a `diff` means *the model changed*: a project file is diffable
+// and an undo history is exact only because one model has exactly one text.
+//
+// A run breaks that on its own.  A wall from A to B and the same wall from B to A
+// mark the IDENTICAL edges — the field stores no orientation — so `draft_write`
+// can spell one wall two ways, and only one of the two comes back out of the
+// field.  Measured over all 24 directions: the two spellings differ in ZERO
+// edges, and exactly one of them survives the round trip, never both.
+//
+// So the text to diff against is `draft_canon_text`, never `draft_write`.  The
+// canonical spelling is READ OFF THE FIELD — it is what the reader answers —
+// because any other rule could drift from the reader and this one cannot.
+fn test_a_run_has_two_spellings_and_the_field_answers_one() {
+  f = form_read(hexagon());
+  cells = patch();
+  form_fill(f, 0, 0, cells);
+
+  // The same wall, named from each of its two ends.  One period of direction 3
+  // from (-6,9) ends at (9,15); direction 15 is direction 3 reversed.
+  fwd = draft_new(f, 3, 0 - 6, 9, 1);
+  rev = draft_new(f, 15, 9, 15, 1);
+  assert(draft_fits(fwd, cells) == FIT_OK, "the forward spelling is a legal wall");
+  assert(draft_fits(rev, cells) == FIT_OK, "and so is the reverse — the doorstep admits both");
+
+  c1 = patch();
+  e1 = edgeset_new(Q0, R0, W, H);
+  n1 = draft_draw(fwd, 0, 0, c1, e1, WALLMAT, EMBED);
+  c2 = patch();
+  e2 = edgeset_new(Q0, R0, W, H);
+  n2 = draft_draw(rev, 0, 0, c2, e2, WALLMAT, EMBED);
+  assert(n1 == 8 && n2 == 8, "each marks the same 8 interior edges, got {n1} and {n2}");
+  assert(edge_diff(e1, e2) == 0, "and the two fields are the same drawing, edge for edge");
+
+  // The field answers with ONE of the two spellings, and it is the forward one here.
+  want = hexagon() + "\nwall d 3 a -6 b 9 p 1";
+  assert(draft_rebuild_text(c1, e1, "h4", EMBED) == want, "the field spells the wall this way");
+  assert(draft_rebuild_text(c2, e2, "h4", EMBED) == want, "from either authoring — one field, one text");
+
+  // …so the naive round trip FAILS on the reverse spelling, with nothing wrong.
+  assert(draft_write(fwd, "h4") == want, "the forward author's own text matches");
+  assert(draft_write(rev, "h4") != want,
+         "the reverse author's does not — and the model is byte-identical in the field");
+
+  // The canon is what makes the diff mean something again.
+  assert(draft_canon_text(fwd, cells, "h4") == want, "canon of the forward spelling");
+  assert(draft_canon_text(rev, cells, "h4") == want, "canon of the reverse spelling — the same text");
+
+  // A stencil with no run at all canonicalises to the form alone.
+  none = draft_new(f, 0 - 1, 0, 0, 0);
+  assert(draft_canon_text(none, cells, "h4") == hexagon(), "no run, no wall line");
+}
+
+// @HXI-002 — THE ROUND TRIP HAS TO NOTICE A DROPPED RUN.  A stencil carries its
+// linework as material on INTERIOR edges — edges whose two cells are both in the
+// footprint — so the footprint and the form recovery read a slot the run never
+// writes.  That orthogonality is what makes the run cheap to add, and it is also
+// what makes losing it invisible: the cells are all still there, the form still
+// recovers, and a trip that compares only the form reports SUCCESS on a model
+// missing its content.
+//
+// `draft_rebuild_text` reads the run back as well, so a dropped run is a text
+// difference — loud, and in the same diff as everything else.
+fn test_the_round_trip_notices_a_dropped_run() {
+  f = form_read(hexagon());
+  cells = patch();
+  form_fill(f, 0, 0, cells);
+  with_run = draft_new(f, 3, 0 - 6, 9, 1);
+  want = hexagon() + "\nwall d 3 a -6 b 9 p 1";
+
+  c1 = patch();
+  e1 = edgeset_new(Q0, R0, W, H);
+  n1 = draft_draw(with_run, 0, 0, c1, e1, WALLMAT, EMBED);
+  assert(n1 == 8, "the run marks 8 interior edges, got {n1}");
+  assert(draft_rebuild_text(c1, e1, "h4", EMBED) == want, "and the trip returns the whole stencil");
+
+  // The SAME stencil drawn without its run: the footprint is identical, and the text is not.
+  no_run = draft_new(f, 0 - 1, 0, 0, 0);
+  c2 = patch();
+  e2 = edgeset_new(Q0, R0, W, H);
+  n2 = draft_draw(no_run, 0, 0, c2, e2, WALLMAT, EMBED);
+  assert(n2 == 0, "nothing embedded, got {n2}");
+  assert(rebuild_construct_text(c2, "h4") == rebuild_construct_text(c1, "h4"),
+         "the FORM recovery cannot tell the two apart — that is the hole");
+  assert(draft_rebuild_text(c2, e2, "h4", EMBED) == hexagon(), "the run half can: no wall line");
+  assert(draft_rebuild_text(c2, e2, "h4", EMBED) != want, "so dropping the run FAILS the trip");
+}
+
+// @HXI-003 — THE READER ACCEPTS EXACTLY WHAT THE WRITER EMITS, and a refusal is
+// a stencil with an EMPTY FORM, not an error: nothing in `-> Draft` says the
+// parse can fail, so the check is yours to write and it is
+// `form_sides(s.df_form) == 0`.
+//
+// Strictness here is not fussiness.  The text IS the contract, so a text this
+// library cannot write is a text it will not read — otherwise a `diff` could be
+// defeated by a trailing space.  Every refusal below was ADMITTED and silently
+// re-written before this was measured, and one of them was not a spelling at
+// all: `wall d x …` parsed as `d 0`, which is not a missing wall but a wall
+// pointing SOMEWHERE ELSE, admitted into the model without a word.
+fn test_the_reader_takes_exactly_what_the_writer_emits() {
+  good = hexagon() + "\nwall d 3 a -6 b 9 p 1";
+  g = draft_read(good);
+  assert(form_sides(g.df_form) == 6, "the canonical text reads six sides");
+  assert(draft_has_run(g) && g.df_d == 3 && g.df_a == 0 - 6 && g.df_p == 1, "and the run it names");
+  assert(draft_write(g, "h4") == good, "and it re-writes byte for byte");
+
+  // A trailing space is invisible in an editor and is not the layout.
+  assert(form_sides(draft_read(good + " ").df_form) == 0, "a trailing space is refused");
+  // So is an extra field, however harmless it looks.
+  assert(form_sides(draft_read(good + " note").df_form) == 0, "an extra field is refused");
+  // The sharp one: a field that is not a number.  Repaired to 0 it is a wall in
+  // direction 0 — a different wall, in a different place, drawn without comment.
+  assert(form_sides(draft_read(hexagon() + "\nwall d x a -6 b 9 p 1").df_form) == 0,
+         "a non-integer direction is refused, not read as direction 0");
+  // A double space is the same defect wearing different clothes: field 2 is empty.
+  assert(form_sides(draft_read(hexagon() + "\nwall d  a -6 b 9 p 1").df_form) == 0,
+         "an empty direction is refused");
+  // One integer, one spelling — `+3` and `003` name the same direction as `3`,
+  // and two texts for one model is exactly what the format forbids.
+  assert(form_sides(draft_read(hexagon() + "\nwall d +3 a -6 b 9 p 1").df_form) == 0, "`+3` is refused");
+  assert(form_sides(draft_read(hexagon() + "\nwall d 003 a -6 b 9 p 1").df_form) == 0, "`003` is refused");
+  // The writer appends the wall line LAST, so a wall line between two `side`
+  // lines is a line order it cannot emit — and re-writing it would move it.
+  middle = "stencil h4 h0 0\nside 0 len 6 turn 2\nside 1 len 6 turn 2\nwall d 3 a -6 b 9 p 1"
+           + "\nside 2 len 6 turn 2\nside 3 len 6 turn 2\nside 4 len 6 turn 2\nside 5 len 6 turn 2";
+  assert(form_sides(draft_read(middle).df_form) == 0, "a wall line in the middle is refused");
+  // The scope is ONE run per stencil, so two records are refused rather than one of them chosen.
+  assert(form_sides(draft_read(good + "\nwall d 5 a 0 b 0 p 1").df_form) == 0, "two wall lines are refused");
+  assert(form_sides(draft_read(good + "\n").df_form) == 0, "and a trailing newline is refused");
+
+  // …and the good text still reads, which is what makes the eight refusals above
+  // a narrowing rather than a wall.
+  assert(form_sides(draft_read(good).df_form) == 6, "the writer's own text still reads");
+  assert(form_sides(draft_read(hexagon()).df_form) == 6, "a stencil with no run reads too");
+}
+
+// @HXI-004 — SPELLING IS THE READER'S JOB; LEGALITY IS THE DOORSTEP'S.  These are
+// two different gates and it is worth knowing which one you are asking.
+// `draft_read` answers *is this the text we write?* and nothing more: it admits
+// `wall d 99 … p -1`, because 99 and -1 are spelled exactly as this library
+// spells an integer.  `draft_fits` answers *is this a wall the field can hold?*
+// and refuses both, each with its own reason.
+//
+// And a refusal owes an OFFER: `draft_fit_p` returns the longest run from the
+// same anchor in the same direction that does fit, searching DOWNWARD so the
+// offer is never longer than what was asked for.  0 is a usable answer too — it
+// means move the anchor.
+fn test_spelling_is_one_gate_and_legality_is_another() {
+  f = form_read(hexagon());
+  cells = patch();
+  form_fill(f, 0, 0, cells);
+
+  // Spelled correctly, and not a wall the field can hold.
+  wide = draft_read(hexagon() + "\nwall d 99 a -6 b 9 p 1");
+  assert(form_sides(wide.df_form) == 6 && wide.df_d == 99, "the reader admits direction 99");
+  assert(draft_fits(wide, cells) == FIT_BAD_DIR, "the doorstep refuses it");
+  back = draft_read(hexagon() + "\nwall d 3 a -6 b 9 p -1");
+  assert(form_sides(back.df_form) == 6 && back.df_p == 0 - 1, "the reader admits -1 periods");
+  assert(draft_fits(back, cells) == FIT_BAD_P, "the doorstep refuses that too");
+
+  // Each refusal NAMES its restriction, and the names are different — a doorstep
+  // whose every no is the same no tells the author nothing.
+  centre = draft_new(f, 3, 0, 0, 1);                       // (0,0) is a hex CENTRE
+  assert(draft_fits(centre, cells) == FIT_NO_VERTEX, "an anchor on a centre is refused");
+  assert(fit_reason(FIT_NO_VERTEX) != fit_reason(FIT_OUTSIDE), "and the reasons are distinct");
+  assert(fit_reason(draft_fits(centre, cells)).len() > 0, "a refusal is never a blank no");
+
+  // The offer.  A 9-period run leaves the hexagon; 3 periods is the longest that stays inside.
+  long_run = draft_new(f, 3, 0 - 6, 9, 9);
+  assert(draft_fits(long_run, cells) == FIT_OUTSIDE, "a run that pokes out is refused");
+  offer = draft_fit_p(long_run, cells);
+  assert(offer == 3, "the offer is the longest that fits, got {offer}");
+  assert(draft_fits(draft_new(f, 3, 0 - 6, 9, offer), cells) == FIT_OK, "and the offer itself fits");
+  assert(draft_fits(draft_new(f, 3, 0 - 6, 9, offer + 1), cells) == FIT_OUTSIDE,
+         "one period longer does not — so the offer is the boundary, not a guess");
+}
+
+// @HXI-005 — THE ADMISSIBLE POSITION IS READ OFF THE FIELD, NEVER COMPUTED.  A
+// feature is authored as `(side, t)` with `t` running 0..1 along the side; the
+// field stores a material on an EDGE.  So the only `t` that survives is one an
+// edge centre already sits at, and the doorstep's whole job is knowing which.
+//
+// The design note that recorded those centres as `(2i+1)/2n` was measured and is
+// true for ONE of the two side families.  A hexagonal lattice gives a rectangle
+// two kinds of side: one whose edges tile it, and one whose edges are INSET,
+// spanning exactly `sqrt(3)/2` of the side.  A formula fitted to the first
+// refuses every legal position on the second — which is why `feature_grid`
+// consults `side_edges` and cannot make that mistake.
+//
+// The cost of the difference is not academic: the middle of the side, `t = 0.5`,
+// is the most natural place to put a door, and it is legal on one family and
+// refused on the other.
+fn test_the_admissible_position_is_read_off_the_field() {
+  p = plan_new(0, 0, 5, 4, 0, false);
+  cells = patch();
+  lb = labels_new(Q0, R0, W, H);
+  draw_floor(p, cells, lb, 9);
+
+  g0 = feature_grid(p, cells, 0);            // a -u/+u face: the INSET family
+  g1 = feature_grid(p, cells, 1);            // a -v/+v face: the TILING family
+  assert(len(g0) == 9, "side 0 carries 9 edges, got {len(g0)}");
+  assert(len(g1) == 10, "side 1 carries 10, got {len(g1)}");
+
+  // The tiling family IS the formula: every `(2i+1)/2n` is a position on it.
+  for i in 0..len(g1) {
+    t = ((2.0 * (i as float) + 1.0) / (2.0 * (len(g1) as float))) ?? 0.0;
+    assert(grid_has(g1, t), "side 1 carries the formula position {t}");
+  }
+  // The inset family is not, and the number that says so is its SPAN.
+  lo = 2.0;
+  hi = 0.0 - 1.0;
+  for i in 0..len(g0) {
+    v = g0[i] ?? 0.0;
+    if v < lo { lo = v; }
+    if v > hi { hi = v; }
+  }
+  assert(abs((hi - lo) - 0.8660254037844386) < 1e-12,
+         "the inset family spans exactly sqrt(3)/2 of its side, got {hi - lo}");
+  assert(!grid_has(g0, (1.0 / 18.0) ?? 0.0), "so the formula's first position is not on it");
+
+  // The middle of the side: legal on the odd-count family, refused on the even one.
+  assert(feature_fits(p, cells, 0, 0.5, 1) == FIT_OK, "a door in the middle of side 0 fits");
+  assert(feature_fits(p, cells, 1, 0.5, 1) == FIT_BAD_T, "the same door on side 1 does not");
+  assert(abs(feature_fit_t(p, cells, 1, 0.5) - 0.45) < 1e-12,
+         "and the offer is the nearest edge centre, got {feature_fit_t(p, cells, 1, 0.5)}");
+  assert(abs(feature_fit_residual(p, cells, 1, 0.5) - 0.05) < 1e-12,
+         "with the residual the author has to be shown");
+  assert(feature_fit_residual(p, cells, 0, 0.5) == 0.0, "on side 0 there is nothing to move");
+
+  // A span, and a side that is not a side, are refused by NAME rather than by false.
+  assert(feature_fits(p, cells, 0, 0.5, 0) == FIT_BAD_SPAN, "a feature covering no edge");
+  assert(feature_fits(p, cells, 0, 0.5, 99) == FIT_BAD_SPAN, "or more than the side has");
+  assert(feature_fits(p, cells, 9, 0.5, 1) == FIT_NO_SIDE, "side 9 is not a side");
+}
+
+// @HXI-006 — AN OFF-GRID RADIUS IS REFUSED, AND THE TWO CANDIDATES COST DIFFERENT
+// AMOUNTS.  An arc's CENTRE is exact and its RADIUS is not: only the shells
+// `3k^2 + m^2` exist, which out to 64 are 0, 12, 36 and 48.  Ask for anything
+// else and `arc_fill` draws the shell BELOW it, so the model round-trips as a
+// different model with a residual of zero — the silent snap this doorstep is for.
+//
+// The refusal offers the NEAREST shell, which can be LARGER than what was asked
+// for, and that is deliberate: it is a different candidate from the one an
+// unrefused call would have drawn, and the author should see both prices.
+// `N = 35` is the case that makes it concrete — the offer is one unit away and
+// the silent snap is twenty-three, because 12 and 36 are neighbouring shells.
+fn test_an_off_shell_radius_shows_both_candidates() {
+  assert(arc_fits(36) == FIT_OK, "36 is a shell");
+  assert(arc_fits(35) == FIT_BAD_SHELL, "35 is not");
+
+  assert(arc_fit_n(35) == 36, "the offer is the nearest shell, got {arc_fit_n(35)}");
+  assert(arc_fit_residual(35) == 1, "one unit away");
+  assert(arc_snap_n(35) == 12, "what an unrefused 35 draws, got {arc_snap_n(35)}");
+  assert(arc_snap_residual(35) == 23, "twenty-three units away — the price nobody quotes");
+
+  // …and that is measured against the drawing, not against the shell formula.
+  disk = patch();
+  arc_fill(0, 0, 35, disk);
+  assert(arc_shell_max(disk, 0, 0) == arc_snap_n(35), "the field agrees with arc_snap_n");
+  assert(arc_shell_max(disk, 0, 0) != 35, "and the 35 is stored nowhere");
+
+  // Ties go DOWN, so an offer is never a promotion the author did not ask for.
+  assert(arc_fit_n(24) == 12, "24 is equidistant from 12 and 36; the offer is 12");
+  sh = arc_shells_upto(64);
+  assert(len(sh) == 4, "four shells exist out to 64, got {len(sh)}");
+  assert((sh[0] ?? -1) == 0 && (sh[1] ?? -1) == 12 && (sh[2] ?? -1) == 36 && (sh[3] ?? -1) == 48,
+         "and they are 0, 12, 36, 48");
+}
+
+// @HXI-007 — A MATERIAL ID IS NOMINAL, SO ITS REFUSAL OFFERS NOTHING.  Every other
+// refusal in this package offers the nearest fitting alternative, because every
+// other parameter is ORDINAL — "nearest" means "almost what you asked for".  A
+// material id is a NAME.  The nearest admissible id to 256 is 255, and 255 is a
+// different material: offering it would look like a small correction and would
+// not be one.  So this refusal names its restriction and stops there.
+//
+// What it is protecting you from is not a rounding either.  The wall slot is one
+// byte, and the store's narrowing cast is CHECKED: a value it cannot hold is not
+// truncated to its low byte, it becomes 0 — and 0 means NO WALL.  Silent
+// deletion, before storage is involved at all.
+fn test_a_material_id_is_a_name_not_a_magnitude() {
+  assert(mat_fits(1) == FIT_OK, "1 is a material");
+  assert(mat_fits(MAT_MAX) == FIT_OK, "and so is the largest the slot holds");
+  assert(mat_fits(MAT_MAX + 1) == FIT_BAD_MAT, "one more is refused");
+  assert(mat_fits(0) == FIT_BAD_MAT, "0 is not a material — it is the absence of one");
+  assert(mat_fits(0 - 1) == FIT_BAD_MAT, "nor is a negative id");
+
+  // The measurement behind the refusal, on a real edge.
+  eg = edgeset_new(Q0, R0, W, H);
+  (nq, nr) = hex_neighbor(0, 0, 0);
+  edge_set_mat(eg, 0, 0, nq, nr, MAT_MAX);
+  assert(edge_mat(eg, 0, 0, nq, nr) == MAT_MAX, "255 is stored as 255");
+  edge_set_mat(eg, 0, 0, nq, nr, MAT_MAX + 1);
+  assert(edge_mat(eg, 0, 0, nq, nr) == 0, "256 ERASES the wall — it does not wrap to 0 by luck");
+  edge_set_mat(eg, 0, 0, nq, nr, MAT_MAX + 2);
+  assert(edge_mat(eg, 0, 0, nq, nr) == 0, "and 257 erases it too, so it is not a low-byte truncation");
+}
+
+// @HXI-008 — A DOORSTEP WITH NOTHING TO REFUSE SAYS SO, and that is a result
+// rather than an omission.  A level is the topological SHEET a plan sits on,
+// stored as an integer and used as a filter before the cut.  Nothing exists
+// BETWEEN two levels, so there is nothing to snap and nothing to refuse: a
+// doorstep that invented a restriction here would make legal models unauthorable,
+// which is worse than having none.
+//
+// An always-true predicate can only be kept honest one way — by showing the SAME
+// doorstep refusing something — so a height is measured beside it.  A height DOES
+// have a grid, an invisible one: the voxel stores it as a whole number of
+// quarter-units, so 0.3 is not a height, it is 0.25 with the difference thrown
+// away where nobody would look for it.
+fn test_a_level_has_nothing_to_refuse_and_a_height_does() {
+  assert(level_fits(0) == FIT_OK, "level 0 fits");
+  assert(level_fits(1000000) == FIT_OK, "so does level 1e6");
+  assert(level_fits(0 - 1000000) == FIT_OK, "and so does level -1e6 — every level, at any n");
+
+  // The same doorstep, on the parameter that does have a grid.
+  assert(seat_fits(0.75) == FIT_OK, "0.75 is three whole units");
+  assert(height_units(0.75) == 3, "which is what the voxel stores");
+  assert(height_from_units(3) == 0.75, "and it reads back exactly");
+  assert(seat_fits(0.3) == FIT_BAD_HEIGHT, "0.3 is not on the grid");
+  assert(seat_fit_z(0.3) == 0.25, "the offer is the height the voxel would have kept");
+  assert(abs(seat_fit_residual(0.3) - 0.05) < 1e-12, "and the residual is what it would have thrown away");
+  assert(seat_fits(0.0 - 0.3) == FIT_BAD_HEIGHT, "below the datum is the same story");
+  assert(seat_fit_z(0.0 - 0.3) == 0.0 - 0.25, "with the offer rounded the same way");
+  assert(seat_is_integral(1.0) && !seat_is_integral(1.1), "the predicate form of the same test");
+}

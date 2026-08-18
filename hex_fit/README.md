@@ -18,6 +18,9 @@ workshop that proves the family against an exact round trip.
 
 Add the dependency, `use hex_fit;`, and call the maps below. **`USAGE.md` is the worked guide**, with
 every example pointed at a passing test in `tests/01-hex-fit.loft` — the tests are the executable documentation.
+The eight things a caller gets wrong — starting with the one that made this package necessary, a value
+the field cannot hold being *snapped* rather than refused — are worked one by one in
+`tests/02-worked-examples.loft` (`@HXI-001..008`), cited from the functions they belong to.
 
 Split from `ROUNDTRIP.md`'s objects and maps (`SPEC` **I-EXTEND**: a library defines its primitives
 from its own semantics, for consumers it will never meet). See hexbody's `plans/lib-split/`.
