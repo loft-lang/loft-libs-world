@@ -123,12 +123,15 @@ pub fn wall_step_m(d24: integer) -> integer {
 }
 
 // An even d24 is one of the 12 exact headings; an odd one is an in-between.
+//
+// Example: @HXS-002
 pub fn wall_is_exact(d24: integer) -> boolean { (((d24 % D24) + D24) % D24) % 2 == 0 }
 
 // World direction of a doubled-coordinate vector: x = k*sqrt(3)/2, y = m/2.
 fn dir_x(k: integer, _m: integer) -> float { (k as float) * 0.8660254037844386 }
 fn dir_y(_k: integer, m: integer) -> float { (m as float) * 0.5 }
 
+// Example: @HXS-008
 pub fn wall_new(d24: integer, ox: float, oy: float, half: float, mat: integer) -> Wall {
   sk = wall_step_k(d24);
   sm = wall_step_m(d24);
@@ -140,11 +143,13 @@ pub fn wall_new(d24: integer, ox: float, oy: float, half: float, mat: integer) -
 }
 
 // The nominal angle of `d24` in degrees, and the angle its step actually points at.  The two
-// differ by ~4.11 degrees on every odd d24 — the gate prints both rather than hiding it.
+// are EQUAL on every even d24 and differ by 1.1021 degrees on every odd one — the gate prints
+// both rather than hiding it.  (4.11 degrees was the pre-`N = 39` in-between; see the table.)
 pub fn wall_angle_nominal(d24: integer) -> float {
   ((((d24 % D24) + D24) % D24) as float) * 15.0
 }
 
+// Example: @HXS-002
 pub fn wall_angle_actual(d24: integer) -> float {
   sk = wall_step_k(d24);
   sm = wall_step_m(d24);
@@ -262,6 +267,8 @@ pub fn cell_y_w(q: integer, r: integer) -> float { (lattice_m(q, r) as float) * 
 // THE CHECK THAT WOULD HAVE CAUGHT IT: how far the midpoint of edge `dir` sits from the
 // midpoint between the two cell centres it is supposed to separate.  Zero for every
 // direction, or the edge table and the neighbour table disagree.
+//
+// Example: @HXS-004
 pub fn wall_edge_gap(q: integer, r: integer, dir: integer) -> float {
   (e1, e2) = hex_edge_corners(dir);
   mx = (hex_corner_x(q, r, e1) + hex_corner_x(q, r, e2)) / 2.0;
@@ -334,7 +341,20 @@ pub fn wall_write(w: Wall, edges: EdgeSet, q0: integer, r0: integer,
 // ALONG-NESS.  For a marked edge between cells C and N, the vector C->N is PERPENDICULAR to the
 // edge.  An edge lying ALONG the wall therefore has C->N pointing ACROSS the wall — a small
 // `|C->N . wall_dir|`.  The old picket marked edges lying ACROSS the wall, whose C->N pointed
-// ALONG it — `|C->N . wall_dir| ~ 1`.  So the worst `|dot|` over the chain is the discriminator.
+// ALONG it — `|C->N . wall_dir| ~ 1`.
+//
+// ⚠ THAT MAKES THE WORST `|dot|` A DISCRIMINATOR ON HALF THE DIRECTIONS ONLY.  On the twelve
+// EXACT headings it tops out at 0.5 (N = 3) or 0.866 (N = 1), and nothing reaches 0.9.  On the
+// twelve IN-BETWEEN ones it reads **0.97** on completely correct output: a shallow line has to
+// cross the vertical edge between two cells of the SAME row wherever it steps up, and that
+// edge's dot is `cos(13.9 deg)`.  Measured, 3 of a 25-edge run are above 0.9.  So this number
+// describes the WOBBLE; it does not deliver a verdict, and a gate that thresholds it flags a
+// correct in-between wall.
+//
+// The verdict is the CHAIN property below — two degree-1 vertices, no branches — which is exact
+// and holds for all 24 directions.
+//
+// Example: @HXS-004
 pub fn wall_along_max(w: Wall, edges: EdgeSet, q0: integer, r0: integer,
                       wq: integer, hq: integer) -> float {
   worst = 0.0;
@@ -361,6 +381,8 @@ pub fn wall_along_max(w: Wall, edges: EdgeSet, q0: integer, r0: integer,
 // degree > 2.  A picket comb of k disjoint edges has 2k degree-1 vertices — so this separates a
 // chain from a comb with no tolerance.  Returns the number of degree-1 vertices (2 for a single
 // chain, 0 for empty, 4 after a break, 2k for a comb).
+//
+// Example: @HXS-004
 pub fn wall_chain_ends(edges: EdgeSet, q0: integer, r0: integer,
                        wq: integer, hq: integer) -> integer {
   va: vector<integer> = [];
@@ -399,6 +421,8 @@ pub fn wall_chain_ends(edges: EdgeSet, q0: integer, r0: integer,
 
 // Any vertex where three or more marked edges meet — a branch, which a straight wall's boundary
 // never has.  Non-zero means the marking is not a simple path.
+//
+// Example: @HXS-004
 pub fn wall_chain_branches(edges: EdgeSet, q0: integer, r0: integer,
                            wq: integer, hq: integer) -> integer {
   va: vector<integer> = [];
@@ -482,6 +506,9 @@ pub fn tri_b(d24: integer) -> integer {
 }
 
 // N = |v|^2 / S^2 for direction `d24` — an exact integer, never a float comparison.
+// The direction's `N`.  Only THREE values occur over the 24 — measured, not assumed.
+//
+// Example: @HXS-002
 pub fn tri_n2(d24: integer) -> integer {
   a = tri_a(d24);
   b = tri_b(d24);
@@ -497,6 +524,7 @@ pub fn is_square(n: integer) -> boolean {
 
 // Are the two directions' lattice-line spacings COMMENSURABLE — i.e. can integer counts of
 // rows in each ever be exactly equal?  Only if sqrt(N2/N1) is rational, i.e. N1*N2 square.
+// Example: @HXS-002
 pub fn commensurable(n1: integer, n2: integer) -> boolean { is_square(n1 * n2) }
 
 // ── WHERE A LINE MAY START AND END — the editor's doorstep (SPEC K-FIT) ────
@@ -521,7 +549,7 @@ pub fn commensurable(n1: integer, n2: integer) -> boolean { is_square(n1 * n2) }
 // are the whole answer:
 //
 //   (a_v - b_v) = 0 (mod 3)   the shift is always 0: EVERY p works, from EVERY vertex.
-//                             This is the N=3 class (0/60/120/...) and the N=21 in-between.
+//                             This is the N=3 class (0/60/120/...) and the N=39 in-between.
 //   otherwise                 the shift cycles: exactly TWO OF EVERY THREE p work, and
 //                             WHICH two depends on the start vertex's class.  This is the
 //                             N=1 class (30/90/150/...), where a line runs one hex edge,
@@ -555,6 +583,8 @@ pub fn wall_end_b(d24: integer, b0: integer, p: integer) -> integer {
 }
 
 // THE DOORSTEP ITSELF.  `p` periods of `d24` from (a0,b0): admissible or not.
+//
+// Example: @HXS-003
 pub fn wall_run_ok(d24: integer, a0: integer, b0: integer, p: integer) -> boolean {
   if p <= 0 { return false; }
   if !tri_is_vertex(a0, b0) { return false; }
@@ -563,6 +593,7 @@ pub fn wall_run_ok(d24: integer, a0: integer, b0: integer, p: integer) -> boolea
 
 // The smallest admissible run from this vertex in this direction — the editor's snap unit.
 // -1 if the start is not a vertex at all.
+// Example: @HXS-003
 pub fn wall_min_p(d24: integer, a0: integer, b0: integer) -> integer {
   if !tri_is_vertex(a0, b0) { return -1; }
   for mp in 1..4 { if wall_run_ok(d24, a0, b0, mp) { return mp; } }
@@ -571,6 +602,7 @@ pub fn wall_min_p(d24: integer, a0: integer, b0: integer) -> integer {
 
 // A REFUSAL NAMES ITS RESTRICTION (K-FIT): given a wanted length in periods, the nearest
 // admissible one, searching outward so ties go to the shorter run.  0 if none exists.
+// Example: @HXS-003
 pub fn wall_snap_p(d24: integer, a0: integer, b0: integer, want: integer) -> integer {
   if want < 1 { return 0; }
   if wall_run_ok(d24, a0, b0, want) { return want; }
@@ -588,6 +620,7 @@ pub fn tri_y(a: integer, b: integer) -> float {
 }
 
 // The world length of `p` periods of `d24`, in world units.
+// Example: @HXS-003
 pub fn wall_run_len(d24: integer, p: integer) -> float {
   ra = 3 * p * tri_a(d24);
   rb = 3 * p * tri_b(d24);
@@ -643,6 +676,8 @@ const INV_SQ3 = 0.5773502691896258;
 // Nearest HEX-SCALE lattice point (vertex OR centre) to a world point, in triangle
 // coordinates.  The hex-scale lattice is spanned by e1 = (sqrt3/2, 1/2) and e2 = (0, 1),
 // which is (a,b) = (3i, 3j) — a triangular lattice of spacing 1 wu.
+//
+// Example: @HXS-008
 pub fn hex_scale_round(x: float, y: float) -> (integer, integer) {
   al = x * 2.0 * INV_SQ3;
   be = y - x * INV_SQ3;
@@ -670,6 +705,7 @@ fn hs_nb_b(n: integer) -> integer {
 }
 
 // SNAP 1: the nearest HEX VERTEX to an arbitrary world point, in triangle coordinates.
+// Example: @HXS-008
 pub fn nearest_vertex(x: float, y: float) -> (integer, integer) {
   (ca, cb) = hex_scale_round(x, y);
   if tri_is_vertex(ca, cb) { return (ca, cb); }
@@ -718,6 +754,7 @@ fn project_p(d24: integer, a0: integer, b0: integer, tx: float, ty: float) -> in
 const SNAP_SPAN = 3;
 
 // SNAP 2, direction part: the direction whose best legal endpoint lands nearest the target.
+// Example: @HXS-008
 pub fn snap_run_d24(a0: integer, b0: integer, tx: float, ty: float) -> integer {
   bestd = -1;
   best = 1.0e30;
@@ -736,6 +773,7 @@ pub fn snap_run_d24(a0: integer, b0: integer, tx: float, ty: float) -> integer {
 
 // SNAP 2, length part: the legal period count in that direction nearest the target.
 // 0 when nothing legal was found, which the caller must treat as a refusal.
+// Example: @HXS-008
 pub fn snap_run_p(d24: integer, a0: integer, b0: integer, tx: float, ty: float) -> integer {
   bestp = 0;
   best = 1.0e30;
@@ -773,6 +811,7 @@ pub fn wall_offset_of(w: Wall, px: float, py: float) -> float {
 // The worst perpendicular stray of any emitted segment endpoint, over the marked field.
 // Only edges whose midpoint lies within the run are measured — past the ends there is no
 // line to be near.
+// Example: @HXS-008
 pub fn wall_mesh_stray(w: Wall, edges: EdgeSet, q0: integer, r0: integer,
                        wq: integer, hq: integer) -> float {
   worst = 0.0;
@@ -804,6 +843,7 @@ pub fn wall_mesh_stray(w: Wall, edges: EdgeSet, q0: integer, r0: integer,
 
 // How many distinct segments the mesh emitter would produce for the marked field — the
 // vertex count of moros' wall mesh divided by the per-edge quad, i.e. the segment count.
+// Example: @HXS-005
 pub fn wall_mesh_segments(edges: EdgeSet, q0: integer, r0: integer,
                           wq: integer, hq: integer) -> integer {
   n = 0;
@@ -835,6 +875,8 @@ pub fn wall_mesh_segments(edges: EdgeSet, q0: integer, r0: integer,
 // The two degree-1 vertices of the marked chain, in triangle coordinates.  `ok` is false unless
 // there are exactly two — a fragmented or branching marking is REFUSED, never averaged into an
 // answer.
+//
+// Example: @HXS-005
 pub fn wall_read_ends(edges: EdgeSet, q0: integer, r0: integer, wq: integer, hq: integer)
                       -> (integer, integer, integer, integer, boolean) {
    va: vector<integer> = [];
@@ -880,6 +922,13 @@ pub fn wall_read_ends(edges: EdgeSet, q0: integer, r0: integer, wq: integer, hq:
 // answer is canonicalised to the end that gives `p > 0`.  `ok` is false when the marking is not a
 // single chain, or when no direction divides the displacement — an unreadable field is REFUSED, not
 // approximated (law **P4**).
+//
+// WHAT IT CANNOT RECOVER IS THE ORIENTATION, because the field does not store one: A-to-B and
+// B-to-A mark the identical edges.  The answer is canonicalised to `p > 0`, so the direction
+// comes back as `d24` OR as `d24 + 12` with the other endpoint as the anchor — both naming the
+// same wall.  `read.d == d` is therefore the wrong round-trip assertion; compare the ENDPOINTS.
+//
+// Example: @HXS-005
 pub fn wall_read_run(edges: EdgeSet, q0: integer, r0: integer, wq: integer, hq: integer)
                      -> (integer, integer, integer, integer, boolean) {
   (a1, b1, a2, b2, okends) = wall_read_ends(edges, q0, r0, wq, hq);

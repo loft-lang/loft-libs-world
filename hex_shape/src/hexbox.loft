@@ -59,6 +59,8 @@ pub fn box_sin(n: integer) -> float {
 // Which of the two orbits `rot` belongs to: 0 = the EDGE family (`Plan`'s six),
 // 1 = the VERTEX family. Members of one orbit are exact lattice rotations of each other;
 // members of different orbits are not related by any exact map.
+//
+// Example: @HXS-006
 pub fn box_orbit(rot: integer) -> integer { (((rot % BOX_ROT) + BOX_ROT) % BOX_ROT) % 2 }
 
 pub struct Box {
@@ -104,6 +106,7 @@ const BOX_EPS = 0.000000001;
 
 fn bfabs(v: float) -> float { if v < 0.0 { -v } else { v } }
 
+// Example: @HXS-006
 pub fn box_fill(b: Box, cells: HexSet) -> integer {
   hw = box_hw(b);
   hd = box_hd(b);
@@ -130,6 +133,8 @@ pub fn box_fill(b: Box, cells: HexSet) -> integer {
 // `box_ring_out` puts it OUTSIDE: the user's selection is the courtyard, untouched, and the
 // wall is the ring of cells around it. This is the one that matches the editor's gesture —
 // what you select is what you get to keep.
+//
+// Example: @HXS-007
 pub fn box_ring_out(cells: HexSet, ring: HexSet) -> integer {
   n = 0;
   for rr in hexset_r0(cells)..hexset_r0(cells) + hexset_h(cells) {
@@ -152,6 +157,8 @@ pub fn box_ring_out(cells: HexSet, ring: HexSet) -> integer {
 // `box_ring_in` takes it from INSIDE instead: the outermost layer of the selection becomes
 // wall and the courtyard shrinks. Same ring, opposite side — a town wall drawn to a
 // surveyed outer boundary wants this one.
+//
+// Example: @HXS-007
 pub fn box_ring_in(cells: HexSet, ring: HexSet) -> integer {
   n = 0;
   for ir in hexset_r0(cells)..hexset_r0(cells) + hexset_h(cells) {
@@ -177,6 +184,8 @@ pub fn box_ring_in(cells: HexSet, ring: HexSet) -> integer {
 //
 // Relaxation rather than a queue: the region is a box, so sweeping until nothing changes
 // terminates in at most its perimeter in passes, and it needs no auxiliary storage.
+//
+// Example: @HXS-007
 pub fn flood_outside(wall: HexSet, out: HexSet) {
   q0 = hexset_q0(out);
   r0 = hexset_r0(out);
@@ -214,6 +223,8 @@ pub fn flood_outside(wall: HexSet, out: HexSet) {
 }
 
 // How many cells of `inner` the outside flood reached. Zero means the wall holds.
+//
+// Example: @HXS-007
 pub fn leak_count(inner: HexSet, out: HexSet) -> integer {
   n = 0;
   for lr in hexset_r0(inner)..hexset_r0(inner) + hexset_h(inner) {
@@ -233,6 +244,8 @@ pub fn leak_count(inner: HexSet, out: HexSet) -> integer {
 // Stepping is by a third of a cell, which cannot skip one: consecutive samples are 0.577 wu
 // apart at most while a hex is 1.732 wu across, so every cell the segment crosses is
 // sampled at least twice.
+//
+// Example: @HXS-007
 pub fn line_hexes(x0: float, y0: float, x1: float, y1: float, cells: HexSet) -> integer {
   dx = x1 - x0;
   dy = y1 - y0;
@@ -258,6 +271,12 @@ pub fn line_hexes(x0: float, y0: float, x1: float, y1: float, cells: HexSet) -> 
 
 // Is every cell of the set reachable from every other, stepping only within the set?
 // A wall with a gap is not a wall; this is what makes "one hex wide" mean a CHAIN.
+//
+// CONNECTED IS NOT CLOSED.  A ring with one cell taken out is still one connected chain, so
+// this answers true on a wall you can walk straight through.  For an ENCLOSURE the verdict is
+// `flood_outside` + `leak_count`; this one is the contract for an open run.
+//
+// Example: @HXS-007
 pub fn set_connected(cells: HexSet) -> boolean {
   seedq = 0;
   seedr = 0;

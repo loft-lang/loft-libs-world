@@ -1,0 +1,614 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Worked examples for `hex_shape` (@PLN141).  Each `test_*` below is a REAL,
+// run-every-CI demonstration of a contract the signature cannot state; the
+// function documents itself by CITING the tag with `// Example: @HXS-00N`, and
+// `check_doc_drift.sh examples` fails if a citation goes dangling.  These are
+// teaching examples, distinct from the conformance suite in `01-hex-shape.loft`.
+//
+// THE ONE IDEA.  Three primitives — the wall, the box, the arc — and every one
+// of them takes a CONTINUOUS parameter that the lattice cannot represent
+// continuously.  A radius, a run length, an angle, a width.  So each has an
+// admissible GRID, and the package's whole job is to say what that grid is
+// instead of silently snapping to it.
+//
+// WHICH MEANS EVERY ANSWER HERE IS SPLIT.  An arc's centre comes back exactly
+// and its radius does not.  A run's line comes back exactly and which end you
+// called the start does not.  A direction's angle is exact on twelve headings
+// and 1.1 degrees off on the other twelve.  A split answer is precisely what a
+// signature cannot carry, which is why it is worked here.
+//
+// AND WHERE THE MEASUREMENTS THEMSELVES MISLEAD.  Two of the examples below are
+// about an instrument rather than a shape: a stated discriminator that reads the
+// same on good output as on the failure it was built to catch (`@HXS-004`), and
+// a connectivity check that passes on a wall you can walk straight through
+// (`@HXS-007`).  Both are the package's own checks, and both needed a second
+// number beside them.
+use hex_shape;
+use hex_field;
+use hex_form;
+use hex_grid;
+
+const Q0 = -12;
+const R0 = -12;
+const W  = 25;
+const H  = 25;
+
+// The wall window: smaller, because the chain readers are O(edges squared).
+const WQ0 = -10;
+const WR0 = -10;
+const WW  = 21;
+const WH  = 21;
+
+fn abs_f(v: float) -> float { if v < 0.0 { return 0.0 - v; } v }
+
+fn chunk() -> HexSet { hexset_chunk(Q0, R0, W, H) }
+
+// How many marked edges have their cell-to-cell vector pointing ALONG the wall
+// rather than across it — the picket signature, counted rather than maximised.
+fn edges_pointing_along(w: Wall, e: EdgeSet) -> integer {
+  n = 0;
+  for wr in WR0..WR0 + WH {
+    for wq in WQ0..WQ0 + WW {
+      for wd in 0..3 {
+        (nq, nr) = hex_neighbor(wq, wr, wd);
+        if edge_mat(e, wq, wr, nq, nr) != 0 {
+          dx = cell_x_w(nq, nr) - cell_x_w(wq, wr);
+          dy = cell_y_w(nq, nr) - cell_y_w(wq, wr);
+          dl = sqrt(dx * dx + dy * dy) ?? 1.0;
+          if abs_f(((dx * w.wa_dx + dy * w.wa_dy) / dl) ?? 0.0) > 0.9 { n = n + 1; }
+        }
+      }
+    }
+  }
+  n
+}
+
+// Clear the `k`-th marked edge, counting in scan order — used to break a chain in
+// the middle, where a reader must refuse rather than answer.
+fn clear_nth_edge(e: EdgeSet, k: integer) {
+  seen = 0;
+  for wr in WR0..WR0 + WH {
+    for wq in WQ0..WQ0 + WW {
+      for wd in 0..3 {
+        (nq, nr) = hex_neighbor(wq, wr, wd);
+        if edge_mat(e, wq, wr, nq, nr) != 0 {
+          if seen == k { edge_set_mat(e, wq, wr, nq, nr, 0); }
+          seen = seen + 1;
+        }
+      }
+    }
+  }
+}
+
+fn copy_set(src: HexSet) -> HexSet {
+  out = chunk();
+  for r in R0..R0 + H {
+    for q in Q0..Q0 + W {
+      if hexset_get(src, q, r) { hexset_set(out, q, r, true); }
+    }
+  }
+  out
+}
+
+fn drop_first_cell(s: HexSet) {
+  done = false;
+  for r in R0..R0 + H {
+    for q in Q0..Q0 + W {
+      if !done && hexset_get(s, q, r) { hexset_set(s, q, r, false); done = true; }
+    }
+  }
+}
+
+fn main() {
+  b = box_new(0, 0, 5, 4, 0, false);
+  assert(box_hw(b) > 0.0, "a box has a positive half-width");
+}
+
+// @HXS-001 — THE ARC'S ANSWER IS SPLIT: THE CENTRE IS EXACT, THE RADIUS IS NOT.
+//
+// This is the question the module was written to answer, and the answer is two
+// answers.  The centre is a translation and the field pins it, so it comes back
+// exactly.  The radius does not: a disk realises only the SHELLS `3k² + m²`, and
+// every radius between two shells draws the same cells.
+//
+// So `arc_fill` takes a shell, not a radius — and if you hand it something that
+// is not a shell it draws the shell BELOW and never says so.  Ask for 16 and you
+// get 12: same cells, and `arc_shell_max` reports 12, because 16 was never stored
+// anywhere.  Nothing in the field remembers what you asked for.
+//
+// The cure is not a tolerance, it is the grid: `arc_shells_upto` is the set of
+// radii that exist, and a caller snaps to it BEFORE authoring rather than being
+// snapped afterwards.  Over the whole span 0.5..4.5 world units there are only
+// FOUR of them.
+fn test_an_arcs_centre_is_exact_and_its_radius_is_a_grid() {
+  // The admissible radii out to 4.5 world units (shell 81) — there are four.
+  shells = arc_shells_upto(81);
+  assert(len(shells) == 4, "0.5..4.5 world units offers four radii, not a continuum");
+  assert((shells[0] ?? -1) == 0 && (shells[1] ?? -1) == 12
+         && (shells[2] ?? -1) == 36 && (shells[3] ?? -1) == 48,
+         "and they are 0, 12, 36, 48");
+
+  // 16 is not one of them.  Ask for it anyway.
+  asked = chunk();
+  arc_fill(0, 0, 16, asked);
+  got = chunk();
+  arc_fill(0, 0, 12, got);
+  assert(hexset_count(asked) == 7 && hexset_count(got) == 7,
+         "a 16 disk and a 12 disk are the same seven cells");
+  assert(arc_shell_max(asked, 0, 0) == 12,
+         "and the field reports 12 — the 16 you asked for is nowhere, got {arc_shell_max(asked, 0, 0)}");
+  assert(arc_is_disk(asked, 0, 0), "it is still a perfectly good disk");
+
+  // The centre half of the answer, which really is exact, anywhere.
+  off = chunk();
+  arc_fill(3, 2, 12, off);
+  (cq, cr, ok) = arc_recover_centre(off);
+  assert(ok && cq == 3 && cr == 2, "the centre comes back exactly, got ({cq}, {cr})");
+
+  // A refusal, not a fit: a region that is not a disk has no centre to recover.
+  blob = chunk();
+  arc_fill(0, 0, 12, blob);
+  hexset_set(blob, 5, 5, true);
+  (bq, br, bok) = arc_recover_centre(blob);
+  assert(!bok, "a blob is refused rather than fitted, got ({bq}, {br})");
+}
+
+// @HXS-002 — TWELVE DIRECTIONS ARE EXACT AND TWELVE ARE 1.1 DEGREES OFF, AND
+// THAT IS WHY THE WALL'S WIDTH IS A CONSTANT.
+//
+// `d24` counts in 15-degree steps, which reads like 24 equal directions.  It is
+// not: no lattice vector points at an odd multiple of 15 degrees at all, so the
+// twelve in-between headings are approximated, and `wall_angle_actual` is 1.1021
+// degrees from `wall_angle_nominal` on every one of them.  `wall_is_exact` is the
+// function that tells them apart, and a stencil may use only the exact twelve.
+//
+// The width follows from the same arithmetic, and it is why `WALL_W` is a
+// constant rather than a count of lattice rows.  A direction's parallel lattice
+// lines are spaced `sqrt(3) / (2*sqrt(N))`, so two directions' spacings are in a
+// rational ratio — the only way integer row counts could ever make two walls
+// equally wide — exactly when `N1*N2` is a perfect square.  Over all 24
+// directions only THREE values of N occur, and no pair of them qualifies.  So
+// there is no row count that is the same width twice, and the width has to be
+// stated in world units instead.
+fn test_only_twelve_directions_are_exact_and_no_two_widths_commensurate() {
+  // Exactly the even d24 are exact, and they hit their nominal angle.
+  for d in 0..24 {
+    ex = wall_is_exact(d);
+    assert(ex == (((d % 2) ?? 0) == 0), "d={d}: the even headings are the exact ones");
+    err = abs_f(wall_angle_actual(d) - wall_angle_nominal(d));
+    if ex {
+      assert(err < 0.000000001, "d={d} is exact, so its angle error is 0, got {err}");
+    } else {
+      assert(err > 1.10 && err < 1.11,
+             "d={d} is in-between, so it is 1.1021 degrees off, got {err}");
+    }
+  }
+
+  // Three values of N over 24 directions — 3 and 1 on the exact headings, 39 on
+  // the in-between ones.
+  n3 = 0;
+  n1 = 0;
+  n39 = 0;
+  for d in 0..24 {
+    v = tri_n2(d);
+    if v == 3 { n3 = n3 + 1; } else if v == 1 { n1 = n1 + 1; }
+    else if v == 39 { n39 = n39 + 1; }
+  }
+  assert(n3 + n1 + n39 == 24, "every direction is one of three classes");
+  assert(n3 == 6 && n1 == 6 && n39 == 12, "six, six and twelve, got {n3}/{n1}/{n39}");
+
+  // And no two distinct classes are commensurable, which is the whole argument.
+  assert(!commensurable(3, 1), "3 and 1 cannot be matched by integer row counts");
+  assert(!commensurable(3, 39), "nor 3 and 39");
+  assert(!commensurable(1, 39), "nor 1 and 39");
+  assert(commensurable(3, 3), "a class is trivially commensurable with itself");
+
+  // So the width is a world-unit constant: one triangle high, sqrt(3)/6.
+  assert(abs_f(WALL_W - 0.2886751345948129) < 0.000000001,
+         "WALL_W is sqrt(3)/6 world units, got {WALL_W}");
+}
+
+// @HXS-003 — NOT EVERY RUN LENGTH IS LEGAL, AND WHICH ONES ARE DEPENDS ON WHICH
+// CORNER YOU STARTED FROM.
+//
+// A wall must begin and end on a hex VERTEX — the mesh has no way to represent an
+// endpoint anywhere else — so a run is a whole number of periods, and the
+// question `wall_run_ok` answers is whether that number lands on a vertex again.
+// A period displaces the class by `delta = (tri_a - tri_b) mod 3`, and class 0 is
+// a hex CENTRE, which is not a vertex:
+//
+//   delta = 0   every p works, from every vertex.  The N=3 and N=39 directions.
+//   delta != 0  two p in every three work, and WHICH two moves with the start
+//               vertex's class.  The N=1 family — 30, 90, 150 degrees.
+//
+// The consequence a caller feels: `wall_min_p` for the SAME direction is 1 from
+// one corner of a hex and 2 from the next.  The editor's snap unit is not a
+// property of the direction, and a wall that fitted before you moved the anchor
+// one vertex does not fit after.  `wall_snap_p` is the refusal that names its
+// restriction, searching outward so a tie goes to the SHORTER run.
+fn test_a_legal_run_length_depends_on_the_starting_vertex() {
+  // Two vertices of the same hex, one in each class.
+  a1 = hex_corner_tri_a(0, 0, 0);
+  b1 = hex_corner_tri_b(0, 0, 0);
+  a2 = hex_corner_tri_a(0, 0, 1);
+  b2 = hex_corner_tri_b(0, 0, 1);
+  assert(tri_is_vertex(a1, b1) && tri_is_vertex(a2, b2), "both are vertices");
+  assert(tri_class(a1, b1) == 2 && tri_class(a2, b2) == 1, "and they are different classes");
+
+  // A delta = 0 direction: everything is legal from everywhere.
+  for p in 1..7 {
+    assert(wall_run_ok(0, a1, b1, p), "d=0 admits p={p} from the first vertex");
+    assert(wall_run_ok(0, a2, b2, p), "and from the second");
+    assert(wall_run_ok(1, a1, b1, p), "the in-between d=1 admits p={p} too");
+  }
+
+  // A delta != 0 direction refuses one in three, and not the same one.
+  refused1 = 0;
+  refused2 = 0;
+  for p in 1..7 {
+    if !wall_run_ok(2, a1, b1, p) { refused1 = refused1 + 1; }
+    if !wall_run_ok(2, a2, b2, p) { refused2 = refused2 + 1; }
+  }
+  assert(refused1 == 2 && refused2 == 2, "two of six refused from each vertex");
+  assert(!wall_run_ok(2, a1, b1, 1), "p=1 is refused from the first vertex");
+  assert(wall_run_ok(2, a2, b2, 1), "and admitted from the second — same direction");
+
+  // Which is the thing a caller actually trips over.
+  assert(wall_min_p(2, a1, b1) == 2, "the shortest legal d=2 wall here is 2 periods");
+  assert(wall_min_p(2, a2, b2) == 1, "and one vertex away it is 1 — twice as short");
+  assert(wall_min_p(0, a1, b1) == 1 && wall_min_p(0, a2, b2) == 1,
+         "an exact-lattice direction has no such surprise");
+
+  // A refusal that names its restriction, ties to the shorter run.
+  assert(wall_snap_p(2, a1, b1, 2) == 2, "a legal want comes back unchanged");
+  assert(wall_snap_p(2, a1, b1, 4) == 3, "4 is refused and snaps DOWN to 3");
+  assert(wall_snap_p(6, a1, b1, 2) == 1, "2 sits between 1 and 3, and the tie goes short");
+  assert(wall_snap_p(2, a1, b1, 0) == 0, "a nonsense want is refused outright");
+
+  // The period length itself differs per class, which is why the snap unit is
+  // worth reading rather than assuming.
+  assert(abs_f(wall_run_len(0, 1) - 1.7320508075688772) < 0.000001, "N=3 period is sqrt(3) wu");
+  assert(abs_f(wall_run_len(6, 1) - 1.0) < 0.000001, "N=1 period is 1 wu");
+  assert(abs_f(wall_run_len(1, 1) - 6.244997998398398) < 0.000001,
+         "an in-between period is 6.24 wu — six times coarser");
+}
+
+// @HXS-004 — THE DISCRIMINATOR THAT STOPS DISCRIMINATING.
+//
+// `wall_write` marks the edges lying ALONG the wall, and an earlier version
+// marked the ones lying ACROSS it — a comb of pickets instead of a chain.  The
+// measurement built to tell those apart is `wall_along_max`: for an edge lying
+// along the wall, the vector between its two cells points across, so the dot with
+// the wall direction is small; for a picket it is near 1.
+//
+// On the twelve EXACT headings that works: the worst dot is 0.5 or 0.866, and no
+// edge is above 0.9.  On the twelve IN-BETWEEN headings it does not.  A shallow
+// line genuinely has to cross the vertical edge between two cells of the same
+// row wherever it steps up, and that edge's dot is `cos(13.9 deg) = 0.97` — the
+// picket's own value, on completely correct output.
+//
+// So `wall_along_max` is a discriminator on half its domain and a false alarm on
+// the other half.  What separates a chain from a comb everywhere, with no
+// tolerance at all, is the CHAIN property: exactly two degree-1 vertices and no
+// branches.  A comb of k edges has 2k ends.  Read the max as a description of
+// the wobble, and read the chain count as the verdict.
+fn test_the_along_test_is_not_a_verdict_but_the_chain_count_is() {
+  a0 = hex_corner_tri_a(0, 0, 0);
+  b0 = hex_corner_tri_b(0, 0, 0);
+
+  // An exact heading: the along test behaves as documented.
+  we = wall_from_run(0, a0, b0, 4, 7);
+  ee = edgeset_new(WQ0, WR0, WW, WH);
+  ne = wall_write(we, ee, WQ0, WR0, WW, WH);
+  assert(ne == 8, "the exact run marks 8 edges, got {ne}");
+  assert(wall_along_max(we, ee, WQ0, WR0, WW, WH) < 0.51,
+         "and none of them points along the wall");
+  assert(edges_pointing_along(we, ee) == 0, "not one edge is above 0.9");
+
+  // An in-between heading: the same measurement, on correct output, reads like
+  // the failure it was built to catch.
+  wb = wall_from_run(1, a0, b0, 4, 7);
+  eb = edgeset_new(WQ0, WR0, WW, WH);
+  nb = wall_write(wb, eb, WQ0, WR0, WW, WH);
+  assert(nb == 25, "the in-between run marks 25 edges, got {nb}");
+  am = wall_along_max(wb, eb, WQ0, WR0, WW, WH);
+  assert(am > 0.96 && am < 0.98,
+         "and its worst dot is cos(13.9 deg) = 0.97 — the picket value, got {am}");
+  assert(edges_pointing_along(wb, eb) == 3,
+         "though only 3 edges of 25 are there, not all of them");
+
+  // The verdict that holds for both, and for every direction.
+  for d in 0..24 {
+    p = wall_snap_p(d, a0, b0, 3);
+    if p > 0 {
+      w = wall_from_run(d, a0, b0, p, 7);
+      e = edgeset_new(WQ0, WR0, WW, WH);
+      wall_write(w, e, WQ0, WR0, WW, WH);
+      assert(wall_chain_ends(e, WQ0, WR0, WW, WH) == 2,
+             "d={d}: one chain has exactly two ends");
+      assert(wall_chain_branches(e, WQ0, WR0, WW, WH) == 0,
+             "d={d}: and no branches");
+    }
+  }
+
+  // The geometry check that catches a mismatched corner/neighbour table — the
+  // defect that stayed green through every count-based gate.
+  for dir in 0..6 {
+    assert(wall_edge_gap(2, 1, dir) < 0.000000001,
+           "edge {dir}'s midpoint sits between the cells it separates");
+  }
+}
+
+// @HXS-005 — A RUN READS BACK EXACTLY, BUT NOT WHICH END YOU CALLED THE START.
+//
+// Recovery here is arithmetic, not fitting: the marked chain's two degree-1
+// vertices ARE the endpoints, so `wall_read_run` hands back direction, anchor and
+// period count as exact integers with nothing to tolerance.
+//
+// What it cannot hand back is the ORIENTATION, because the field does not store
+// it.  A run from A to B and the same run from B to A mark the identical edges,
+// so the reader returns whichever end its scan met first — the direction may come
+// back as `d` or as `d + 12`, with the other endpoint as the anchor.  Both name
+// the same wall.  So the obvious round-trip assertion, `read.d == d`, is wrong,
+// and it is wrong on the very first direction: writing `d = 0` reads back `12`.
+//
+// And a marking that is not one chain is REFUSED rather than approximated — but
+// only a marking that is not one chain.  Break a run in the MIDDLE and the reader
+// says no; shorten it at the END and it reads back a shorter wall, correctly,
+// because a shorter wall is exactly what the field now contains.
+fn test_a_run_reads_back_exactly_except_which_end_is_the_start() {
+  a0 = hex_corner_tri_a(0, 0, 0);
+  b0 = hex_corner_tri_b(0, 0, 0);
+
+  // Every direction round-trips to the same LINE.
+  flipped = 0;
+  for d in 0..24 {
+    p = wall_min_p(d, a0, b0);
+    if p > 0 {
+      w = wall_from_run(d, a0, b0, p, 7);
+      e = edgeset_new(WQ0, WR0, WW, WH);
+      wall_write(w, e, WQ0, WR0, WW, WH);
+      (rd, ra, rb, rp, ok) = wall_read_run(e, WQ0, WR0, WW, WH);
+      assert(ok, "d={d}: the run reads back");
+      assert(rp == p, "d={d}: and with the same period count, got {rp}");
+      assert(rd == d || rd == ((d + 12) % 24 ?? 0),
+             "d={d}: the direction is d or its opposite, got {rd}");
+      if rd != d { flipped = flipped + 1; }
+      // Whichever end it chose, the endpoints are the authored pair.
+      ea = wall_end_a(rd, ra, rp);
+      eb2 = wall_end_b(rd, rb, rp);
+      oa = wall_end_a(d, a0, p);
+      ob = wall_end_b(d, b0, p);
+      same = (ra == a0 && rb == b0 && ea == oa && eb2 == ob);
+      rev  = (ra == oa && rb == ob && ea == a0 && eb2 == b0);
+      assert(same || rev, "d={d}: the endpoints are the ones that were authored");
+    }
+  }
+  assert(flipped > 0, "and some of them really do come back reversed — {flipped} of 24");
+
+  // The concrete case, so nobody writes `read.d == d` again.
+  w0 = wall_from_run(0, a0, b0, 1, 7);
+  e0 = edgeset_new(WQ0, WR0, WW, WH);
+  wall_write(w0, e0, WQ0, WR0, WW, WH);
+  (d0, xa, xb, pp, ok0) = wall_read_run(e0, WQ0, WR0, WW, WH);
+  assert(ok0 && d0 == 12, "writing d=0 reads back d=12 — the same wall, other way up");
+
+  // A fragmented marking is refused, not fitted.
+  wl = wall_from_run(0, a0, b0, 4, 7);
+  el = edgeset_new(WQ0, WR0, WW, WH);
+  n = wall_write(wl, el, WQ0, WR0, WW, WH);
+  assert(wall_mesh_segments(el, WQ0, WR0, WW, WH) == n, "the mesh is one segment per marked edge");
+  clear_nth_edge(el, (n / 2) ?? 0);
+  assert(wall_chain_ends(el, WQ0, WR0, WW, WH) == 4, "a break makes four ends");
+  (bd, ba, bb, bp, bok) = wall_read_run(el, WQ0, WR0, WW, WH);
+  assert(!bok, "and the reader refuses rather than answering, got ({bd}, {bp})");
+}
+
+// @HXS-006 — TWELVE BOX ANGLES ARE TWO FAMILIES OF SIX, NOT ONE FAMILY OF TWELVE.
+//
+// `Box` rotates in 30-degree steps because a stencil side runs in one of twelve
+// headings.  But the lattice has 6-fold symmetry, not 12-fold, so a 30-degree
+// rotation is not a symmetry of it.  The twelve split into two ORBITS that behave
+// completely differently:
+//
+//   EVEN rot — sides on edge headings.  The six are exact lattice rotations of
+//              one another, so their cell sets are equivariant: same count.
+//   ODD  rot — sides on vertex headings.  Also six, also mutually equivariant,
+//              and NOT related to the even six by any exact map.
+//
+// The same rectangle, turned 30 degrees, is a different number of cells — and no
+// integer map takes one to the other.  `box_orbit` is what says which family a
+// rot is in, and a consumer that measures one orbit and assumes the other has
+// measured half its cases.
+fn test_the_twelve_box_angles_are_two_families_of_six() {
+  even_n = -1;
+  odd_n = -1;
+  for rot in 0..12 {
+    b = box_new(0, 0, 6, 4, rot, false);
+    cells = chunk();
+    n = box_fill(b, cells);
+    if ((rot % 2) ?? 0) == 0 {
+      assert(box_orbit(rot) == 0, "rot {rot} is the edge family");
+      if even_n < 0 { even_n = n; }
+      assert(n == even_n, "every edge-family box has {even_n} cells, rot {rot} had {n}");
+    } else {
+      assert(box_orbit(rot) == 1, "rot {rot} is the vertex family");
+      if odd_n < 0 { odd_n = n; }
+      assert(n == odd_n, "every vertex-family box has {odd_n} cells, rot {rot} had {n}");
+    }
+  }
+  assert(even_n == 33, "the edge family fills 33 cells, got {even_n}");
+  assert(odd_n == 31, "the vertex family fills 31, got {odd_n}");
+  assert(even_n != odd_n,
+         "so a 30-degree turn is NOT a rotation of the same shape — {even_n} against {odd_n}");
+}
+
+// @HXS-007 — CONNECTED IS NOT CLOSED, AND ONLY WALKING IN CAN TELL.
+//
+// A thick wall is a ring of cells, and the property that matters is that nothing
+// gets from outside to the courtyard.  Every cheap check of a ring passes on a
+// ring with a hole in it: the cell count barely moves, and `set_connected` still
+// says true — because a ring missing one cell is still one connected chain of
+// cells.  It just is not a loop any more.
+//
+// So the honest test is `flood_outside` plus `leak_count`: seed the window's
+// border and relax inward.  Intact, nothing reaches the courtyard.  Take ONE cell
+// out of twenty-two and the outside reaches all twenty-seven.
+//
+// The other half of the example is which side the ring comes from.
+// `box_ring_out` puts it outside the selection, so the courtyard is exactly what
+// the user picked; `box_ring_in` takes it from the selection, so the same call on
+// the same box leaves a courtyard of eleven cells instead of twenty-seven.
+fn test_a_ring_can_be_connected_and_still_leak() {
+  b = box_new(0, 0, 5, 4, 0, false);
+  inner = chunk();
+  ni = box_fill(b, inner);
+  assert(ni == 27, "the user selected 27 cells, got {ni}");
+
+  ring = chunk();
+  nr = box_ring_out(inner, ring);
+  assert(nr == 22, "the wall outside it is 22 cells, got {nr}");
+  assert(leak_count(inner, ring) == 0, "and it takes none of the courtyard");
+
+  out = chunk();
+  flood_outside(ring, out);
+  assert(leak_count(inner, out) == 0, "the intact wall holds — nothing walks in");
+  assert(set_connected(ring), "and it is connected, as a ring should be");
+
+  // One cell out. Every cheap check still passes.
+  holed = copy_set(ring);
+  drop_first_cell(holed);
+  assert(hexset_count(holed) == 21, "21 cells instead of 22 — a 5% change");
+  assert(set_connected(holed), "STILL connected: a broken ring is one chain, not two");
+
+  // The check that is not fooled.
+  out2 = chunk();
+  flood_outside(holed, out2);
+  assert(leak_count(inner, out2) == 27,
+         "and the outside reaches the whole courtyard, got {leak_count(inner, out2)}");
+
+  // The other side: the same ring taken from the inside.
+  ring_i = chunk();
+  n2 = box_ring_in(inner, ring_i);
+  assert(n2 == 16, "ring_in is 16 cells, got {n2}");
+  assert(leak_count(inner, ring_i) == 16,
+         "and all 16 are cells the user had selected — the courtyard drops to 11");
+
+  // A curtain wall encloses nothing, so `leak_count` has nothing to say about it
+  // and connectivity is the whole contract: one hex wide, and a chain.
+  curtain = chunk();
+  nc = line_hexes(-8.0, -5.0, 8.0, 5.0, curtain);
+  assert(nc == 13, "an 18.9 wu run is 13 cells, got {nc}");
+  assert(set_connected(curtain), "and it is a chain — sampling every third of a cell cannot skip one");
+}
+
+// @HXS-008 — THE EDITOR'S INPUT IS A MOUSE, AND THREE SEPARATE ERRORS SIT
+// BETWEEN WHERE IT CLICKED AND WHAT GETS STORED.
+//
+// A wall cannot start where you clicked, cannot end where you dragged to, and is
+// not stored as the line between them.  All three are by construction, all three
+// are recoverable, and none of them is visible at the call site — so the numbers
+// are here.
+//
+//   SNAP 1  `nearest_vertex` moves the anchor to a hex vertex.  Note it is two
+//           steps: rounding lands on the hex-scale lattice, which includes hex
+//           CENTRES, and a centre is never a legal endpoint — so it steps to the
+//           nearest of six neighbours.  The click below does exactly that.
+//   SNAP 2  `snap_run_d24` + `snap_run_p` pick the direction and period count
+//           whose legal endpoint lands nearest the target.  `run_end_dist` is
+//           how far that is, and it is not small: 1.43 world units here.
+//   STORAGE `wall_write` marks a chain of hex edges, which is a sawtooth about
+//           the line, not the line.  `wall_mesh_stray` is its worst excursion.
+//
+// The target is not even ON the wall the editor built from it — `wall_offset_of`
+// puts it 0.61 world units to one side.  An editor that draws the user's line
+// rather than the snapped one is drawing something it will not be able to store.
+fn test_the_mouse_is_three_snaps_away_from_what_gets_stored() {
+  // A click at an arbitrary point, which rounds onto a hex CENTRE.
+  (ha, hb) = hex_scale_round(2.37, 1.11);
+  assert(tri_class(ha, hb) == 0, "the nearest hex-scale point is a centre, not a vertex");
+  assert(!tri_is_vertex(ha, hb), "so it cannot anchor a wall");
+
+  (va, vb) = nearest_vertex(2.37, 1.11);
+  assert(tri_is_vertex(va, vb), "the second step lands on a real vertex");
+  moved = sqrt((tri_x(va, vb) - 2.37) * (tri_x(va, vb) - 2.37)
+             + (tri_y(va, vb) - 1.11) * (tri_y(va, vb) - 1.11)) ?? 0.0;
+  assert(moved > 0.6 && moved < 0.7, "and the anchor moved {moved} wu to get there");
+
+  // The far end: the nearest legal endpoint over all 24 directions.
+  d = snap_run_d24(va, vb, 8.9, 3.4);
+  assert(d >= 0, "a direction was found");
+  p = snap_run_p(d, va, vb, 8.9, 3.4);
+  assert(p > 0 && wall_run_ok(d, va, vb, p), "and a legal period count in it");
+  miss = run_end_dist(d, va, vb, p, 8.9, 3.4);
+  assert(miss > 1.4 && miss < 1.5,
+         "the endpoint lands {miss} wu from where the user dragged to");
+
+  // The stored form is a sawtooth about that line, not the line.
+  w = wall_from_run(d, va, vb, p, 5);
+  e = edgeset_new(-14, -14, 29, 29);
+  n = wall_write(w, e, -14, -14, 29, 29);
+  assert(n > 0, "the wall marks {n} edges");
+  stray = wall_mesh_stray(w, e, -14, -14, 29, 29);
+  assert(stray > 0.8 && stray < 0.9,
+         "and they swing {stray} wu off the line they store");
+
+  // Which is why the user's own target is not on the result.
+  assert(wall_offset_of(w, 8.9, 3.4) > 0.5,
+         "the target sits {wall_offset_of(w, 8.9, 3.4)} wu off the wall built from it");
+
+  // `wall_new` builds the same direction from the heading alone — the unanchored
+  // form, for when there is no run to fit.
+  w2 = wall_new(d, 0.0, 0.0, 3.0, 5);
+  assert(abs_f(w2.wa_dx - w.wa_dx) < 0.000000001
+         && abs_f(w2.wa_dy - w.wa_dy) < 0.000000001,
+         "and it agrees with the run-anchored one on direction");
+}
+
+// @HXS-009 — A DOOR IS AN ANNOTATION, WHICH IS WHY THE TOWER SURVIVES IT.
+//
+// The obvious way to put a door in a wall is to take the wall away.  Do that here
+// and the tower stops being a tower: deleting boundary edges fragments the wall
+// into several arcs, and the recovery that answered "one disk, centre here,
+// shell this" has nothing left to answer with.
+//
+// `arc_door_wedge` cannot express that.  It writes a MATERIAL onto the boundary
+// edges inside an angular wedge and touches nothing else — so the cell set is
+// byte-identical before and after, and the centre and the shell come back
+// unchanged.  The doored tower is ONE arc, and the door reads straight back off
+// storage with `arc_door_edges` rather than being inferred.
+//
+// The wedge test is exact integers: a positive-diagonal map preserves the cyclic
+// order of directions, so "is this cell between these two rays" is a cross
+// product in lattice coordinates and never a trig call.
+fn test_a_door_is_an_annotation_so_the_tower_is_still_one_arc() {
+  cells = chunk();
+  arc_fill(0, 0, 48, cells);
+  before = hexset_count(cells);
+  shell_before = arc_shell_max(cells, 0, 0);
+  (cq0, cr0, ok0) = arc_recover_centre(cells);
+  assert(before == 19 && shell_before == 48 && ok0 && cq0 == 0 && cr0 == 0,
+         "a 19-cell tower on shell 48, centred at the origin");
+
+  // A door across the first sixty degrees: from ray (2,0) round to ray (1,3).
+  edges = edgeset_new(Q0, R0, W, H);
+  n = arc_door_wedge(cells, edges, 0, 0, 2, 0, 1, 3, 9);
+  assert(n == 5, "the door covers 5 boundary edges, got {n}");
+
+  // Nothing about the arc moved.
+  assert(hexset_count(cells) == before, "not one cell was added or removed");
+  assert(arc_shell_max(cells, 0, 0) == shell_before, "the shell is unchanged");
+  assert(arc_is_disk(cells, 0, 0), "it is still exactly a disk");
+  (cq1, cr1, ok1) = arc_recover_centre(cells);
+  assert(ok1 && cq1 == cq0 && cr1 == cr0, "and the centre still recovers to the same cell");
+
+  // The door reads back off storage — a count, not a fit.
+  assert(arc_door_edges(cells, edges, 9) == n, "and the door reads back as {n} edges");
+  assert(arc_door_edges(cells, edges, 3) == 0, "while a material nobody wrote reads back empty");
+
+  // The wedge itself is an exact integer test.
+  assert(arc_wedge_has(0, 0, 1, 0, 2, 0, 1, 3), "the cell due east is in the wedge");
+  assert(!arc_wedge_has(0, 0, -1, 0, 2, 0, 1, 3), "the one due west is not");
+}

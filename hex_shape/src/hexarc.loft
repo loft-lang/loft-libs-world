@@ -25,6 +25,11 @@ use hex_form;
 
 // Fill the disk of shell `n24` about (cq, cr): every cell whose 4·squared-distance is at most
 // `n24`.  Entirely integer — the comparison that decides membership never touches a float.
+//
+// `n24` is a SHELL, not a radius.  Hand it a value no `(k,m)` realises and it draws the
+// shell below without a word — `arc_shells_upto` is the grid to snap to first.
+//
+// Example: @HXS-001
 pub fn arc_fill(cq: integer, cr: integer, n24: integer, cells: HexSet) -> integer {
   bk = lattice_k(cq, cr);
   bm = lattice_m(cq, cr);
@@ -42,6 +47,8 @@ pub fn arc_fill(cq: integer, cr: integer, n24: integer, cells: HexSet) -> intege
 
 // The outermost shell actually occupied, measured about (cq, cr).  This is the recoverable radius
 // parameter — the largest `N` present, not the continuous radius that was authored.
+//
+// Example: @HXS-001
 pub fn arc_shell_max(cells: HexSet, cq: integer, cr: integer) -> integer {
   bk = lattice_k(cq, cr);
   bm = lattice_m(cq, cr);
@@ -59,6 +66,9 @@ pub fn arc_shell_max(cells: HexSet, cq: integer, cr: integer) -> integer {
 
 // Is the set EXACTLY the disk of its own outermost shell about (cq, cr)?  A tower must be, and a
 // blob will not be — this is what stops an arbitrary round-ish region being read as an arc.
+//
+// Example: @HXS-001
+// Example: @HXS-009
 pub fn arc_is_disk(cells: HexSet, cq: integer, cr: integer) -> boolean {
   n24 = arc_shell_max(cells, cq, cr);
   if n24 < 0 { return false; }
@@ -77,6 +87,8 @@ pub fn arc_is_disk(cells: HexSet, cq: integer, cr: integer) -> boolean {
 // the set itself — a disk's centre is always one of its own cells — so this is O(cells²) and needs
 // no guess.  Returns `found = false` when the region is not a disk about any of them, which is the
 // R2 answer for a shape that is not an arc.
+//
+// Example: @HXS-001
 pub fn arc_recover_centre(cells: HexSet) -> (integer, integer, boolean) {
   for cr2 in hexset_r0(cells)..hexset_r0(cells) + hexset_h(cells) {
     for cq2 in hexset_q0(cells)..hexset_q0(cells) + hexset_w(cells) {
@@ -90,6 +102,8 @@ pub fn arc_recover_centre(cells: HexSet) -> (integer, integer, boolean) {
 
 // The shells that actually exist out to `n24`, ascending — the admissible radius grid, i.e. `Sep`
 // made concrete.  A value of `N` that no `(k,m)` realises is not a shell and cannot be authored.
+//
+// Example: @HXS-001
 pub fn arc_shells_upto(n24: integer) -> vector<integer> {
   out: vector<integer> = [];
   for sk in -12..13 {
@@ -147,6 +161,8 @@ fn arc_xprod(ak: integer, am: integer, bk: integer, bm: integer) -> integer { ak
 
 // Is cell (q,r) inside the angular wedge running CCW from ray `lo` up to ray `hi`, about centre
 // (cq,cr)?  The wedge must span less than 180°, so `lo` and `hi` bound one contiguous arc.
+//
+// Example: @HXS-009
 pub fn arc_wedge_has(cq: integer, cr: integer, q: integer, r: integer,
                      lok: integer, lom: integer, hik: integer, him: integer) -> boolean {
   ok = lattice_k(q, r) - lattice_k(cq, cr);
@@ -158,6 +174,8 @@ pub fn arc_wedge_has(cq: integer, cr: integer, q: integer, r: integer,
 // `mat`.  Annotation only — no cell or edge is removed — so the disk, and therefore the recovered
 // centre and shell, are untouched.  Returns the number of edges marked.  The arc analog of
 // `place_opening`.
+//
+// Example: @HXS-009
 pub fn arc_door_wedge(cells: HexSet, edges: EdgeSet, cq: integer, cr: integer,
                       lok: integer, lom: integer, hik: integer, him: integer,
                       mat: integer) -> integer {
@@ -182,6 +200,8 @@ pub fn arc_door_wedge(cells: HexSet, edges: EdgeSet, cq: integer, cr: integer,
 // Recover the door: count the boundary edges carrying `mat`, each exactly once (only the inside
 // cell of a boundary edge is in the set, so iterating inside cells visits every boundary edge
 // once).  This is the R1 read of the feature straight off storage.
+//
+// Example: @HXS-009
 pub fn arc_door_edges(cells: HexSet, edges: EdgeSet, mat: integer) -> integer {
   n = 0;
   for er in hexset_r0(cells)..hexset_r0(cells) + hexset_h(cells) {
