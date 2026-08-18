@@ -1,6 +1,6 @@
 [package]
 name    = "hex_body"
-version = "0.2.0"
+version = "0.3.0"
 loft    = ">=0.8"
 
 # 0.2.0 adds the third dimension: `rig_bone3` with an explicit revolute axis and
@@ -31,6 +31,13 @@ loft    = ">=0.8"
 # 0.1.0 reader REFUSES the rig instead of silently reading its planar
 # projection.  Measured against the shipped 0.1.0 reader: appending fields to
 # the `bone` line reads back as 1 flattened bone, the new tag reads back as 0.
+#
+# ⚠ 0.3.0 is ADDITIVE over 0.2.0 and the pin says so: `Frame`,
+# `rig_world_frame3`, `frame_point` and `rig_world_point3` are new, and
+# `rig_world_seg3` is re-expressed over them — ONE walk instead of two
+# implementations — with its numbers bit-identical (gated).  It exposes what
+# `rig_world_seg3` used to compute and throw away, which is what a consumer
+# drawing a body needs: a limb is a cloud of points in a BONE's frame.
 api_compatible_with  = "0.2.0"   # oldest own release this is a drop-in for
 data_compatible_with = "0.1.0"   # oldest own release whose stored data this reads
 [library]

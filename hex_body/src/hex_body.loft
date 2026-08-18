@@ -397,8 +397,22 @@ pub fn rig_world_seg(r: Rig, values: vector<float>, i: integer) -> (float, float
 // which is the honest reading of *"nothing to turn about"*.  It is not repaired
 // to `+z`: that would invent an axis the author did not write, and
 // `rig_admissible` refuses the rig anyway.
-pub fn rig_world_seg3(r: Rig, values: vector<float>, i: integer)
-    -> (float, float, float, float, float, float) {
+// A bone's WORLD FRAME: where its joint sits, and how its own axes lie.
+//
+// ⚠ **This is the thing `rig_world_seg3` used to compute and throw away**,
+// and a consumer that draws a body needs it: a limb hung on a bone is a
+// cloud of points in the BONE's frame, and posing them means applying this
+// once and reusing it, not walking the tree per point.
+pub struct Frame {
+  fr_x: float, fr_y: float, fr_z: float,      // the bone's joint, in world
+  fr_00: float, fr_01: float, fr_02: float,   // its basis, row-major
+  fr_10: float, fr_11: float, fr_12: float,
+  fr_20: float, fr_21: float, fr_22: float,
+}
+
+// The world frame of bone `i` at the given joint values.  ⚠ One tree walk;
+// pose as many points through it as you like with `frame_point`.
+pub fn rig_world_frame3(r: Rig, values: vector<float>, i: integer) -> Frame {
   n = i + 1;
   bx: vector<float> = []; by: vector<float> = []; bz: vector<float> = [];
   m00: vector<float> = []; m01: vector<float> = []; m02: vector<float> = [];
@@ -446,11 +460,42 @@ pub fn rig_world_seg3(r: Rig, values: vector<float>, i: integer)
       m22 += [p20 * l02 + p21 * l12 + p22 * l22];
     }
   }
-  // The tip runs along the bone's own +x, which is its rotation's first COLUMN.
-  bl = r.rg_len[i] ?? 0.0;
-  x0 = bx[i] ?? 0.0; y0 = by[i] ?? 0.0; z0 = bz[i] ?? 0.0;
-  (x0, y0, z0,
-   x0 + (m00[i] ?? 1.0) * bl, y0 + (m10[i] ?? 0.0) * bl, z0 + (m20[i] ?? 0.0) * bl)
+  Frame { fr_x: bx[i] ?? 0.0, fr_y: by[i] ?? 0.0, fr_z: bz[i] ?? 0.0,
+          fr_00: m00[i] ?? 1.0, fr_01: m01[i] ?? 0.0, fr_02: m02[i] ?? 0.0,
+          fr_10: m10[i] ?? 0.0, fr_11: m11[i] ?? 1.0, fr_12: m12[i] ?? 0.0,
+          fr_20: m20[i] ?? 0.0, fr_21: m21[i] ?? 0.0, fr_22: m22[i] ?? 1.0 }
+}
+
+// Where a point in the bone's LOCAL frame lands in the world.
+pub fn frame_point(f: Frame, lx: float, ly: float, lz: float) -> (float, float, float) {
+  (f.fr_x + f.fr_00 * lx + f.fr_01 * ly + f.fr_02 * lz,
+   f.fr_y + f.fr_10 * lx + f.fr_11 * ly + f.fr_12 * lz,
+   f.fr_z + f.fr_20 * lx + f.fr_21 * ly + f.fr_22 * lz)
+}
+
+// The one-shot door: pose ONE point of bone `i`.  ⚠ It walks the tree, so
+// a caller posing many points should hold a `Frame` instead.
+pub fn rig_world_point3(r: Rig, values: vector<float>, i: integer,
+                        lx: float, ly: float, lz: float) -> (float, float, float) {
+  frame_point(rig_world_frame3(r, values, i), lx, ly, lz)
+}
+
+// ── FORWARD KINEMATICS IN SPACE (`G1b`) ──────────────────────────────────────
+//
+// The world segment of bone `i` IN THREE DIMENSIONS: `(x0,y0,z0)` its base,
+// `(x1,y1,z1)` its tip.  The 2-D sibling above is not replaced and not
+// re-expressed — see the header for what that would have cost.
+//
+// ⚠ Since 0.3.0 this is TWO POINTS of the bone's own frame and nothing more:
+// its base is the frame's origin and its tip is `(len, 0, 0)` in it.  One
+// implementation of the walk, and the numbers are unchanged — adding a
+// rotated `(0,0,0)` is an exact `+ 0.0`.
+pub fn rig_world_seg3(r: Rig, values: vector<float>, i: integer)
+    -> (float, float, float, float, float, float) {
+  f = rig_world_frame3(r, values, i);
+  (bx, by, bz) = frame_point(f, 0.0, 0.0, 0.0);
+  (tx, ty, tz) = frame_point(f, r.rg_len[i] ?? 0.0, 0.0, 0.0);
+  (bx, by, bz, tx, ty, tz)
 }
 
 // An oriented bounding box: centre, unit axis (along the bone), and half-extents.

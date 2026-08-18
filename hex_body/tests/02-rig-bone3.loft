@@ -263,3 +263,98 @@ fn test_a_nearly_planar_bone_is_a_spatial_bone() {
   assert(!rig_planar(r), "and the rig is not planar either");
   assert(rig_planar(planar_arm()), "the control: the 0.1.0 fixture is planar");
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The world FRAME (0.3.0) — what `rig_world_seg3` used to throw away
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ⚠ The frame IS the segment: its origin is the bone's base and `(len,0,0)`
+// in it is the tip.  If these ever disagree there are two implementations of
+// the walk, which is the thing 0.3.0 removed.
+fn test_the_frame_and_the_segment_are_one_walk() {
+  r = rig_new();
+  r = rig_bone3(r, -1, 0.0, 0.0, 0.0, 1.5, 0.0, 0.0, 1.0, -1.0, 1.0);
+  r = rig_bone3(r, 0, 1.5, 0.0, 0.4, 0.6, 0.0, 1.0, 0.0, -1.0, 1.0);
+  vals = [0.17, -0.31];
+
+  (bx, by, bz, tx, ty, tz) = rig_world_seg3(r, vals, 1);
+  f = rig_world_frame3(r, vals, 1);
+  (fx, fy, fz) = frame_point(f, 0.0, 0.0, 0.0);
+  (gx, gy, gz) = frame_point(f, 0.6, 0.0, 0.0);
+
+  assert(bx == fx && by == fy && bz == fz,
+         "the frame's origin IS the bone's base: ({bx},{by},{bz}) vs ({fx},{fy},{fz})");
+  assert(tx == gx && ty == gy && tz == gz,
+         "and (len,0,0) in it IS the tip: ({tx},{ty},{tz}) vs ({gx},{gy},{gz})");
+
+  // the one-shot door agrees with the held frame
+  (px, py, pz) = rig_world_point3(r, vals, 1, 0.2, -0.3, 0.4);
+  (qx, qy, qz) = frame_point(f, 0.2, -0.3, 0.4);
+  assert(px == qx && py == qy && pz == qz, "both doors answer the same point");
+}
+
+// ⚠ A frame's basis is a ROTATION — orthonormal, right-handed.  A consumer
+// posing a limb through it must not have its geometry sheared or mirrored,
+// and nothing else in this file would notice if it were.
+fn test_a_frames_basis_is_a_rotation() {
+  r = rig_new();
+  r = rig_bone3(r, -1, 0.0, 0.0, 0.0, 1.0, 0.3, -0.7, 0.4, -1.0, 1.0);
+  r = rig_bone3(r, 0, 0.5, 0.2, 0.1, 1.0, 0.0, 1.0, 0.0, -1.0, 1.0);
+  f = rig_world_frame3(r, [0.21, 0.43], 1);
+
+  // each column is a unit vector
+  c0 = f.fr_00 * f.fr_00 + f.fr_10 * f.fr_10 + f.fr_20 * f.fr_20;
+  c1 = f.fr_01 * f.fr_01 + f.fr_11 * f.fr_11 + f.fr_21 * f.fr_21;
+  c2 = f.fr_02 * f.fr_02 + f.fr_12 * f.fr_12 + f.fr_22 * f.fr_22;
+  assert(fabs3(c0 - 1.0) < 0.000000000001, "column 0 is unit: {c0}");
+  assert(fabs3(c1 - 1.0) < 0.000000000001, "column 1 is unit: {c1}");
+  assert(fabs3(c2 - 1.0) < 0.000000000001, "column 2 is unit: {c2}");
+
+  // and they are mutually perpendicular
+  d01 = f.fr_00 * f.fr_01 + f.fr_10 * f.fr_11 + f.fr_20 * f.fr_21;
+  d02 = f.fr_00 * f.fr_02 + f.fr_10 * f.fr_12 + f.fr_20 * f.fr_22;
+  d12 = f.fr_01 * f.fr_02 + f.fr_11 * f.fr_12 + f.fr_21 * f.fr_22;
+  assert(fabs3(d01) < 0.000000000001 && fabs3(d02) < 0.000000000001
+         && fabs3(d12) < 0.000000000001,
+         "the columns are perpendicular: {d01}, {d02}, {d12}");
+
+  // ⚠ RIGHT-handed: column0 x column1 = column2.  A mirrored basis is
+  // orthonormal too, so the check above cannot see one.
+  cx = f.fr_10 * f.fr_21 - f.fr_20 * f.fr_11;
+  cy = f.fr_20 * f.fr_01 - f.fr_00 * f.fr_21;
+  cz = f.fr_00 * f.fr_11 - f.fr_10 * f.fr_01;
+  assert(fabs3(cx - f.fr_02) < 0.000000000001
+         && fabs3(cy - f.fr_12) < 0.000000000001
+         && fabs3(cz - f.fr_22) < 0.000000000001,
+         "and right-handed: ({cx},{cy},{cz}) vs ({f.fr_02},{f.fr_12},{f.fr_22})");
+}
+
+// ⚠⚠ THE ONE A CONSUMER ACTUALLY NEEDS: a point OFF the bone's axis, posed.
+// `rig_world_seg3` could never answer this — the tip is on the axis — and it
+// is exactly what a limb hung on a hinge is.
+fn test_a_point_off_the_axis_swings_where_trigonometry_says() {
+  r = rig_new();
+  r = rig_bone3(r, -1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0);
+  // a lateral hinge, like a canopy's
+  r = rig_bone3(r, 0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.5);
+
+  // a point 1 m FORWARD of the hinge, shut
+  (sx, sy, sz) = rig_world_point3(r, [0.0, 0.0], 1, 0.0, 1.0, 0.0);
+  assert(fabs3(sx) < 0.000000000001 && fabs3(sy - 1.0) < 0.000000000001
+         && fabs3(sz - 1.0) < 0.000000000001,
+         "shut, it is 1 m forward at the hinge's height: ({sx},{sy},{sz})");
+
+  // a quarter turn about +x takes +y to +z
+  (ox, oy, oz) = rig_world_point3(r, [0.0, 0.25], 1, 0.0, 1.0, 0.0);
+  assert(fabs3(ox) < 0.000000000001 && fabs3(oy) < 0.000000000001
+         && fabs3(oz - 2.0) < 0.000000000001,
+         "a quarter turn stands it straight up, 1 m above the hinge: ({ox},{oy},{oz})");
+
+  // ⚠ TURNS, NOT DEGREES — the assertion that can tell them apart.  At 0.25
+  // read as degrees the point would barely move; here it travels a quarter of
+  // the way round, 1.414 m from where it started.
+  dy = oy - sy; dz = oz - sz;
+  moved = sqrt(dy * dy + dz * dz) ?? 0.0;
+  assert(moved > 1.41 && moved < 1.42,
+         "0.25 is a QUARTER TURN and moves it {moved} m, not a fraction of a degree");
+}

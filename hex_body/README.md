@@ -20,6 +20,11 @@ that a generic animation rig does not carry.
 - `Rig` / `rig_write` / `rig_read` — a rig's canonical text; `write(read(R)) = R` byte-for-byte,
   floats included, a malformed text refused not repaired.
 - `pose_of` — forward kinematics for one joint; `rig_world_seg` composes the whole tree.
+- **`rig_world_frame3` / `frame_point` / `rig_world_point3`** — a bone's world
+  **frame**: where its joint sits and how its own axes lie. This is what
+  `rig_world_seg3` used to compute and discard, and it is what posing a limb
+  needs — a limb is a cloud of points in a bone's frame, so hold the frame and
+  pose many, or use the one-shot `rig_world_point3` for one.
 - **`rig_bone3` / `rig_world_seg3`** — the same rig in SPACE: an explicit revolute **axis** and an
   `oz`, the eight numbers `hex_part::Hinge` already carries. `rig_bone` is the planar special case
   (`oz = 0` about `(0,0,1)`) and its signature is unchanged. ⚠ The axis is stored **as given, not
