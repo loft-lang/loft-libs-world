@@ -100,9 +100,9 @@ fn one_spatial_bone(oz: float, ax: float, ay: float, az: float) -> Rig {
 }
 
 fn test_an_unknown_record_is_refused() {
-  bad = "rig arm bones 1\nbone9 0 parent -1 at 0 0 len 1.0 lim 0 0";
+  bad = "rig arm bones 1\nbone9 0 parent -1 at 0 0 len 1 lim 0 0";
   assert(rig_count(rig_read(bad)) == 0, "a record this reader does not know is refused");
-  ok = "rig arm bones 1\nbone 0 parent -1 at 0 0 len 1.0 lim 0 0";
+  ok = "rig arm bones 1\nbone 0 parent -1 at 0 0 len 1 lim 0 0";
   assert(rig_count(rig_read(ok)) == 1, "the control: the record it does know is read");
 }
 

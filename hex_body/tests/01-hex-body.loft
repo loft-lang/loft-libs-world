@@ -58,7 +58,7 @@ fn test_a_rig_round_trips_as_canonical_text() {
   assert(rig_write(back, "arm") == t, "and the bytes match");
   assert(rig_admissible(r), "a topological rig with ordered limits is admissible");
   // a reordered bone index is refused, not repaired.
-  bad = "rig arm bones 2\nbone 1 parent -1 at 0 0 len 1.0 lim 0 0\nbone 0 parent 0 at 0 0 len 1.0 lim 0 0";
+  bad = "rig arm bones 2\nbone 1 parent -1 at 0 0 len 1 lim 0 0\nbone 0 parent 0 at 0 0 len 1 lim 0 0";
   assert(rig_count(rig_read(bad)) == 0, "a malformed rig is refused");
 }
 

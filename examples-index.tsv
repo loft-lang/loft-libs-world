@@ -2,6 +2,14 @@
 # Regenerate: make examples-index    Verified in CI: check_doc_drift.sh examples-index
 # Every worked-example tag defined in this repo: where it lives + its git blob link.
 # tag	file:line	fn	blob_url
+@HXB-001	hex_body/tests/03-worked-examples.loft:58	test_a_body_is_a_rig_and_the_pose_is_computed	https://github.com/loft-lang/loft-libs-world/blob/main/hex_body/tests/03-worked-examples.loft#L58
+@HXB-002	hex_body/tests/03-worked-examples.loft:91	test_the_values_vector_is_positional_and_unchecked	https://github.com/loft-lang/loft-libs-world/blob/main/hex_body/tests/03-worked-examples.loft#L91
+@HXB-003	hex_body/tests/03-worked-examples.loft:122	test_hold_the_frame_not_the_walk	https://github.com/loft-lang/loft-libs-world/blob/main/hex_body/tests/03-worked-examples.loft#L122
+@HXB-004	hex_body/tests/03-worked-examples.loft:157	test_the_axis_is_as_given_and_an_absent_one_is_refused	https://github.com/loft-lang/loft-libs-world/blob/main/hex_body/tests/03-worked-examples.loft#L157
+@HXB-005	hex_body/tests/03-worked-examples.loft:189	test_the_two_dimensional_path_is_planar_only	https://github.com/loft-lang/loft-libs-world/blob/main/hex_body/tests/03-worked-examples.loft#L189
+@HXB-006	hex_body/tests/03-worked-examples.loft:244	test_a_proxy_contains_its_shape_with_a_stated_overshoot	https://github.com/loft-lang/loft-libs-world/blob/main/hex_body/tests/03-worked-examples.loft#L244
+@HXB-007	hex_body/tests/03-worked-examples.loft:285	test_a_wheel_rolls_by_construction_not_by_tuning	https://github.com/loft-lang/loft-libs-world/blob/main/hex_body/tests/03-worked-examples.loft#L285
+@HXB-008	hex_body/tests/03-worked-examples.loft:320	test_index_order_is_the_labelling_and_a_spatial_bone_says_so	https://github.com/loft-lang/loft-libs-world/blob/main/hex_body/tests/03-worked-examples.loft#L320
 @HXD-001	hex_draw/tests/02-worked-examples.loft:127	test_a_wall_is_one_quad_and_the_strip_it_replaces_has_a_width	https://github.com/loft-lang/loft-libs-world/blob/main/hex_draw/tests/02-worked-examples.loft#L127
 @HXD-002	hex_draw/tests/02-worked-examples.loft:197	test_exactness_is_a_cross_product_not_a_multiple	https://github.com/loft-lang/loft-libs-world/blob/main/hex_draw/tests/02-worked-examples.loft#L197
 @HXD-003	hex_draw/tests/02-worked-examples.loft:250	test_the_miter_closes_the_outline_but_is_not_the_plans_corner	https://github.com/loft-lang/loft-libs-world/blob/main/hex_draw/tests/02-worked-examples.loft#L250

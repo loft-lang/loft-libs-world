@@ -44,5 +44,10 @@ and seating (the next milestones) will couple it to the lattice. It carries **no
 today** (pure continuous-space kinematics — `sin`/`cos`/`sqrt` only); the prefix names its family
 and its trajectory, not a current dependency.
 
+The eight things a caller gets wrong — starting with the two that are silent, a values vector
+that defaults rather than refuses and a 2-D path that answers for a spatial rig anyway — are
+worked one by one in `tests/03-worked-examples.loft` (`@HXB-001..008`), cited from the functions
+they belong to.
+
 Produced by **hexbody**, the workshop. See its `plans/m1-moving-body/` for the design and the
 exhaustive gate.

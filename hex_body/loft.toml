@@ -1,6 +1,6 @@
 [package]
 name    = "hex_body"
-version = "0.3.0"
+version = "0.3.1"
 loft    = ">=0.8"
 
 # 0.2.0 adds the third dimension: `rig_bone3` with an explicit revolute axis and
@@ -38,6 +38,16 @@ loft    = ">=0.8"
 # implementations — with its numbers bit-identical (gated).  It exposes what
 # `rig_world_seg3` used to compute and throw away, which is what a consumer
 # drawing a body needs: a limb is a cloud of points in a BONE's frame.
+# ⚠ 0.3.1 NARROWS THE READER, and every text `rig_write` emits still reads.  The
+# parser's own comment claimed it "accepts exactly what `rig_write` emits" and it
+# did not: `len 1.0`, `+1.5`, `01.5`, `1.50`, `1.5e0`, an empty field, a trailing
+# space and an extra field were all ADMITTED and re-written differently, and
+# `len x` became `len 0` — a bone that is not there.  A re-spelling identity (a
+# field is a number only if printing the parse reproduces the characters) plus a
+# field count closes all nine.  `api_compatible_with` stays 0.2.0 and
+# `data_compatible_with` stays 0.1.0: a writer has never emitted any of those
+# spellings, so no stored rig is affected — only hand-written text is, which is
+# the point.
 api_compatible_with  = "0.2.0"   # oldest own release this is a drop-in for
 data_compatible_with = "0.1.0"   # oldest own release whose stored data this reads
 [library]

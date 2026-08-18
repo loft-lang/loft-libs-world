@@ -1,0 +1,372 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Worked examples for `hex_body` (@PLN141).  Each `test_*` below is a REAL,
+// run-every-CI demonstration of a contract the signature cannot state; the
+// function documents itself by CITING the tag with `// Example: @HXB-00N`, and
+// `check_doc_drift.sh examples` fails if a citation goes dangling.  These are
+// teaching examples, distinct from the conformance suites in `01-hex-body.loft`
+// and `02-rig-bone3.loft`.
+//
+// WHAT THIS PACKAGE ASKS OF A CALLER, and why a signature cannot carry it.  A
+// body here is a RIG — bones, and the limits in the joints between them — and
+// never a pose.  Everything follows from that one decision:
+//
+//   the pose is COMPUTED     from a joint-value vector you pass in, by a pure
+//                            function, so two callers can pose one rig two ways
+//                            at the same instant and neither disturbs the other
+//   the values are YOURS     positional, unchecked, and silently defaulted —
+//                            the joint limits are a doorstep the caller calls
+//   there are TWO WALKS      a 2-D one that adds angles and a 3-D one that
+//                            composes rotations, and they are separate ON PURPOSE
+//
+// The rigs below are two and three bones at quarter turns, so every world
+// position in these tests is one you can work out on paper.
+use hex_body;
+
+const W = 0.5;                 // the half-width every proxy example uses
+
+fn fabs3(x: float) -> float { if x < 0.0 { 0.0 - x } else { x } }
+
+// The fixture: an arm.  Bone 0 is 3 long from the origin; bone 1 hangs off its
+// tip and is 2 long.  Both are planar — the axis every 2-D rig leaves implicit.
+fn arm() -> Rig {
+  r = rig_new();
+  r = rig_bone(r, -1, 0.0, 0.0, 3.0, 0.0 - 1.0, 1.0);
+  r = rig_bone(r, 0, 3.0, 0.0, 2.0, 0.0 - 0.25, 0.25);
+  r
+}
+
+// The same arm with its second bone hinged about +y instead — out of the plane,
+// and 0.5 above it.  An admissible rig that the 2-D walk cannot represent.
+fn spatial_arm() -> Rig {
+  r = rig_new();
+  r = rig_bone(r, -1, 0.0, 0.0, 3.0, 0.0 - 1.0, 1.0);
+  r = rig_bone3(r, 0, 3.0, 0.0, 0.5, 2.0, 0.0, 1.0, 0.0, 0.0 - 1.0, 1.0);
+  r
+}
+
+// The smallest call that does something real: pose an arm and read where its
+// forearm ended up.
+fn main() {
+  r = arm();
+  (x0, y0, x1, y1) = rig_world_seg(r, [0.0, 0.25], 1);
+  assert(x0 == 3.0 && y0 == 0.0, "the forearm hangs off the upper arm's tip");
+  assert(x1 == 3.0 && y1 == 2.0, "and a quarter turn stands it straight up, got ({x1},{y1})");
+}
+
+// @HXB-001 — A BODY IS A RIG, NEVER A POSE, and the type says so by having
+// nowhere to put one.  `Rig` carries bones and joint limits; the joint VALUES
+// arrive as a separate vector at every query, and computing a pose writes
+// nothing back.  So two callers can hold one rig and pose it differently at the
+// same instant — a server stepping the authoritative body while a renderer
+// draws last frame's — and neither sees the other.
+//
+// The computation is a PURE function of `(rig, values)`: no elapsed time, no
+// call count, no previous value.  That is what makes a pose replayable, and it
+// is the scope boundary the package draws — it answers where a part is NOW,
+// never what it will do next.
+fn test_a_body_is_a_rig_and_the_pose_is_computed() {
+  r = arm();
+  straight = [0.0, 0.0];
+  bent = [0.0, 0.25];
+
+  (_a0, _b0, sx, sy) = rig_world_seg(r, straight, 1);
+  (_c0, _d0, bx, by) = rig_world_seg(r, bent, 1);
+  assert(sx == 5.0 && sy == 0.0, "straight out, the tip is 3 + 2 along x, got ({sx},{sy})");
+  assert(bx == 3.0 && by == 2.0, "bent a quarter turn, it is 2 up from the elbow, got ({bx},{by})");
+
+  // Posing one way did not disturb the other: ask again in the other order.
+  (_e0, _f0, sx2, sy2) = rig_world_seg(r, straight, 1);
+  assert(sx2 == sx && sy2 == sy, "the same values give byte-identical numbers, always");
+
+  // …and the rig itself is untouched by either — there is no pose in it to touch.
+  assert(rig_count(r) == 2, "two bones");
+  assert((r.rg_len[1] ?? 0.0) == 2.0, "the forearm is still 2 long");
+  j = rig_joint(r, 1);
+  assert(j.jt_value == 0.0, "and a joint read off the rig has no value of its own — only limits");
+  assert(j.jt_lo == 0.0 - 0.25 && j.jt_hi == 0.25, "the limits, got {j.jt_lo}..{j.jt_hi}");
+}
+
+// @HXB-002 — THE VALUES VECTOR IS POSITIONAL, UNCHECKED, AND SILENTLY
+// DEFAULTED.  Every kinematics call reads `values[k] ?? 0.0`, so a vector that
+// is too short poses the missing joints at zero and returns a complete,
+// ordinary-looking body.  A value outside the joint's own limits poses too:
+// the limits are a DOORSTEP the caller calls, not a guard the pose enforces.
+//
+// The sharpest case is a value that lands back where it started.  Joint values
+// are TURNS, so 9.0 is nine revolutions — outside every limit in this rig, and
+// its pose is indistinguishable from the neutral one.  A pose cannot tell you
+// its values were wrong.
+fn test_the_values_vector_is_positional_and_unchecked() {
+  r = arm();
+  empty: vector<float> = [];
+  (_a, _b, ex, ey) = rig_world_seg(r, empty, 1);
+  (_c, _d, zx, zy) = rig_world_seg(r, [0.0, 0.0], 1);
+  assert(ex == zx && ey == zy, "an EMPTY vector poses the whole rig neutral, not an error");
+  assert(ex == 5.0, "and answers a perfectly ordinary body, got ({ex},{ey})");
+
+  // Nine turns is outside the joint's limits, and it poses anyway.
+  j = rig_joint(r, 1);
+  assert(!joint_fits(j, 9.0), "9.0 turns does not fit a +-0.25 joint");
+  (_e, _f, nx, ny) = rig_world_seg(r, [0.0, 9.0], 1);
+  assert(fabs3(nx - 5.0) < 1e-12 && fabs3(ny) < 1e-12,
+         "yet its pose is the neutral one to the last ulp, got ({nx},{ny})");
+
+  // The doorstep the caller owes: a refusal names an offer and a residual.
+  assert(joint_offer(j, 9.0) == 0.25, "the nearest admissible value is the limit");
+  assert(fabs3(joint_residual(j, 9.0) - 8.75) < 1e-12, "and the residual is 8.75 turns");
+  assert(joint_fits(j, joint_offer(j, 9.0)), "the offer itself fits");
+}
+
+// @HXB-003 — POSE A LIMB THROUGH ONE FRAME, NOT ONE TREE WALK PER POINT.  A
+// bone's `Frame` is where its joint sits and how its own axes lie, and every
+// point hung on that bone — a mesh, a mount, a muzzle — is that frame applied
+// to a local offset.  `rig_world_point3` is the one-shot door and it walks the
+// whole tree each time; `rig_world_frame3` walks it once and hands you the
+// frame to reuse.
+//
+// The numbers are identical either way, which is what makes the choice purely
+// about cost: `rig_world_seg3` is itself exactly two points of that frame.
+fn test_hold_the_frame_not_the_walk() {
+  r = arm();
+  r = rig_bone3(r, 1, 2.0, 0.0, 0.0, 0.5, 1.0, 0.0, 0.0, 0.0 - 1.0, 1.0);
+  vals = [0.13, 0.21, 0.07];
+  f = rig_world_frame3(r, vals, 2);
+
+  same = true;
+  for k in 0..5 {
+    lx = 0.1 * (k as float);
+    ly = 0.2 - 0.05 * (k as float);
+    lz = 0.03 * (k as float);
+    (ax, ay, az) = frame_point(f, lx, ly, lz);
+    (bx, by, bz) = rig_world_point3(r, vals, 2, lx, ly, lz);
+    if ax != bx || ay != by || az != bz { same = false; }
+  }
+  assert(same, "five points through one frame are byte-identical to five walks");
+
+  // And the segment is the frame's origin and its tip, nothing more.
+  (s0x, s0y, s0z, s1x, s1y, s1z) = rig_world_seg3(r, vals, 2);
+  (o0x, o0y, o0z) = frame_point(f, 0.0, 0.0, 0.0);
+  (o1x, o1y, o1z) = frame_point(f, r.rg_len[2] ?? 0.0, 0.0, 0.0);
+  assert(s0x == o0x && s0y == o0y && s0z == o0z, "the base is the frame's origin");
+  assert(s1x == o1x && s1y == o1y && s1z == o1z, "the tip is (len,0,0) in it");
+  assert(s0x == f.fr_x && s0y == f.fr_y && s0z == f.fr_z, "which is where the joint sits");
+}
+
+// @HXB-004 — THE AXIS IS STORED AS YOU GAVE IT, AND AN ABSENT ONE IS NEVER
+// REPAIRED.  A revolute axis carries a direction and no length: `(0,0,2)` and
+// `(0,0,1)` are the same hinge, because the walk normalises where it needs a
+// unit vector rather than at the door.  For the planar axis that divide is by
+// exactly 1.0, which is why a planar bone's numbers are untouched by the 3-D
+// path existing at all.
+//
+// An axis of `(0,0,0)` is a joint with nothing to turn about.  It poses as the
+// IDENTITY — the bone simply does not turn, whatever its value — and
+// `rig_admissible` refuses the rig.  It is NOT quietly read as `+z`: a rig
+// whose axis nobody wrote is refused loudly, the same way a malformed text is.
+fn test_the_axis_is_as_given_and_an_absent_one_is_refused() {
+  unit = rig_new();
+  unit = rig_bone3(unit, -1, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 1.0, 0.0 - 1.0, 1.0);
+  twice = rig_new();
+  twice = rig_bone3(twice, -1, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 2.0, 0.0 - 1.0, 1.0);
+  none = rig_new();
+  none = rig_bone3(none, -1, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0 - 1.0, 1.0);
+  v = [0.125];
+
+  (_a, _b, _c, ux, uy, uz) = rig_world_seg3(unit, v, 0);
+  (_d, _e, _f, tx, ty, tz) = rig_world_seg3(twice, v, 0);
+  assert(ux == tx && uy == ty && uz == tz, "a doubled axis is the same hinge, bit for bit");
+  assert(fabs3(ux - 1.4142135623730951) < 1e-12, "an eighth turn puts the tip at 2/sqrt(2), got {ux}");
+
+  (_g, _h, _i, nx, ny, nz) = rig_world_seg3(none, v, 0);
+  assert(nx == 2.0 && ny == 0.0 && nz == 0.0, "no axis means no turn — the identity, got ({nx},{ny},{nz})");
+  assert(!rig_admissible(none), "and the rig is refused rather than repaired to +z");
+  assert(rig_admissible(unit) && rig_planar(unit), "while the planar rig is admissible and planar");
+  assert(!rig_planar(spatial_arm()), "and a rig hinged about +y is not planar");
+}
+
+// @HXB-005 — THE 2-D PATH IS FOR PLANAR RIGS, AND IT SAYS SO WITH NUMBERS
+// RATHER THAN A REFUSAL.  `rig_world_seg` composes joints by ADDING ANGLES, so
+// it reads neither the stored axis nor `oz`: hand it a rig hinged about `+y`
+// and it answers as though that hinge were about `+z`, in the plane.  The rig
+// is admissible, the call returns four ordinary floats, and nothing says the
+// body it describes is not the body you built.
+//
+// The collision proxy is built on that same walk, so it inherits the mistake:
+// `bone_obb` boxes a bone that is somewhere else, and `bone_shape_has` answers
+// for it.  Measured on the arm below, the two tips are 2.5 apart at a quarter
+// turn and 3.2 apart at three quarters — on a bone 2 long.
+//
+// So `rig_planar` is not a curiosity: it is the precondition of the entire 2-D
+// half of this library, and a caller with a spatial rig must use
+// `rig_world_seg3` / `rig_world_frame3` and derive its own proxy.
+fn test_the_two_dimensional_path_is_planar_only() {
+  r = spatial_arm();
+  assert(rig_admissible(r), "the spatial arm is a perfectly admissible rig");
+  assert(!rig_planar(r), "and it is not planar — which is the question to ask first");
+
+  vals = [0.0, 0.25];
+  (_a, _b, px, py) = rig_world_seg(r, vals, 1);
+  (_c, _d, _e, sx, sy, sz) = rig_world_seg3(r, vals, 1);
+  assert(px == 3.0 && py == 2.0, "the 2-D walk puts the tip up the y axis, got ({px},{py})");
+  assert(sx == 3.0 && sy == 0.0 && sz == 0.0 - 1.5,
+         "the bone is actually below the plane, at ({sx},{sy},{sz})");
+  gap = sqrt((px - sx) * (px - sx) + (py - sy) * (py - sy) + sz * sz) ?? 0.0;
+  assert(fabs3(gap - 2.5) < 1e-12, "2.5 apart on a bone 2 long, got {gap}");
+
+  // The worst of it, over a full turn of that joint.
+  worst = 0.0;
+  for k in 0..9 {
+    v = (k as float) * 0.125;
+    (_f, _g, qx, qy) = rig_world_seg(r, [0.0, v], 1);
+    (_h, _i, _j, ax, ay, az) = rig_world_seg3(r, [0.0, v], 1);
+    d = sqrt((qx - ax) * (qx - ax) + (qy - ay) * (qy - ay) + az * az) ?? 0.0;
+    if d > worst { worst = d; }
+  }
+  assert(fabs3(worst - 3.2015621187164243) < 1e-9, "worst separation 3.20, got {worst}");
+  assert(worst > (r.rg_len[1] ?? 0.0), "further apart than the bone is long");
+
+  // …and the proxy that a consumer would collide against is built on the 2-D walk.
+  o = bone_obb(r, vals, 1, W);
+  assert(fabs3(o.ob_cx - 3.0) < 1e-12 && fabs3(o.ob_cy - 1.0) < 1e-12,
+         "the box is centred on the 2-D segment, got ({o.ob_cx},{o.ob_cy})");
+  assert(!obb_contains(o, sx, sz), "so it does not contain the bone's real position in its own plane");
+
+  // The planar arm, by contrast, is exactly what both walks describe.
+  p = arm();
+  (_k, _l, ppx, ppy) = rig_world_seg(p, vals, 1);
+  (_m, _n, _o2, qsx, qsy, qsz) = rig_world_seg3(p, vals, 1);
+  assert(qsz == 0.0 && fabs3(ppx - qsx) < 1e-12 && fabs3(ppy - qsy) < 1e-12,
+         "a planar rig agrees on both paths");
+}
+
+// @HXB-006 — A PROXY CONTAINS ITS SHAPE, AND ITS OVERSHOOT IS EXACTLY STATED.
+// The collision proxy is DERIVED from the geometry rather than hand-authored: a
+// bone's shape is the capsule of half-width `w` around its posed segment, and
+// its proxy is the oriented box that bounds that capsule.  Containment is the
+// half that must never fail — a shape point outside the proxy is a MISSED
+// overlap — and the price of it is overshoot, which is bounded and worth
+// knowing exactly: `w * (sqrt(2) - 1)` at the four corners, and nothing
+// anywhere else.
+fn test_a_proxy_contains_its_shape_with_a_stated_overshoot() {
+  r = arm();
+  vals = [0.0, 0.0];
+  o = bone_obb(r, vals, 0, W);
+  (x0, y0, x1, y1) = rig_world_seg(r, vals, 0);
+  assert(fabs3(o.ob_hl - (1.5 + W)) < 1e-12, "the box grows by w at each end for the caps");
+  assert(o.ob_hw == W, "and is w wide");
+
+  nshape = 0;
+  missed = 0;
+  worst = 0.0;
+  for gi in 0..161 {
+    for gj in 0..81 {
+      gx = 0.0 - 1.0 + (gi as float) * 0.03125;
+      gy = 0.0 - 1.25 + (gj as float) * 0.03125;
+      d = seg_dist(x0, y0, x1, y1, gx, gy);
+      inside = obb_contains(o, gx, gy);
+      if d <= W {
+        nshape = nshape + 1;
+        if !inside { missed = missed + 1; }
+      }
+      if inside && d - W > worst { worst = d - W; }
+    }
+  }
+  assert(nshape > 3000, "the grid really covers the capsule, {nshape} points");
+  assert(missed == 0, "and NOT ONE of them is outside the proxy");
+  assert(worst <= W * 0.41421356237309515 + 1e-9,
+         "the overshoot never exceeds w*(sqrt2-1), got {worst}");
+  assert(worst > W * 0.41 - 1e-9, "and reaches it at the corners — the bound is tight, got {worst}");
+  assert(bone_shape_has(r, vals, 0, W, 1.5, 0.4), "a point in the capsule is in the shape");
+  assert(!bone_shape_has(r, vals, 0, W, 1.5, 0.6), "one beyond w is not");
+}
+
+// @HXB-007 — A WHEEL'S ANGLE IS COMPUTED FROM ITS TRAVEL, WHICH IS WHY IT DOES
+// NOT SLIP.  The rolling identity `r * theta = distance` holds here BY
+// CONSTRUCTION, not by tuning: the joint value is a function of how far the
+// wheel has gone, so there is no place for an error to accumulate.  What is
+// left is one float round trip — a divide by `2*pi*r` and a multiply back — so
+// the residual skid is machine epsilon, not algebraic zero, and this is the
+// one place in the body where imprecision is licensed at all.
+//
+// The contrast is the whole point, and it grows with the journey: adding a
+// per-step increment instead drifts, and by 20000 steps it is thousands of
+// times further off than the derived value ever gets.
+fn test_a_wheel_rolls_by_construction_not_by_tuning() {
+  radius = 2.5;
+  step = 0.37;
+  worst_derived = 0.0;
+  worst_acc = 0.0;
+  acc = 0.0;
+  for k in 0..20001 {
+    travel = (k as float) * step;
+    sk = wheel_skid(radius, wheel_value(travel, radius, 0.0), travel);
+    if sk > worst_derived { worst_derived = sk; }
+    if k > 0 { acc = acc + wheel_value(step, radius, 0.0); }
+    ska = wheel_skid(radius, acc, travel);
+    if ska > worst_acc { worst_acc = ska; }
+  }
+  assert(worst_derived < 1e-11, "7400 units of travel, derived: still machine dust ({worst_derived})");
+  assert(worst_acc > worst_derived * 1000.0,
+         "the same journey accumulated is over a thousand times worse ({worst_acc})");
+
+  // The control that the measurement can fail at all: ask for a skid.
+  slipped = wheel_skid(radius, wheel_value(10.0, radius, 0.25), 10.0);
+  assert(slipped > 2.0, "a quarter of deliberate slip is a real distance, got {slipped}");
+  assert(fabs3(wheel_angle(1.0) - 6.283185307179586) < 1e-12, "a value of 1.0 is one whole turn");
+}
+
+// @HXB-008 — INDEX ORDER IS THE RIG'S CANONICAL LABELLING, AND A SPATIAL BONE
+// CHANGES ITS RECORD TAG.  A tree can be relabelled and describe the same rig,
+// so the text fixes the labels: the root is bone 0 and every bone's parent is
+// an EARLIER bone.  The parser enforces it — a rig written out of order is
+// REFUSED, not sorted — which is what makes `write(read(R))` a byte identity.
+//
+// The tag is the compatibility half.  A planar bone writes the bytes this
+// library has always written, so a planar rig round-trips across versions
+// unchanged; a spatial bone writes `bone3`, so a reader that predates the third
+// dimension REFUSES the rig instead of silently reading its planar projection —
+// which is the same choice as refusing an absent axis rather than assuming one.
+fn test_index_order_is_the_labelling_and_a_spatial_bone_says_so() {
+  p = rig_new();
+  p = rig_bone(p, -1, 0.0, 0.0, 1.5, 0.0 - 0.5, 0.5);
+  assert(rig_write(p, "arm") == "rig arm bones 1\nbone 0 parent -1 at 0 0 len 1.5 lim -0.5 0.5",
+         "the planar record, byte for byte: [{rig_write(p, \"arm\")}]");
+
+  s = rig_new();
+  s = rig_bone3(s, -1, 0.0, 0.0, 0.25, 1.5, 1.0, 0.0, 0.0, 0.0 - 0.5, 0.5);
+  assert(rig_write(s, "arm") == "rig arm bones 1\nbone3 0 parent -1 at 0 0 0.25 len 1.5 axis 1 0 0 lim -0.5 0.5",
+         "and the spatial one carries its own tag: [{rig_write(s, \"arm\")}]");
+
+  assert(rig_eq(p, rig_read(rig_write(p, "arm"))), "both round-trip through their own text");
+  assert(rig_eq(s, rig_read(rig_write(s, "arm"))), "floats included");
+
+  // Out of topological order: refused, and a refusal is an EMPTY rig.
+  bad = "rig arm bones 2\nbone 1 parent -1 at 0 0 len 1 lim 0 0\nbone 0 parent 0 at 0 0 len 1 lim 0 0";
+  assert(rig_count(rig_read(bad)) == 0, "a rig whose bones are out of order is refused");
+  assert(rig_count(rig_read(rig_write(p, "arm"))) == 1, "while the writer's own text still reads");
+
+  // A float spelled any way but the writer's is refused too — the reader takes
+  // exactly what the writer emits or the byte diff stops meaning anything.
+  for spelling in ["1.0", "+1.5", "01.5", "1.50", "1.5e0", "x"] {
+    t = "rig arm bones 1\nbone 0 parent -1 at 0 0 len {spelling} lim -0.5 0.5";
+    assert(rig_count(rig_read(t)) == 0, "`len {spelling}` is not how this library spells 1.5");
+  }
+  assert(rig_count(rig_read("rig arm bones 1\nbone 0 parent -1 at 0 0 len 1.5 lim -0.5 0.5 ")) == 0,
+         "nor is a trailing space");
+
+  // …but the PARENT is not the reader's business: a forward parent round-trips
+  // faithfully, so the reader takes it and the DOORSTEP is what refuses it.
+  forward = "rig arm bones 2\nbone 0 parent 1 at 0 0 len 1 lim 0 0\nbone 1 parent -1 at 3 0 len 2 lim 0 0";
+  fr = rig_read(forward);
+  assert(rig_count(fr) == 2, "a forward parent READS — nothing about it is misspelled");
+  assert(rig_write(fr, "arm") == forward, "and it re-writes byte for byte");
+  assert(!rig_admissible(fr), "while the doorstep refuses it: a parent must be an EARLIER bone");
+
+  // Which is why the doorstep is not optional.  Posed anyway, bone 0 reads its
+  // parent's frame before that parent exists, and gets zeros — a body at the
+  // origin, with no complaint.
+  (_g, _h, gx, gy) = rig_world_seg(fr, [0.0, 0.0], 0);
+  assert(gx == 1.0 && gy == 0.0, "it poses from the origin, got ({gx},{gy})");
+}

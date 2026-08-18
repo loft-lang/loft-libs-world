@@ -39,6 +39,8 @@ pub fn joint_new(value: float, lo: float, hi: float) -> Joint {
 // through the joint's angle.  A PURE FUNCTION of `(value, lx, ly)` — it reads no stored state, no
 // elapsed time, no call count, and no previous value.  Two different paths to the same `value`
 // therefore give byte-identical output, which is `I6` and the precondition for `I9`'s replay.
+//
+// Example: @HXB-001
 pub fn pose_of(value: float, lx: float, ly: float) -> (float, float) {
   th = value * TAU;
   c = cos(th);
@@ -50,6 +52,8 @@ pub fn pose_of(value: float, lx: float, ly: float) -> (float, float) {
 // `value = travel / (2πr)`.  Because the value is a function of travel and not an accumulation of
 // steps, the no-slip identity is exact by construction.  `slip` is the deliberate defect knob —
 // 0 for a true roll; non-zero is a skid, and it is the control that keeps `wheel_skid` honest.
+//
+// Example: @HXB-007
 pub fn wheel_value(travel: float, radius: float, slip: float) -> float {
   if radius < 0.000000001 { return 0.0; }
   (1.0 + slip) * (travel / (TAU * radius) ?? 0.0)
@@ -68,17 +72,23 @@ pub fn wheel_angle(value: float) -> float { value * TAU }
 // a wheel's roll is kinematics, which is the float frame.  Drive `θ` independently of `travel` —
 // the spec's *"spin a wheel off-travel"* — and the skid is a real distance, orders of magnitude
 // above ε.
+//
+// Example: @HXB-007
 pub fn wheel_skid(radius: float, value: float, travel: float) -> float {
   fabs(radius * wheel_angle(value) - travel)
 }
 
 // THE DOORSTEP (`K-FIT` for a joint): a value inside the joint's limits fits.
+//
+// Example: @HXB-002
 pub fn joint_fits(j: Joint, value: float) -> boolean {
   value >= j.jt_lo && value <= j.jt_hi
 }
 
 // The OFFER a refusal owes — the nearest admissible value.  A joint value is ordinal, so clamping
 // to the limit is a real correction the editor can show, not a silent snap to a different thing.
+//
+// Example: @HXB-002
 pub fn joint_offer(j: Joint, value: float) -> float {
   if value < j.jt_lo { return j.jt_lo; }
   if value > j.jt_hi { return j.jt_hi; }
@@ -104,9 +114,10 @@ pub fn joint_residual(j: Joint, value: float) -> float {
 //
 // INDEX ORDER IS THE CANONICAL LABELLING.  A tree can be relabelled and describe the same rig; the
 // canonical form fixes the labels by requiring **topological order** — the root is bone 0 and every
-// bone's parent is an EARLIER bone.  The parser enforces it (a bone out of order, or referring to a
-// forward/absent parent, is refused), the same way `form_read` fixes the start corner by index
-// order (`C2`).  Fuller canonicalisation — collapsing every relabelling — is the census-shaped
+// bone's parent is an EARLIER bone.  The PARSER enforces the labelling (a bone out of order is
+// refused), the same way `form_read` fixes the start corner by index order (`C2`); the PARENT is
+// `rig_admissible`'s, because a forward or absent parent round-trips faithfully and so is not a
+// spelling question.  Reading a rig is not the same as being allowed to pose it.  Fuller canonicalisation — collapsing every relabelling — is the census-shaped
 // problem `S5`–`S8` solved for forms; phase A's contract is the byte round trip, which topological
 // order plus a strict parser delivers.
 
@@ -166,6 +177,8 @@ pub fn rig_new() -> Rig {
 //
 // ⚠ Eleven parameters is the eight of `hex_part::Hinge` plus a parent, a length
 // and the rig — the family's own shape rather than a shorter one invented here.
+//
+// Example: @HXB-004
 pub fn rig_bone3(r: Rig, parent: integer, ox: float, oy: float, oz: float, len: float,
                  ax: float, ay: float, az: float, lo: float, hi: float) -> Rig {
   r.rg_parent += [parent];
@@ -178,6 +191,8 @@ pub fn rig_bone3(r: Rig, parent: integer, ox: float, oy: float, oz: float, len: 
 // Append one bone in the PLANE — the special case, and its signature is
 // unchanged from 0.1.0.  A planar bone is one at `oz = 0` about `(0, 0, 1)`,
 // which is exactly the axis the 2-D code left implicit.
+//
+// Example: @HXB-001
 pub fn rig_bone(r: Rig, parent: integer, ox: float, oy: float, len: float,
                 lo: float, hi: float) -> Rig {
   rig_bone3(r, parent, ox, oy, 0.0, len, 0.0, 0.0, 1.0, lo, hi)
@@ -195,6 +210,8 @@ pub fn bone_planar(r: Rig, i: integer) -> boolean {
 
 // Is the whole rig planar?  The question `rig_world_seg` implicitly asks of
 // every rig it is handed, made available to a caller that wants to know.
+//
+// Example: @HXB-005
 pub fn rig_planar(r: Rig) -> boolean {
   for i in 0..len(r.rg_parent) {
     if !bone_planar(r, i) { return false; }
@@ -203,12 +220,17 @@ pub fn rig_planar(r: Rig) -> boolean {
 }
 
 // The joint at bone `i`, as a `Joint` carrying its limits (value defaults to 0 — the neutral pose).
+//
+// Example: @HXB-002
 pub fn rig_joint(r: Rig, i: integer) -> Joint {
   joint_new(0.0, r.rg_lo[i] ?? 0.0, r.rg_hi[i] ?? 0.0)
 }
 
 // ADMISSIBLE — topological (root is bone 0 with parent -1, every other parent is earlier), and
 // every joint limit is ordered `lo <= hi`.  This is the rig's doorstep: `fits?` for a whole rig.
+//
+// Example: @HXB-004
+// Example: @HXB-008
 pub fn rig_admissible(r: Rig) -> boolean {
   n = len(r.rg_parent);
   if n == 0 { return false; }
@@ -251,6 +273,8 @@ pub fn rig_admissible(r: Rig) -> boolean {
 // library's *"a lenient reader would void the byte diff"* rule exists to stop.
 // A new tag makes the same reader refuse the whole rig, which `rig_admissible`
 // then rejects.  Loud beats tidy.
+//
+// Example: @HXB-008
 pub fn rig_write(r: Rig, name: text) -> text {
   n = len(r.rg_parent);
   s = "rig {name} bones {n}";
@@ -276,8 +300,50 @@ fn rig_word(line: text, i: integer) -> text {
 fn rig_word_int(line: text, i: integer) -> integer { rig_word(line, i) as integer ?? 0 }
 fn rig_word_float(line: text, i: integer) -> float { rig_word(line, i) as float ?? 0.0 }
 
+// How many space-separated fields the line has.  Each record has a fixed shape, so a line
+// carrying MORE is a different line — trailing junk and a trailing space both land here.
+fn rig_word_count(line: text) -> integer { len(line.split(' ')) }
+
+// Is field `i` a number SPELLED THE WAY `rig_write` spells one?  Not a character class: the
+// parse has to reproduce the original characters, which refuses ``, `x`, `007`, `+1.5`, `1.50`
+// and `1.5e0` in one test — each of which a fallible cast otherwise hands back as a plausible
+// number that then writes out differently.
+fn rig_word_is_int(line: text, i: integer) -> boolean {
+  w = rig_word(line, i);
+  v = w as integer ?? 0;
+  "{v}" == w
+}
+fn rig_word_is_float(line: text, i: integer) -> boolean {
+  w = rig_word(line, i);
+  v = w as float ?? 0.0;
+  "{v}" == w
+}
+
+// Every float field of a `bone` / `bone3` record, spelled as this library spells one.
+fn rig_floats_ok(line: text, lo: integer, hi: integer) -> boolean {
+  for i in lo..hi + 1 {
+    if !rig_word_is_float(line, i) { return false; }
+  }
+  true
+}
+
 // STRICT PARSER — accepts exactly what `rig_write` emits, refuses anything else by returning an
 // empty rig (which `rig_admissible` then rejects).  A lenient reader would void the byte diff.
+//
+// THAT WAS A CLAIM BEFORE IT WAS A TEST, and it was wrong nine ways: `len 1.0`, `+1.5`, `01.5`,
+// `1.50`, `1.5e0`, an empty field, a trailing space and an extra field were all ADMITTED and
+// then re-written differently — and `len x` became `len 0`, a BONE THAT IS NOT THERE, admitted
+// into the model without a word.  What pins it now is a RE-SPELLING IDENTITY: a field is a
+// number only if printing the parse reproduces the original characters, and a line is a record
+// only if it carries exactly the fields the writer emits.
+//
+// ⚠ WHAT THIS PARSER DOES NOT CHECK IS THE PARENT, and an earlier note here said it did.  A
+// forward, absent or duplicate-root parent round-trips FAITHFULLY — nothing is repaired, the
+// byte diff still means what it says — so it is not the reader's to refuse.  It is
+// `rig_admissible`'s, which is the rig's doorstep and catches every one of them.  Reading a rig
+// is not the same as being allowed to pose it.
+//
+// Example: @HXB-008
 pub fn rig_read(t: text) -> Rig {
   lines = t.split('\n');
   nl = len(lines);
@@ -285,6 +351,8 @@ pub fn rig_read(t: text) -> Rig {
   head = lines[0] ?? "";
   if rig_word(head, 0) != "rig" { return rig_new(); }
   if rig_word(head, 2) != "bones" { return rig_new(); }
+  if rig_word_count(head) != 4 { return rig_new(); }
+  if !rig_word_is_int(head, 3) { return rig_new(); }
   nb = rig_word_int(head, 3);
   if nl != nb + 1 { return rig_new(); }
   out = rig_new();
@@ -293,17 +361,24 @@ pub fn rig_read(t: text) -> Rig {
     tag = rig_word(ln, 0);
     if rig_word_int(ln, 1) != ri - 1 { return rig_new(); }     // index order, like form C2
     if rig_word(ln, 2) != "parent" { return rig_new(); }
+    if !rig_word_is_int(ln, 1) || !rig_word_is_int(ln, 3) { return rig_new(); }
     if tag == "bone" {
+      if rig_word_count(ln) != 12 { return rig_new(); }
       if rig_word(ln, 4) != "at" { return rig_new(); }
       if rig_word(ln, 7) != "len" { return rig_new(); }
       if rig_word(ln, 9) != "lim" { return rig_new(); }
+      if !rig_floats_ok(ln, 5, 6) || !rig_word_is_float(ln, 8)
+         || !rig_floats_ok(ln, 10, 11) { return rig_new(); }
       out = rig_bone(out, rig_word_int(ln, 3), rig_word_float(ln, 5), rig_word_float(ln, 6),
                      rig_word_float(ln, 8), rig_word_float(ln, 10), rig_word_float(ln, 11));
     } else if tag == "bone3" {
+      if rig_word_count(ln) != 17 { return rig_new(); }
       if rig_word(ln, 4) != "at" { return rig_new(); }
       if rig_word(ln, 8) != "len" { return rig_new(); }
       if rig_word(ln, 10) != "axis" { return rig_new(); }
       if rig_word(ln, 14) != "lim" { return rig_new(); }
+      if !rig_floats_ok(ln, 5, 7) || !rig_word_is_float(ln, 9)
+         || !rig_floats_ok(ln, 11, 13) || !rig_floats_ok(ln, 15, 16) { return rig_new(); }
       out = rig_bone3(out, rig_word_int(ln, 3),
                       rig_word_float(ln, 5), rig_word_float(ln, 6), rig_word_float(ln, 7),
                       rig_word_float(ln, 9),
@@ -350,6 +425,17 @@ pub fn rig_eq(a: Rig, b: Rig) -> boolean {
 
 // The world segment of bone `i` at the given joint values: `(x0, y0)` its base, `(x1, y1)` its tip.
 // Composes the tree from the root (bones are topological, so ancestors are computed first).
+//
+// ⚠⚠ PLANAR RIGS ONLY, and it says so with numbers rather than a refusal.  This walk composes
+// joints by ADDING ANGLES, so it reads neither `rg_oz` nor the stored axis: hand it a bone hinged
+// about `+y` and it answers as though that hinge were about `+z`.  The rig can be perfectly
+// ADMISSIBLE, the call returns four ordinary floats, and nothing says the body it describes is not
+// the body you built — measured on a two-bone arm, the tip is 2.5 away at a quarter turn and 3.2 at
+// three quarters, on a bone 2 long.  `rig_planar` is the precondition; a spatial rig belongs on
+// `rig_world_frame3` / `rig_world_seg3`, and its proxy has to be derived from those.
+//
+// Example: @HXB-001
+// Example: @HXB-005
 pub fn rig_world_seg(r: Rig, values: vector<float>, i: integer) -> (float, float, float, float) {
   n = i + 1;
   bx: vector<float> = [];
@@ -412,6 +498,8 @@ pub struct Frame {
 
 // The world frame of bone `i` at the given joint values.  ⚠ One tree walk;
 // pose as many points through it as you like with `frame_point`.
+//
+// Example: @HXB-003
 pub fn rig_world_frame3(r: Rig, values: vector<float>, i: integer) -> Frame {
   n = i + 1;
   bx: vector<float> = []; by: vector<float> = []; bz: vector<float> = [];
@@ -467,6 +555,8 @@ pub fn rig_world_frame3(r: Rig, values: vector<float>, i: integer) -> Frame {
 }
 
 // Where a point in the bone's LOCAL frame lands in the world.
+//
+// Example: @HXB-003
 pub fn frame_point(f: Frame, lx: float, ly: float, lz: float) -> (float, float, float) {
   (f.fr_x + f.fr_00 * lx + f.fr_01 * ly + f.fr_02 * lz,
    f.fr_y + f.fr_10 * lx + f.fr_11 * ly + f.fr_12 * lz,
@@ -475,6 +565,8 @@ pub fn frame_point(f: Frame, lx: float, ly: float, lz: float) -> (float, float, 
 
 // The one-shot door: pose ONE point of bone `i`.  ⚠ It walks the tree, so
 // a caller posing many points should hold a `Frame` instead.
+//
+// Example: @HXB-003
 pub fn rig_world_point3(r: Rig, values: vector<float>, i: integer,
                         lx: float, ly: float, lz: float) -> (float, float, float) {
   frame_point(rig_world_frame3(r, values, i), lx, ly, lz)
@@ -490,6 +582,8 @@ pub fn rig_world_point3(r: Rig, values: vector<float>, i: integer,
 // its base is the frame's origin and its tip is `(len, 0, 0)` in it.  One
 // implementation of the walk, and the numbers are unchanged — adding a
 // rotated `(0,0,0)` is an exact `+ 0.0`.
+//
+// Example: @HXB-003
 pub fn rig_world_seg3(r: Rig, values: vector<float>, i: integer)
     -> (float, float, float, float, float, float) {
   f = rig_world_frame3(r, values, i);
@@ -508,6 +602,13 @@ pub struct Obb {
 
 // THE PROXY of bone `i`: the OBB that bounds its capsule of half-width `w`.  Length grows by `w`
 // at each end to cover the rounded caps; width is `w`.
+//
+// ⚠ IT IS BUILT ON `rig_world_seg`, so it is PLANAR-ONLY for the same reason and inherits the same
+// silence: on a spatial rig this boxes a bone that is somewhere else, and `I4`'s containment — a
+// proxy never misses an overlap — does not hold.  Check `rig_planar` first.
+//
+// Example: @HXB-005
+// Example: @HXB-006
 pub fn bone_obb(r: Rig, values: vector<float>, i: integer, w: float) -> Obb {
   (x0, y0, x1, y1) = rig_world_seg(r, values, i);
   dx = x1 - x0;
@@ -544,6 +645,10 @@ pub fn seg_dist(x0: float, y0: float, x1: float, y1: float, px: float, py: float
 }
 
 // The bone's SHAPE: is a world point within `w` of its segment (inside the capsule)?
+//
+// ⚠ Planar-only, like `bone_obb`: it asks `rig_world_seg`.
+//
+// Example: @HXB-006
 pub fn bone_shape_has(r: Rig, values: vector<float>, i: integer, w: float,
                       px: float, py: float) -> boolean {
   (x0, y0, x1, y1) = rig_world_seg(r, values, i);
