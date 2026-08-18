@@ -4,20 +4,34 @@ version = "0.2.0"
 loft    = ">=0.8"
 
 # 0.2.0 adds the third dimension: `rig_bone3` with an explicit revolute axis and
-# an `oz`, plus `rig_world_seg3`.  BOTH pins stay at 0.1.0 and each for its own
-# reason, measured rather than assumed:
+# an `oz`, plus `rig_world_seg3`.  The two pins differ, and the reason is worth
+# reading before assuming this is a drop-in.
 #
-#   api  — every 0.1.0 signature is unchanged and `rig_bone` still means what it
-#          meant; it is now the planar special case of `rig_bone3`.
-#   data — 0.2.0 reads every rig 0.1.0 wrote, and a PLANAR rig written by 0.2.0
-#          is byte-identical to 0.1.0's (gated on a byte literal).
+# ⚠⚠ `api_compatible_with` IS 0.2.0 — THIS IS NOT A DROP-IN FOR 0.1.0, and the
+# first draft of this manifest claimed it was.  `loft compat check --full`
+# refused the publish and it was right: `struct Rig` is PUBLIC and gained four
+# fields, so a consumer who built one by LITERAL — the six-field shape
+# `rig_new` itself uses — now omits `rg_ax` / `rg_ay` / `rg_az` / `rg_oz`,
+# which under [loft#914] default silently to empty vectors.  An absent axis
+# reads as (0,0,0), and MEASURED against 0.2.0 that literal answers
+# `rig_admissible = false` where 0.1.0 answered true.  A real behaviour change
+# in a real consumer shape, not a bureaucratic one.
 #
-# ⚠ The other direction is deliberately loud rather than compatible: a SPATIAL
-# bone writes its own record tag `bone3`, so a 0.1.0 reader REFUSES the rig
-# instead of silently reading its planar projection.  Measured against the
-# shipped 0.1.0 reader — appending fields to the `bone` line reads back as 1
-# flattened bone, the new tag reads back as 0.
-api_compatible_with  = "0.1.0"   # oldest own release this is a drop-in for
+# ⚠ It is NOT repaired by treating an absent axis as the planar default, and
+# that was considered: this library refuses a repair everywhere else (*"a
+# lenient reader would void the byte diff"*), and a rig whose axis nobody wrote
+# SHOULD be refused loudly.  Every consumer that builds through `rig_new` +
+# `rig_bone` — which is what the README and USAGE both show — is unaffected,
+# and `loft compat test` confirms the 0.1.0 test suite still passes verbatim.
+#
+# ⚠ `data_compatible_with` STAYS 0.1.0: the break is in the struct, not the
+# format.  0.2.0 reads every rig 0.1.0 wrote, and a PLANAR rig written by 0.2.0
+# is byte-identical to 0.1.0's (gated on a byte literal).  The other direction
+# is deliberately loud — a SPATIAL bone writes its own record tag `bone3`, so a
+# 0.1.0 reader REFUSES the rig instead of silently reading its planar
+# projection.  Measured against the shipped 0.1.0 reader: appending fields to
+# the `bone` line reads back as 1 flattened bone, the new tag reads back as 0.
+api_compatible_with  = "0.2.0"   # oldest own release this is a drop-in for
 data_compatible_with = "0.1.0"   # oldest own release whose stored data this reads
 [library]
 entry = "src/hex_body.loft"

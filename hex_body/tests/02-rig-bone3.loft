@@ -221,6 +221,38 @@ fn test_an_axis_of_zero_length_is_refused() {
          "an axis-less joint does not turn: ({bx}, {by}, {bz})");
 }
 
+// ⚠⚠ THE API BREAK, PINNED — 0.2.0 is NOT a drop-in for 0.1.0, and this is the
+// one shape in which that bites.  `struct Rig` is public and gained four
+// fields, so a consumer who built one by LITERAL (the six-field shape
+// `rig_new` itself uses) now omits them, and under [loft#914] they default
+// silently to empty vectors.  An absent axis reads as `(0,0,0)`.
+//
+// ⚠ It is REFUSED rather than repaired, deliberately: treating an absent axis
+// as the planar default would be a silent repair, and this library refuses
+// those everywhere else.  A rig whose axis nobody wrote should be refused
+// loudly — but a 0.1.0 consumer got `true` here, so the manifest declares the
+// break (`api_compatible_with = "0.2.0"`) instead of pretending otherwise.
+fn test_a_zero_one_shaped_literal_is_refused_and_that_is_the_break() {
+  old = Rig { rg_parent: [-1], rg_ox: [0.0], rg_oy: [0.0],
+              rg_len: [1.5], rg_lo: [-0.5], rg_hi: [0.5] };
+  assert(rig_count(old) == 1, "the literal still builds a one-bone rig");
+  assert(!rig_admissible(old),
+         "and it is now REFUSED — 0.1.0 answered true, which is the declared break");
+
+  // ⚠ The 2-D path is untouched by it: `rig_world_seg` never reads an axis, so
+  // a consumer that only poses in the plane keeps working.  That is why
+  // `loft compat test` reports the 0.1.0 suite still passing.
+  (px, py, tx, ty) = rig_world_seg(old, [0.0], 0);
+  assert(px == 0.0 && py == 0.0 && tx == 1.5 && ty == 0.0,
+         "the planar pose is unchanged: ({px}, {py}) -> ({tx}, {ty})");
+
+  // the control: the SAME rig through the constructors is admissible
+  good = rig_new();
+  good = rig_bone(good, -1, 0.0, 0.0, 1.5, -0.5, 0.5);
+  assert(rig_admissible(good),
+         "and every consumer that builds through rig_new + rig_bone is unaffected");
+}
+
 // ⚠ `bone_planar` decides which RECORD a bone is written as, so it is asked
 // with `==` and no tolerance.  A near-planar bone is a spatial bone.
 fn test_a_nearly_planar_bone_is_a_spatial_bone() {
