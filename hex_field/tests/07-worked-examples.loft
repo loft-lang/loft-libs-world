@@ -1,0 +1,531 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Worked examples for `hex_field` (@PLN141).  Each `test_*` below is a REAL,
+// run-every-CI demonstration of a contract the signature cannot state; the
+// function documents itself by CITING the tag with `// Example: @HXL-0NN`, and
+// `check_doc_drift.sh examples` fails if a citation goes dangling.  These are
+// teaching examples, distinct from the conformance suite in `01-hex-field.loft`.
+//
+// WHAT THIS PACKAGE ASKS OF A CALLER.  Everything here is EXACT: a cell is
+// (q,r), a corner is a lattice point (k,m), an edge is a pair of cells, and an
+// area is an integer.  There is no epsilon anywhere and none is wanted.  Every
+// trap below is one of three things:
+//
+//   a UNIT      the lattice's world unit is the hex CIRCUMRADIUS, so a hex STEP
+//               is sqrt(3) of them — and one of the two disc routines takes each
+//   a PREMISE   a rule that is true of the shape the author had in mind and not
+//               of the shapes this package is built to hold (a bounded chunk
+//               holds several forms; a document arrives from somewhere else)
+//   a DOMAIN    a slot narrower than the value offered to it, where the value
+//               out of range means something rather than failing
+//
+// The fixtures are written BY HAND and are as small as the claim allows: one
+// hex, two hexes, a ring of six.  A shrunken real thing would not be readable.
+use hex_field;
+
+// Names a scratch file AND clears any leftover from a run that died before its own
+// cleanup.  `file(path)` opens an existing file to APPEND, so without this a crashed
+// run hands the next one a header with a header already in front of it — and the
+// failure then lands in a different test from the one that caused it.
+fn tmp(name: text) -> text {
+  p = "_tmp_hxl_{name}.bin";
+  delete(p);
+  p
+}
+
+const SQRT3 = 1.7320508075688772;
+
+// One cell, on its own, in the smallest chunk that can hold it.
+fn one_hex() -> HexSet {
+  s = hexset_chunk(0, 0, 1, 1);
+  hexset_set(s, 0, 0, true);
+  s
+}
+
+// A ring of six around an empty centre — the smallest form with a HOLE.
+fn donut() -> HexSet {
+  s = hexset_chunk(-2, -2, 5, 5);
+  hexdisk_into(s, 0, 0, 1);
+  hexset_set(s, 0, 0, false);
+  s
+}
+
+// @HXL-001 — ONE HEX IS SIX NAMED LATTICE POINTS, and you can write them down.
+//
+// This is the whole representation in one value, which is why it is the first
+// example rather than a footnote.  A cell's centre is (2q + (r&1), 3r) and its
+// six corners are (0,+-2) and (+-1,+-1) away from it, so the cell at the origin
+// traces to exactly the points asserted below — no scaling, no rounding, nothing
+// derived at run time.  The order is the one `corner_k`/`corner_m` fixes, rotated
+// to start at the loop's lexicographically smallest vertex, which is what makes
+// two independent implementations produce the SAME array rather than the same
+// shape.
+fn test_one_hex_is_six_lattice_points() {
+  v = trace(one_hex());
+  assert(v.vm_loops == 1, "one cell is one loop, got {v.vm_loops}");
+  assert(len(v.vm_k) == 6, "and six vertices, got {len(v.vm_k)}");
+
+  ks: vector<integer> = [-1,  0,  1, 1, 0, -1];
+  ms: vector<integer> = [-1, -2, -1, 1, 2,  1];
+  for i in 0..6 {
+    assert((v.vm_k[i] ?? 99) == (ks[i] ?? 0) && (v.vm_m[i] ?? 99) == (ms[i] ?? 0),
+           "vertex {i} is ({v.vm_k[i] ?? 99},{v.vm_m[i] ?? 99}), want ({ks[i] ?? 0},{ms[i] ?? 0})");
+  }
+  // The canonical start is the SMALLEST vertex, not the one iteration happened to reach.
+  assert((v.vm_k[0] ?? 0) == -1 && (v.vm_m[0] ?? 0) == -1, "the loop starts at (-1,-1)");
+}
+
+// @HXL-002 — THE AREA ROUND-TRIP IS AN INTEGER IDENTITY, AND A HOLE IS A
+// NEGATIVE ONE.  A single hex shoelaces to exactly 12, so a form of n hexes
+// shoelaces to exactly 12n whatever its shape — and a hole subtracts.  The ring
+// of six below is 6 cells: its outer loop encloses the 7-cell disc (84) and its
+// hole gives back one cell (-12), which is 72 and nothing else.  Because both
+// sides are integers, "cell count and traced outline can never disagree" is a
+// statement about equality, not about tolerance.
+fn test_the_hole_is_a_negative_hex_and_the_areas_are_exact() {
+  s = donut();
+  assert(hexset_count(s) == 6, "a ring of six, got {hexset_count(s)}");
+  v = trace(s);
+  assert(v.vm_loops == 2, "an outer loop and a hole, got {v.vm_loops}");
+
+  outer = -1;
+  hole  = -1;
+  for i in 0..2 {
+    if shoelace2(v, i) > 0 { outer = i; }
+    if shoelace2(v, i) < 0 { hole  = i; }
+  }
+  assert(outer >= 0 && hole >= 0, "one of each");
+  assert(shoelace2(v, outer) == 84, "the outer loop encloses seven hexes: {shoelace2(v, outer)}");
+  assert(shoelace2(v, hole) == 0 - 12, "the hole gives one back: {shoelace2(v, hole)}");
+  assert(shoelace_total(v) == 72, "84 - 12 = 72");
+  assert(shoelace_total(v) == 12 * hexset_count(s), "and 72 is 12 x 6");
+
+  // A single hex is the unit of that identity.
+  assert(shoelace_total(trace(one_hex())) == 12, "one hex is exactly 12");
+}
+
+// @HXL-003 — A CHUNK MAY HOLD MORE THAN ONE FORM, AND THE VALIDATOR MUST SAY YES.
+//
+// This package traces BOUNDED CHUNKS on purpose — "the same code serves a 32x32
+// world chunk and a one-off tower window" — so two buildings in one window, or one
+// building the chunk edge cuts in half, is the ordinary case rather than an error.
+// Every such map used to be refused with code 5, "wrong number of outer loops",
+// while `trace` had produced it correctly and the areas summed exactly: two
+// disjoint hexes are two loops of 12 each, and 24 is 24.
+//
+// The rule that refused them is a property of a CONNECTED form, and connectedness
+// is not something a chunk gets to assume.  So code 5 now means *no* outer loop,
+// and a caller who knows its form is one piece keeps the stronger property by
+// asking for it: `outline_count(v) == 1`.
+fn test_a_chunk_may_hold_two_forms() {
+  s = hexset_chunk(0, 0, 9, 9);
+  hexset_set(s, 1, 1, true);
+  hexset_set(s, 7, 7, true);              // far enough apart to share no edge
+  v = trace(s);
+  assert(v.vm_loops == 2, "two components, two loops");
+  assert(shoelace_total(v) == 24, "and 12 per hex: {shoelace_total(v)}");
+  assert(shoelace_total(v) == 12 * hexset_count(s), "the round-trip holds across components");
+  assert(validate(v, hexset_count(s)) == 0, "a two-form chunk is VALID, got {validate(v, hexset_count(s))}");
+  assert(outline_count(v) == 2, "and it reports two outlines, got {outline_count(v)}");
+
+  // One form cut in half by the chunk edge — the same shape, arrived at the other way.
+  c = hexset_chunk(0, 0, 7, 7);
+  for r in 0..7 { hexset_set(c, 0, r, true); hexset_set(c, 6, r, true); }
+  vc = trace(c);
+  assert(validate(vc, hexset_count(c)) == 0, "a clipped form is VALID, got {validate(vc, hexset_count(c))}");
+  assert(outline_count(vc) == 2, "in two pieces");
+
+  // And the single-piece caller still gets the strong answer.
+  assert(outline_count(trace(donut())) == 1, "a donut is ONE outline plus a hole");
+}
+
+// @HXL-004 — THE OUTLINE MUST NOT TOUCH ITSELF, AND THE CHEAP CHECKS CANNOT SEE IT.
+//
+// `trace` can never emit a pinch: a hex vertex touches three MUTUALLY ADJACENT
+// cells, so a boundary cannot pass through the same point twice.  That is exactly
+// why the check belongs in `validate` rather than in the tracer — the maps that
+// arrive from a file, or from a consumer's own builder, are the ones that can.
+//
+// The map below is two hexes emitted as two circuits joined at the corners they
+// share, which is what a naive per-cell tracer produces.  Every other check in
+// `validate` passes it: twelve segments, each a legal hex edge; a shoelace of
+// exactly 12 x 2; one positive loop.  It is still unusable — the shared edge is
+// traversed in both directions, a zero-width slit no triangulator can resolve.
+fn test_a_figure_eight_passes_every_other_check() {
+  fk: vector<integer> = [1, 0, -1, -1,  0,  1, 1,  1,  2,  3, 3, 2];
+  fm: vector<integer> = [1, 2,  1, -1, -2, -1, 1, -1, -2, -1, 1, 2];
+  st: vector<integer> = [0, 12];
+  f8 = VecMap { vm_k: fk, vm_m: fm, vm_start: st, vm_loops: 1 };
+
+  assert(shoelace_total(f8) == 24, "the area is right: {shoelace_total(f8)}");
+  assert(shoelace_total(f8) == 12 * 2, "which is 12 per hex, for two hexes");
+  assert(outline_count(f8) == 1, "and there is one positive loop");
+  assert(validate(f8, 2) == 6, "yet it is refused as self-touching, got {validate(f8, 2)}");
+
+  // The honest trace of the same two cells: ONE loop of ten vertices, no repeats.
+  two = hexset_chunk(0, 0, 2, 1);
+  hexset_set(two, 0, 0, true);
+  hexset_set(two, 1, 0, true);
+  vt = trace(two);
+  assert(vt.vm_loops == 1, "two adjacent hexes are one loop");
+  assert(len(vt.vm_k) == 10, "of ten vertices — the two shared corners are visited once each");
+  assert(shoelace_total(vt) == 24, "same area");
+  assert(validate(vt, 2) == 0, "and it validates");
+}
+
+// @HXL-005 — `radius` IS NOT IN HEX STEPS, AND THE FACTOR IS sqrt(3).
+//
+// `form_hexdisk(w, n)` counts hex STEPS; `form_circle(w, radius)` measures LATTICE
+// WORLD UNITS, the ones `x = k*sqrt(3)/2, y = m/2` defines — in which a hex has
+// circumradius 1 and two neighbouring centres are sqrt(3) apart.  Both are
+// dimensionless, and they are not the same dimension.
+//
+// So the same `3` asks for two different discs, and neither call says so at the
+// call site.  Passing hex steps to `form_circle` gives you a disc 1.73x too small;
+// the conversion is one multiplication and it is exact.
+fn test_a_disc_radius_and_a_hex_distance_are_different_units() {
+  assert(hexset_count(form_hexdisk(8, 1)) ==  7, "1 hex step out is 7 cells");
+  assert(hexset_count(form_hexdisk(8, 2)) == 19, "2 out is 19");
+  assert(hexset_count(form_hexdisk(8, 3)) == 37, "3 out is 37");
+
+  assert(hexset_count(form_circle(8, 1.0)) ==  1, "radius 1.0 does not even reach a neighbour");
+  assert(hexset_count(form_circle(8, 2.0)) ==  7, "radius 2.0 reaches the first ring and no further");
+  assert(hexset_count(form_circle(8, 3.0)) == 13, "radius 3.0 is 13 cells, NOT 37");
+
+  // The conversion, and the proof that it is the whole difference.
+  assert(hexset_count(form_circle(8, 1.0 * SQRT3)) ==  7, "sqrt(3) world units is one hex step");
+  assert(hexset_count(form_circle(8, 2.0 * SQRT3)) == 19, "and two steps is 19");
+  assert(hexset_count(form_circle(8, 3.0 * SQRT3)) == 37, "and three is 37 — the same disc");
+
+  // `form_octagon`'s apothem is in the same world units.
+  assert(hexset_count(form_octagon(8, 3.0)) == 13, "an apothem of 3.0 is 13 cells");
+  assert(hexset_count(form_octagon(8, 3.0 * SQRT3)) == 37, "3 hex steps of apothem is 37");
+}
+
+// @HXL-006 — `hex_at` IS THE EXACT INVERSE OF THE CENTRE MAP, INCLUDING ON
+// NEGATIVE ODD ROWS.  It is the one routine here that leaves the integers — a
+// world point is a float — so it is the one place a rounding convention can drift
+// without anything else noticing.  The dangerous half is the odd-row shift: `r & 1`
+// and `r % 2` agree for every non-negative row and differ for every negative odd
+// one, where loft's `%` answers -1, and a copy of this map that used `%` put every
+// such row a full hex step west for a year with a green suite.
+//
+// So the sweep below covers both parities AND both signs, and asserts the identity
+// rather than a sample of it.
+fn test_hex_at_inverts_the_centre_map_on_both_signs() {
+  bad = 0;
+  neg_odd = 0;
+  for r in 0 - 6..7 {
+    for q in 0 - 6..7 {
+      px = (lattice_k(q, r) as float) * 0.8660254037844386;
+      py = (lattice_m(q, r) as float) * 0.5;
+      (aq, ar) = hex_at(px, py);
+      if aq != q || ar != r { bad = bad + 1; }
+      if r < 0 && (r & 1) == 1 { neg_odd = neg_odd + 1; }
+    }
+  }
+  assert(neg_odd == 39, "the sweep must actually contain negative odd rows, got {neg_odd}");
+  assert(bad == 0, "{bad} of 169 cells did not survive the round trip");
+}
+
+// @HXL-007 — SIX TURNS ARE THE IDENTITY, ON EVERY SLOT A STENCIL CARRIES.
+//
+// A 60-degree turn is the integer map k' = (k-m)/2, m' = (3k+m)/2, and both halves
+// divide evenly because centres satisfy k == m (mod 2).  So a rotation resamples
+// nothing and six of them come back exactly — that is the property the exact
+// lattice exists to give, and `edgeset_equal` (which compares BOTH edge slots, and
+// the halo) is the comparator strong enough to state it.
+//
+// It has to be stated on both slots because it was true on only one: the walk
+// carried each edge's MATERIAL and dropped its SURFACE, so a stencil holding
+// derived geometry came back with the cells identical, the materials identical and
+// the geometry gone — under a comment promising a stencil never loses data.
+//
+// The extent is the other half of the answer.  A rotation re-fits the extent to
+// what the rotated cells need, so it is the CONTENT that returns, not the box: a
+// stencil authored in a roomy window comes back trimmed to its own occupied cells.
+fn test_six_turns_return_every_slot() {
+  s = hexset_chunk(0, 0, 2, 1);
+  hexset_set(s, 0, 0, true);
+  hexset_set(s, 1, 0, true);
+  eg = edgeset_new(0, 0, 2, 1);
+  edge_set_both(eg, 0, 0, 1, 0, 7, 3);          // surface 7, material 3, one wall
+  st = stencil_with_edges(s, heights_new(0, 0, 2, 1), labels_new(0, 0, 2, 1), eg, false, false);
+  assert(edgeset_surf_count(st.sn_edges) == 1, "one surface to lose");
+  assert(edgeset_count(st.sn_edges) == 1, "and one material");
+
+  r6 = stencil_rotate(st, 6);
+  assert(hexset_count(r6.sn_cells) == 2, "the cells come back");
+  assert(edge_mat(r6.sn_edges, 0, 0, 1, 0) == 3, "the material comes back");
+  assert(edge_surf(r6.sn_edges, 0, 0, 1, 0) == 7, "and so does the surface");
+  assert(edgeset_surf_count(r6.sn_edges) == 1, "counted, not just stored");
+  assert(edgeset_equal(st.sn_edges, r6.sn_edges), "six turns are the identity on the whole layer");
+
+  // Two reflections likewise.
+  m2 = stencil_mirror(stencil_mirror(st));
+  assert(edgeset_equal(st.sn_edges, m2.sn_edges), "and so are two reflections");
+
+  // One turn is NOT the identity — the gate above would pass on a rotation that did nothing.
+  r1 = stencil_rotate(st, 1);
+  assert(!edgeset_equal(st.sn_edges, r1.sn_edges), "one turn must move the wall");
+  assert(edgeset_count(r1.sn_edges) == 1, "without losing it");
+
+  // The extent follows the CELLS, so it is content that returns and not the box.
+  roomy = hexset_chunk(0 - 3, 0 - 3, 7, 7);
+  hexset_set(roomy, 0, 0, true);
+  wide = stencil_from(roomy, heights_new(0 - 3, 0 - 3, 7, 7), labels_new(0 - 3, 0 - 3, 7, 7),
+                      false, false);
+  back = stencil_rotate(wide, 6);
+  assert(hexset_count(back.sn_cells) == 1, "the one cell survives");
+  assert(hexset_w(back.sn_cells) == 1 && hexset_h(back.sn_cells) == 1,
+         "and the 7x7 window is trimmed to 1x1, not restored");
+}
+
+// @HXL-008 — ONE WALL, TWO NAMES, ONE SLOT — AND THE HALO IS WHY A RIM WALL EXISTS.
+//
+// An edge's identity is the DOUBLED MIDPOINT of the two cell centres, which is
+// symmetric in the two cells: whichever side names it, it is the same edge and the
+// same stored slot.  That is what makes a wall a property of the seam rather than
+// of a cell, so two neighbours cannot disagree about it.
+//
+// The halo is the other half.  Exactly one of an edge's two cells owns the slot, so
+// for a wall on the chunk RIM the owner is a cell OUTSIDE the extent — which is why
+// the layer is (w+2) x (h+2) and why a loop over the extent alone silently drops
+// every rim wall.
+fn test_an_edge_has_one_identity_and_the_rim_is_inside_the_halo() {
+  (ka, ma) = edge_key(0, 0, 1, 0);
+  (kb, mb) = edge_key(1, 0, 0, 0);
+  assert(ka == 2 && ma == 0, "the doubled midpoint of (0,0) and (1,0) is (2,0), got ({ka},{ma})");
+  assert(ka == kb && ma == mb, "and naming it the other way round gives the same key");
+
+  e = edgeset_new(0, 0, 3, 3);
+  edge_set_mat(e, 0, 0, 1, 0, 4);
+  assert(edge_mat(e, 1, 0, 0, 0) == 4, "written from one side, read from the other");
+  assert(edgeset_count(e) == 1, "and stored ONCE, not once per side");
+
+  // A wall on the rim: its owner is outside the extent and it is still stored.
+  edge_set_mat(e, 0 - 1, 0, 0, 0, 5);
+  assert(edge_mat(e, 0, 0, 0 - 1, 0) == 5, "a rim wall lives in the halo");
+  assert(edgeset_count_all(e) == 2, "and `count_all` sees it, got {edgeset_count_all(e)}");
+  assert(edgeset_count(e) == 1, "while `count` walks in-chunk cells only, got {edgeset_count(e)}");
+}
+
+// @HXL-009 — A MATERIAL PAST THE SLOT IS REFUSED, BECAUSE NARROWING IT WOULD MEAN
+// "NO WALL".
+//
+// The material slot is one byte and the narrowing cast is CHECKED, so a value it
+// cannot hold answers null rather than its low byte — and the `?? 0` behind such a
+// cast writes 0, which in this layer is not a fallback value but the ABSENCE of a
+// wall.  `edge_set_mat(e, ..., 300)` therefore used to delete the wall it was
+// setting, and read back as open ground.
+//
+// A label is the deliberate contrast: same package, same per-cell shape, i32 slot,
+// so a label of 301 is a label of 301.  The two domains differ and only one of them
+// has a value that means "nothing here".
+fn test_a_material_past_the_slot_is_refused_not_narrowed() {
+  e = edgeset_new(0, 0, 2, 1);
+  edge_set_mat(e, 0, 0, 1, 0, EDGE_MAT_MAX);
+  assert(edge_mat(e, 0, 0, 1, 0) == 255, "255 is a material");
+  assert(edgeset_refused(e) == 0, "and nothing was refused");
+
+  edge_set_mat(e, 0, 0, 1, 0, EDGE_MAT_MAX + 1);
+  assert(edge_mat(e, 0, 0, 1, 0) == 255, "256 leaves the wall standing, got {edge_mat(e, 0, 0, 1, 0)}");
+  edge_set_mat(e, 0, 0, 1, 0, 0 - 1);
+  assert(edge_mat(e, 0, 0, 1, 0) == 255, "and so does a negative id");
+  assert(edgeset_refused(e) == 2, "both refusals are counted, got {edgeset_refused(e)}");
+  assert(edgeset_count(e) == 1, "and the wall is still there");
+
+  // 0 is in the domain: it is how a wall is REMOVED, not an out-of-range value.
+  edge_set_mat(e, 0, 0, 1, 0, 0);
+  assert(edgeset_count(e) == 0, "0 opens the edge");
+  assert(edgeset_refused(e) == 2, "and is not a refusal");
+
+  // The contrast: a label is i32, so a value past a byte is just a value.
+  lb = labels_new(0, 0, 2, 1);
+  label_set(lb, 0, 0, 301);
+  assert(label_get(lb, 0, 0) == 301, "a label of 301 is a label of 301");
+}
+
+// @HXL-010 — THE READER REFUSES; IT NEVER PARTLY PARSES.  A half-read field is
+// worse than no field, so every fault below returns a CODE and an untouched
+// document rather than whatever it managed to read.
+//
+// Two of these are the format's design rather than its defence.  An unknown section
+// is SKIPPED by its declared length, which is why a field written by a newer
+// consumer still loads in an older one — a flags word could not do that, because an
+// unknown bit means an array of unknown length.  And the section lengths are checked
+// against w*h, which is how truncation is detected at all.
+fn test_the_reader_refuses_rather_than_partly_parsing() {
+  bad_magic = tmp("magic");
+  raw_header(bad_magic, 0x99999999, HXF_SCHEMA, 0, 0, 2, 2, 0, 0);
+  assert(doc_read(bad_magic).doc_code == HXF_BAD_MAGIC, "a foreign file is refused");
+  delete(bad_magic);
+
+  bad_schema = tmp("schema");
+  raw_header(bad_schema, HXF_MAGIC, 99, 0, 0, 2, 2, 0, 0);
+  assert(doc_read(bad_schema).doc_code == HXF_BAD_SCHEMA, "a future schema is refused, not guessed");
+  delete(bad_schema);
+
+  bad_rsv = tmp("rsv");
+  raw_header(bad_rsv, HXF_MAGIC, HXF_SCHEMA, 0, 0, 2, 2, 0, 7);
+  assert(doc_read(bad_rsv).doc_code == HXF_BAD_RESERVED, "the reserved word must be 0");
+  delete(bad_rsv);
+
+  // A section whose declared length disagrees with the extent.
+  wrong_len = tmp("seclen");
+  f = file(wrong_len);
+  f#format = LittleEndian;
+  put_header(f, 0, 0, 2, 2, 1);
+  f += (TAG_OCCU as i32);
+  f += (3 as i32);                       // 3 bytes for a 4-cell extent
+  for _ in 0..3 { f += ((0 as u8?) ?? 0); }
+  assert(doc_read(wrong_len).doc_code == HXF_BAD_SECTION, "a section length must match w*h");
+  delete(wrong_len);
+
+  // A section that runs off the end of the file.
+  cut = tmp("cut");
+  g = file(cut);
+  g#format = LittleEndian;
+  put_header(g, 0, 0, 2, 2, 1);
+  g += (TAG_OCCU as i32);
+  g += (4 as i32);                       // declares 4, supplies 2
+  for _ in 0..2 { g += ((0 as u8?) ?? 0); }
+  assert(doc_read(cut).doc_code == HXF_TRUNCATED, "a short read is a refusal");
+  delete(cut);
+
+  // Occupancy is mandatory: a document without it is not a field.
+  no_occu = tmp("noocc");
+  h = file(no_occu);
+  h#format = LittleEndian;
+  put_header(h, 0, 0, 2, 2, 1);
+  h += (0x5A5A5A5A as i32);              // a tag this reader does not know
+  h += (4 as i32);
+  for _ in 0..4 { h += ((1 as u8?) ?? 0); }
+  d = doc_read(no_occu);
+  assert(d.doc_code == HXF_MISSING_OCCU, "no OCCU section is a refusal");
+  delete(no_occu);
+
+  // FORWARD COMPATIBILITY: the same unknown section, skipped, beside a real one.
+  fwd = tmp("fwd");
+  k = file(fwd);
+  k#format = LittleEndian;
+  put_header(k, 0, 0, 2, 2, 2);
+  k += (0x5A5A5A5A as i32);
+  k += (4 as i32);
+  for _ in 0..4 { k += ((1 as u8?) ?? 0); }
+  k += (TAG_OCCU as i32);
+  k += (4 as i32);
+  cells: vector<integer> = [1, 0, 0, 1];
+  for i in 0..4 { k += (((cells[i] ?? 0) as u8?) ?? 0); }
+  fd = doc_read(fwd);
+  assert(fd.doc_code == HXF_OK, "a newer writer's file still loads, got {fd.doc_code}");
+  assert(fd.doc_skipped == 1, "and says what it skipped, got {fd.doc_skipped}");
+  assert(hexset_count(fd.doc_cells) == 2, "while the section it DID know was read");
+  assert(hexset_get(fd.doc_cells, 0, 0) && hexset_get(fd.doc_cells, 1, 1),
+         "at the two cells the bytes name");
+  delete(fwd);
+}
+
+// @HXL-011 — THE EXTENT IS CHECKED AGAINST THE FILE, NOT TAKEN ON TRUST.
+//
+// `w` and `h` are the two header fields that decide how much this reader ALLOCATES,
+// and they were the only part of the header nothing verified: a 32-byte file
+// claiming 4000 x 4000 built sixteen million cells — plus heights, labels, edges and
+// layers over the same extent — and only then reported a missing section.  The
+// format's own doctrine already says why that is wrong: explicit dimensions exist so
+// truncation can be detected, and a dimension nobody checks detects nothing.
+//
+// The bound needs no second pass.  Occupancy is mandatory and costs one byte per
+// cell, so a file can never describe more cells than it has bytes.
+fn test_the_header_cannot_ask_for_more_than_the_file_holds() {
+  huge = tmp("huge");
+  raw_header(huge, HXF_MAGIC, HXF_SCHEMA, 0, 0, 4000, 4000, 0, 0);
+  hf = file(huge);
+  assert(hf#size == 32, "the whole file is a header: {hf#size} bytes");
+  assert(doc_read(huge).doc_code == HXF_BAD_EXTENT,
+         "a 32-byte file cannot hold 16 million cells");
+  delete(huge);
+
+  neg = tmp("neg");
+  raw_header(neg, HXF_MAGIC, HXF_SCHEMA, 0, 0, 0 - 3, 4, 0, 0);
+  assert(doc_read(neg).doc_code == HXF_BAD_EXTENT, "and an extent cannot be negative");
+  delete(neg);
+
+  // The bound is not so tight that it refuses real files: a written document loads.
+  ok = tmp("ok");
+  s = hexset_chunk(2, 3, 5, 4);
+  for q in 0..5 { for r in 0..4 { if (q + r) % 2 == 0 { hexset_set(s, 2 + q, 3 + r, true); } } }
+  doc_write(ok, s, heights_new(2, 3, 5, 4), labels_new(2, 3, 5, 4), false, false);
+  d = doc_read(ok);
+  assert(d.doc_code == HXF_OK, "a real document still loads, got {d.doc_code}");
+  assert(hexset_count(d.doc_cells) == hexset_count(s), "with its cells");
+  delete(ok);
+}
+
+// @HXL-012 — THE WALL LAYER IS WRITTEN BY WHICH EDGE IT IS, NOT BY WHERE IT SITS.
+//
+// The EDGE section's LENGTH comes from the field's extent, `(w+2)*(h+2)*3`.  Copying
+// the source layer's vector into it therefore assumes the two agree — and when they
+// do not, every material lands at a slot that means a DIFFERENT edge.  The file
+// loads cleanly, the wall count is right, and the walls are somewhere else.
+//
+// Keying each byte by the two cells its edge lies between removes the assumption:
+// the bytes are identical whenever the extents agree (the committed `walled.hxf`
+// fixture is that gate), and correct when they do not.
+fn test_a_wall_keeps_its_identity_across_a_layer_of_another_extent() {
+  s = hexset_chunk(0, 0, 3, 2);
+  for q in 0..3 { for r in 0..2 { hexset_set(s, q, r, true); } }
+
+  // A layer built at ANOTHER extent — 2x1, so its row stride is 4 and the field's is 5.
+  narrow = edgeset_new(0, 0, 2, 1);
+  edge_set_mat(narrow, 0, 0, 1, 0, 9);
+  assert(edgeset_w(narrow) != hexset_w(s), "the extents really do differ");
+
+  p = tmp("stride");
+  doc_write_edges(p, s, heights_new(0, 0, 3, 2), labels_new(0, 0, 3, 2), narrow, false, false, true);
+  d = doc_read(p);
+  assert(d.doc_code == HXF_OK, "the file loads: {d.doc_code}");
+  assert(d.doc_has_e, "with its wall layer");
+  assert(edge_mat(d.doc_edges, 0, 0, 1, 0) == 9,
+         "and the wall is on the edge it was set on, got {edge_mat(d.doc_edges, 0, 0, 1, 0)}");
+  assert(edgeset_count_all(d.doc_edges) == 1, "exactly one wall, not one somewhere else");
+  delete(p);
+
+  // The same wall through a layer that DOES match — the two must agree.
+  same = edgeset_new(0, 0, 3, 2);
+  edge_set_mat(same, 0, 0, 1, 0, 9);
+  pmatch = tmp("match");
+  doc_write_edges(pmatch, s, heights_new(0, 0, 3, 2), labels_new(0, 0, 3, 2), same, false, false, true);
+  e = doc_read(pmatch);
+  assert(edge_mat(e.doc_edges, 0, 0, 1, 0) == 9, "the matching layer round-trips too");
+  assert(edgeset_equal(d.doc_edges, e.doc_edges), "and both files describe the SAME layer");
+  delete(pmatch);
+}
+
+// ── raw-file helpers, so the reader can meet a header nobody wrote ──────────
+
+fn put_header(f: File, q0: integer, r0: integer, w: integer, h: integer, nsec: integer) {
+  f += (HXF_MAGIC as i32);
+  f += (HXF_SCHEMA as i32);
+  f += (q0 as i32);
+  f += (r0 as i32);
+  f += (w as i32);
+  f += (h as i32);
+  f += (nsec as i32);
+  f += (0 as i32);
+}
+
+fn raw_header(path: text, magic: integer, schema: integer, q0: integer, r0: integer,
+              w: integer, h: integer, nsec: integer, rsv: integer) {
+  f = file(path);
+  f#format = LittleEndian;
+  f += (magic as i32);
+  f += (schema as i32);
+  f += (q0 as i32);
+  f += (r0 as i32);
+  f += (w as i32);
+  f += (h as i32);
+  f += (nsec as i32);
+  f += (rsv as i32);
+}

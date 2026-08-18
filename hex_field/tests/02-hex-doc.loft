@@ -2,7 +2,13 @@
 // between consumers, so it is gated here, in the package, not in either game.
 use hex_field;
 
-fn tmp(name: text) -> text { "hexdoc_{name}.bin" }
+// Clears any leftover before naming the path: `file()` APPENDS to an existing file,
+// so a run that fails before its `delete` would poison the next one's header.
+fn tmp(name: text) -> text {
+  p = "hexdoc_{name}.bin";
+  delete(p);
+  p
+}
 
 fn build(w: integer, h: integer) -> HexSet {
   s = hexset_chunk(2, 3, w, h);

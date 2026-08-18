@@ -358,9 +358,14 @@ fn test_an_off_shell_radius_shows_both_candidates() {
 // not be one.  So this refusal names its restriction and stops there.
 //
 // What it is protecting you from is not a rounding either.  The wall slot is one
-// byte, and the store's narrowing cast is CHECKED: a value it cannot hold is not
-// truncated to its low byte, it becomes 0 — and 0 means NO WALL.  Silent
-// deletion, before storage is involved at all.
+// byte, and the store's narrowing cast is CHECKED: a value it cannot hold does not
+// truncate to its low byte.  It used to become 0 — and 0 means NO WALL, so an
+// out-of-range id DELETED the wall it was setting, before storage was involved at
+// all.  `hex_field` 0.1.1 refuses that write instead (@PLN141 row 10), so the slot
+// now keeps what it held and `edgeset_refused` counts the attempt.  The doorstep
+// below is not thereby redundant: it names the restriction where the author can
+// still act on it, and it refuses 0, which the SLOT accepts as the absence of a
+// wall rather than as a material.
 fn test_a_material_id_is_a_name_not_a_magnitude() {
   assert(mat_fits(1) == FIT_OK, "1 is a material");
   assert(mat_fits(MAT_MAX) == FIT_OK, "and so is the largest the slot holds");
@@ -374,9 +379,11 @@ fn test_a_material_id_is_a_name_not_a_magnitude() {
   edge_set_mat(eg, 0, 0, nq, nr, MAT_MAX);
   assert(edge_mat(eg, 0, 0, nq, nr) == MAT_MAX, "255 is stored as 255");
   edge_set_mat(eg, 0, 0, nq, nr, MAT_MAX + 1);
-  assert(edge_mat(eg, 0, 0, nq, nr) == 0, "256 ERASES the wall — it does not wrap to 0 by luck");
+  assert(edge_mat(eg, 0, 0, nq, nr) == MAT_MAX,
+         "256 is refused: the wall it would once have erased still reads 255");
   edge_set_mat(eg, 0, 0, nq, nr, MAT_MAX + 2);
-  assert(edge_mat(eg, 0, 0, nq, nr) == 0, "and 257 erases it too, so it is not a low-byte truncation");
+  assert(edge_mat(eg, 0, 0, nq, nr) == MAT_MAX, "and 257 likewise — no low-byte truncation");
+  assert(edgeset_refused(eg) == 2, "and both refusals are counted rather than silent");
 }
 
 // @HXI-008 — A DOORSTEP WITH NOTHING TO REFUSE SAYS SO, and that is a result

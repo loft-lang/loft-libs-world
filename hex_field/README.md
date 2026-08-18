@@ -35,16 +35,53 @@ A single hex shoelaces to exactly `12`. **Cell count and traced outline can ther
 never disagree** — the vector map provably describes the set it came from, which is what
 makes it safe to hand to a renderer or a mesh builder.
 
-`validate(v, cells)` checks the rest before a consumer sees the data: loops closed · every
-segment a real hex edge · no zero-length segment · no repeated vertex (self-touching) ·
-vertices integral · exactly one outer loop with holes wound opposite · the area round-trip
-above. It returns `0` for a good map.
+`validate(v, cells)` checks the rest before a consumer sees the data, and returns `0` for a
+good map:
+
+| code | what it refuses |
+|---|---|
+| 1 | no loops at all |
+| 2 | a loop of fewer than three vertices |
+| 3 | a segment that is not one of the six hex edges — which is also how a zero-length one is caught, since its delta is `(0,0)` |
+| 4 | the area round-trip above |
+| 5 | no outer loop at all |
+| 6 | a vertex that repeats — the outline touches itself, and a triangulator cannot resolve a pinch |
+
+Integrality is not in the table because it is not a check: a vertex is an `integer` pair,
+so there is nowhere for a non-lattice point to come from.
+
+**Code 5 says *no* outer loop, not *more than one*.** A chunk is allowed to hold several
+disjoint forms — two buildings in one 32×32 window, or one form the chunk edge cut in half —
+and each contributes its own outer loop. Requiring exactly one refused those maps while
+`trace` had produced them correctly and the areas summed exactly. `outline_count(v)` reports
+how many there are, so a caller that knows its form is a single piece keeps the stronger
+property by asserting on it.
+
+`trace` can never produce a 6 — a hex vertex touches three *mutually adjacent* cells, so a
+traced boundary cannot pinch. The check is there for the maps `validate` receives from
+somewhere else: a file, or a consumer's own builder. Two hexes emitted as two circuits
+joined at their shared corners give twelve legal hex-edge segments whose shoelace is
+exactly `12 × 2`, so every other check here passes them.
 
 ## Scale is the CONSUMER's, not this package's
 
-Every threshold here is **dimensionless** — hex steps or pure ratios. This package never
-states a metre. A consumer picks its own metres-per-hex and converts once, at the edge.
-(A library that ships a metre has shipped a decision that belongs to the game.)
+Every threshold here is **dimensionless** — hex steps, lattice world units, or pure ratios.
+This package never states a metre. A consumer picks its own metres-per-hex and converts
+once, at the edge. (A library that ships a metre has shipped a decision that belongs to the
+game.)
+
+**Dimensionless is not the same as interchangeable, and two of the three units here differ
+by √3.** A *hex step* is the distance between neighbouring centres. A *lattice world unit*
+is the one `x = k·√3/2, y = m/2` defines, in which a hex has circumradius **1** — so one hex
+step is **√3 ≈ 1.732** world units. `form_hexdisk(w, n)` takes hex steps; `form_circle(w,
+radius)` and `form_octagon(w, apothem)` take world units. The same `3` therefore means two
+different discs:
+
+| call | cells |
+|---|---|
+| `form_hexdisk(w, 3)` | 37 |
+| `form_circle(w, 3.0)` | 13 |
+| `form_circle(w, 3.0 * 1.7320508075688772)` | 37 |
 
 ## Bounded chunks on purpose
 
@@ -69,8 +106,24 @@ package's verification of itself.
 
 ## Status
 
-**0.1.0 — the settled core, seeded from crawler's `hexform` (plan #5).** Landing next, in
-this order:
+**0.1.1 — the settled core, seeded from crawler's `hexform` (plan #5).**
+
+0.1.1 is 0.1.0 with the same file format (byte for byte) and five behaviours corrected, all
+found by writing this package's worked examples (@PLN141 row 10):
+
+| what changed | before |
+|---|---|
+| `validate` code 5 means *no* outer loop | *not exactly one*, so any chunk holding two forms was refused while its areas summed exactly |
+| `validate` code 6 refuses a self-touching outline | a map that visits a vertex twice passed every other check |
+| a material outside `0..EDGE_MAT_MAX` is refused and counted (`edgeset_refused`) | the checked narrowing cast fell back to `0`, which in this layer means NO WALL — so `edge_set_mat(e, …, 300)` deleted the wall it was setting |
+| `stencil_rotate` / `stencil_mirror` carry both edge slots | the surface half was dropped, so six turns lost the geometry while the cells returned exactly |
+| `doc_read` checks `w`/`h` against the file size (`HXF_BAD_EXTENT`) | a 32-byte file claiming 4000×4000 allocated sixteen million cells before reporting a missing section |
+| the `EDGE` section is written keyed by each edge's two cells | a copy of the source layer's vector, so an `EdgeSet` at another extent relocated every wall into a file that then loaded cleanly |
+
+`outline_count`, `edgeset_refused`, `EDGE_MAT_MAX` and `HXF_BAD_EXTENT` are new; nothing was
+removed or re-typed, so 0.1.1 is a drop-in for 0.1.0.
+
+Landing next, in this order:
 
 | what | why it is not here yet |
 |---|---|
