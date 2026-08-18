@@ -1024,7 +1024,14 @@ pub fn stencil_rotate(st: Stencil, n: integer) -> Stencil {
       }
     }
   }
-  if !seen { return st; }
+  // NO EARLY `return st`.  A stencil with no occupied cells has no bounding box to fit, so
+  // it comes back unturned at its own extent — expressed as a zero-turn copy rather than by
+  // handing the PARAMETER back, because a function whose return paths disagree about
+  // ownership (parameter on one, freshly built on the other) leaks the fresh one, one store
+  // per call, on both backends: loft#982.  The leak fires on the path that IS taken, so the
+  // guard had to go even though rotating an empty stencil is the rare case.
+  turns = n;
+  if !seen { mnq = q0; mnr = r0; mxq = q0 + w - 1; mxr = r0 + h - 1; turns = 0; }
   nw = mxq - mnq + 1;
   nh = mxr - mnr + 1;
   out = stencil_with_edges(
@@ -1046,7 +1053,7 @@ pub fn stencil_rotate(st: Stencil, n: integer) -> Stencil {
   for iq in 0..w {
     for ir in 0..h {
       if hexset_get(st.sn_cells, q0 + iq, r0 + ir) {
-        (tq, tr) = cell_rot(q0 + iq, r0 + ir, n);
+        (tq, tr) = cell_rot(q0 + iq, r0 + ir, turns);
         hexset_set(out.sn_cells, tq, tr, true);
         if st.sn_has_h { height_set(out.sn_heights, tq, tr, height_get(st.sn_heights, q0 + iq, r0 + ir)); }
         if st.sn_has_l { label_set(out.sn_labels, tq, tr, label_get(st.sn_labels, q0 + iq, r0 + ir)); }
@@ -1082,8 +1089,8 @@ pub fn stencil_rotate(st: Stencil, n: integer) -> Stencil {
           // cells came back exactly, so `edgeset_equal` (which compares both, on purpose)
           // could never confirm the identity the exact lattice exists to give.
           if mv != 0 || sv != 0 {
-            (aq, ar) = cell_rot(cq, cr, n);
-            (bq, br) = cell_rot(nq, nr, n);
+            (aq, ar) = cell_rot(cq, cr, turns);
+            (bq, br) = cell_rot(nq, nr, turns);
             edge_set_both(out.sn_edges, aq, ar, bq, br, sv, mv);
           }
         }
@@ -1115,7 +1122,10 @@ pub fn stencil_mirror(st: Stencil) -> Stencil {
       }
     }
   }
-  if !seen { return st; }
+  // No early `return st` — see stencil_rotate, and loft#982.  With no cells to place there
+  // is nothing to reflect, so the extent stays and `flip` turns the reflection off.
+  flip = seen;
+  if !seen { mnq = q0; mnr = r0; mxq = q0 + w - 1; mxr = r0 + h - 1; }
   nw = mxq - mnq + 1;
   nh = mxr - mnr + 1;
   out = stencil_with_edges(
@@ -1155,8 +1165,11 @@ pub fn stencil_mirror(st: Stencil) -> Stencil {
           mv = edge_mat(st.sn_edges, cq, cr, nq, nr);
           sv = edge_surf(st.sn_edges, cq, cr, nq, nr);
           if mv != 0 || sv != 0 {                       // both slots — see stencil_rotate
-            (aq, ar) = cell_mirror(cq, cr);
-            (bq, br) = cell_mirror(nq, nr);
+            aq = cq; ar = cr; bq = nq; br = nr;
+            if flip {
+              (aq, ar) = cell_mirror(cq, cr);
+              (bq, br) = cell_mirror(nq, nr);
+            }
             edge_set_both(out.sn_edges, aq, ar, bq, br, sv, mv);
           }
         }

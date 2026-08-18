@@ -119,6 +119,7 @@ found by writing this package's worked examples (@PLN141 row 10):
 | `stencil_rotate` / `stencil_mirror` carry both edge slots | the surface half was dropped, so six turns lost the geometry while the cells returned exactly |
 | `doc_read` checks `w`/`h` against the file size (`HXF_BAD_EXTENT`) | a 32-byte file claiming 4000×4000 allocated sixteen million cells before reporting a missing section |
 | the `EDGE` section is written keyed by each edge's two cells | a copy of the source layer's vector, so an `EdgeSet` at another extent relocated every wall into a file that then loaded cleanly |
+| `stencil_rotate` / `stencil_mirror` leak nothing | each leaked one `Stencil` **per call** — 4000 stores in 2000 rotations and 2000 reflections. Not a bug in this package: a loft function whose return paths disagree about ownership (the parameter on one, a freshly built value on the other) never frees the fresh one ([loft#982](https://github.com/loft-lang/loft/issues/982)). Both functions now express "an empty stencil comes back unturned" as a zero-turn copy instead of an early `return st` |
 
 `outline_count`, `edgeset_refused`, `EDGE_MAT_MAX` and `HXF_BAD_EXTENT` are new; nothing was
 removed or re-typed, so 0.1.1 is a drop-in for 0.1.0.
