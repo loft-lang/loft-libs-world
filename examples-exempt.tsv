@@ -16,8 +16,7 @@
 # convention every other one is expressed in) and `hex_world`; `hex_form` (Phase E row 1)
 # `hex_place` (row 2), `hex_roof` (row 3), `hex_way` (row 4), `hex_shape` (row 5),
 # `hex_fit` (row 8), `hex_draw` (row 9), `hex_terrain` (row 6), `hex_body` (row 7),
-# `hex_field` (row 10) and `hex_recover` (row 11) followed.  The one row below says what
-# its examples would teach, so the next pass starts from a list rather than a re-read.
+# `hex_field` (row 10), `hex_recover` (row 11) and `hex_edge` (row 12) followed, which
+# empties this file: every package in the repo now carries worked examples.
 #
 # package	verdict	reason
-hex_edge	deferred	The example is already written as prose — the sweep_path resting-position trap from moros#10, now in this package's README: a caller must not come to rest exactly at the fraction returned, because that point is on the bisector and the next hex_at may round to the far side. Turning it into a tagged test is blocked on the design question the note ends with, which is the owner's: whether a sweep_path_skin belongs here or every caller keeps its own.

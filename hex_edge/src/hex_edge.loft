@@ -64,6 +64,7 @@ pub struct Surfaces {
   sf_n:    integer,
 }
 
+// Example: @HXE-001
 pub fn surfaces_new() -> Surfaces {
   k: vector<integer> = [];
   a: vector<float> = [];
@@ -76,6 +77,7 @@ pub fn surfaces_new() -> Surfaces {
 
 // A straight wall with unit normal (nx,ny) at offset c.  Normal is constant -> exact for
 // every one of the 24 headings, and for anything between them.
+// Example: @HXE-001
 pub fn surf_straight(s: Surfaces, nx: float, ny: float, c: float) -> integer {
   s.sf_kind += [1]; s.sf_a += [nx]; s.sf_b += [ny]; s.sf_c += [c];
   s.sf_n = s.sf_n + 1;
@@ -160,6 +162,7 @@ pub fn material_add(m: Materials, solid: boolean, height: float, opacity: float,
 // touched at all: no edge writes, no surface change, and therefore NO L2 cache
 // invalidation (P6 keys the cache on the world version, which a material toggle does not
 // bump).  That is the whole reason material is a separate axis from surface.
+// Example: @HXE-010
 pub fn material_set_solid(m: Materials, id: integer, solid: boolean) {
   if id <= 0 || id >= m.mt_n { return; }
   m.mt_solid[id] = solid;
@@ -231,6 +234,7 @@ pub fn edge_m(qa: integer, ra: integer, qb: integer, rb: integer) -> integer {
 // stamps parts in an arbitrary order, and without the guard the LAST part to touch a
 // shared edge would own it. `edge_block_arb` is the version that resolves the contest on
 // geometry instead of order; this is the cheap one for edges only one part can claim.
+// Example: @HXE-006
 pub fn edge_block_surf(e: EdgeSet, qa: integer, ra: integer, qb: integer, rb: integer,
                        surf: integer) {
   if edge_surf(e, qa, ra, qb, rb) == 0 {
@@ -254,6 +258,7 @@ pub fn edge_point(qa: integer, ra: integer, qb: integer, rb: integer) -> (float,
 // THE RULE: the surface whose geometry is NEAREST the edge's contact point wins; ties
 // break to the LOWER surface id. Both halves matter — nearest is what a ball should
 // actually bounce off, and the tie-break is what makes it deterministic.
+// Example: @HXE-006
 pub fn edge_block_arb(e: EdgeSet, sf: Surfaces, qa: integer, ra: integer,
                       qb: integer, rb: integer, surf: integer, mat: integer) {
   cur = edge_surf(e, qa, ra, qb, rb);
@@ -303,6 +308,7 @@ pub fn junction_add(j: Junctions, sa: integer, sb: integer, kind: integer,
 
 // Does the junction honour what was intended?  G0 is exact by construction (both
 // surfaces pass through the seam point); this checks the TANGENT.
+// Example: @HXE-011
 pub fn junction_ok(j: Junctions, i: integer, sf: Surfaces) -> boolean {
   sa = j.jn_a[i] ?? 0;
   sb = j.jn_b[i] ?? 0;
@@ -317,6 +323,7 @@ pub fn junction_ok(j: Junctions, i: integer, sf: Surfaces) -> boolean {
 }
 
 // G0: both surfaces must actually pass through the seam point.
+// Example: @HXE-011
 pub fn junction_g0(j: Junctions, i: integer, sf: Surfaces, tol: float) -> boolean {
   x = j.jn_x[i] ?? 0.0;
   y = j.jn_y[i] ?? 0.0;
@@ -388,6 +395,7 @@ pub fn surf_param(s: Surfaces, id: integer, px: float, py: float) -> float {
 // Apply every feature to the edge layer: an edge whose contact point falls inside a
 // feature's interval takes that feature's material.  The SURFACE is untouched — which is
 // why the body never fragments and the matcher still sees one wall.
+// Example: @HXE-008
 pub fn apply_features(e: EdgeSet, sf: Surfaces, f: Features,
                       q0: integer, r0: integer, w: integer, h: integer) -> integer {
   hits = 0;
@@ -433,6 +441,7 @@ pub fn edge_block_full(e: EdgeSet, qa: integer, ra: integer, qb: integer, rb: in
 // the top of the range: blocked, but collide() will report no usable normal.
 pub const SURF_NONE = 65535;
 
+// Example: @HXE-007
 pub fn edge_block(e: EdgeSet, qa: integer, ra: integer, qb: integer, rb: integer) {
   edge_block_surf(e, qa, ra, qb, rb, SURF_NONE);
 }
@@ -442,6 +451,7 @@ pub fn edge_blocked(e: EdgeSet, qa: integer, ra: integer, qb: integer, rb: integ
 }
 
 // THE COLLISION RESPONSE QUERY: blocked?, and the EXACT outward normal to bounce off.
+// Example: @HXE-007
 pub fn collide(e: EdgeSet, s: Surfaces,
                qa: integer, ra: integer, qb: integer, rb: integer) -> (boolean, float, float) {
   id = edge_surf(e, qa, ra, qb, rb);
@@ -452,6 +462,7 @@ pub fn collide(e: EdgeSet, s: Surfaces,
 }
 
 // THE collision query.  Everything else is construction.
+// Example: @HXE-010
 pub fn passable(e: EdgeSet, qa: integer, ra: integer, qb: integer, rb: integer) -> boolean {
   !edge_blocked(e, qa, ra, qb, rb)
 }
@@ -482,11 +493,52 @@ pub fn passable(e: EdgeSet, qa: integer, ra: integer, qb: integer, rb: integer) 
 //
 // EXTRACTION: this belongs with `passable`/`collide` and travels with them when hexedge
 // is packaged — every consumer that moves a body over the field needs it.
+// Example: @HXE-002
+// Example: @HXE-004
+// Example: @HXE-005
 pub fn sweep_path(e: EdgeSet, x0: float, y0: float, x1: float, y1: float)
+    -> (float, integer, integer, integer) {
+  (sq, sr) = hex_at(x0, y0);
+  sweep_path_from(e, sq, sr, x0, y0, x1, y1)
+}
+
+// THE SAME SWEEP, TOLD WHICH CELL IT STARTS IN — and the one to call in a movement loop.
+//
+// `sweep_path` derives the starting cell with `hex_at`, and that is exactly what a caller
+// cannot afford on the step AFTER a stop. Stopping at a wall leaves the position exactly ON
+// the bisector between two cells (the comment in the loop below says so: it is the normal
+// state, not an edge case), and `hex_at` on a bisector does not toss a coin — measured over
+// all six directions, it answers the FAR cell every time. So the next call starts past the
+// wall with the wall behind it, sees nothing, and reports the whole segment clear. The
+// symptom is "collision does not work"; the truth is that it worked for exactly one step.
+//
+// The cure is not a tolerance. The previous call already RETURNED the cell you are resting
+// in, so hand it back: `(t, cq, cr, d) = sweep_path_from(e, cq, cr, …)`, threading `cq, cr`
+// from one step to the next. Pressing on into the wall then answers `t = 0` in the cell you
+// are in, which is the honest answer, and sliding along the wall works from the same call.
+//
+// WHY NOT A SKIN. The consumer-side workaround is to come to rest a small distance short
+// (moros#10 used 1 cm at its scale), and it does work — but the smallest distance that works
+// is not a constant. Measured: 1e-15 at the origin, 1e-11 about 1.7e3 world units out,
+// 1e-9 about 1.7e6 out. It is a float-resolution floor, not a geometric clearance, so a
+// constant chosen at one extent is silently wrong at another and the library has no better
+// idea of the right value than the caller does. Threading the cell needs no such number.
+//
+// THE FAR-FIELD LIMIT, which no cure removes: past roughly 5e6 cells from the origin a
+// double position can no longer hold "on the bisector" to better than this code's 1e-9
+// tolerance (measured: the recoverable offset from an absolute position loses 2.9e-10 at
+// 3e6 cells and 6.4e-10 at 1e7). At that point the position itself is the limit, not the
+// sweep, and the fix is to recentre the world rather than the arithmetic.
+//
+// Example: @HXE-002
+// Example: @HXE-003
+pub fn sweep_path_from(e: EdgeSet, sq: integer, sr: integer,
+                       x0: float, y0: float, x1: float, y1: float)
     -> (float, integer, integer, integer) {
   vx = x1 - x0;
   vy = y1 - y0;
-  (cq, cr) = hex_at(x0, y0);
+  cq = sq;
+  cr = sr;
   pq = cq;                    // the cell we came from: the ONLY one to exclude
   pr = cr;
   havep = false;
@@ -540,6 +592,7 @@ pub fn sweep_path(e: EdgeSet, x0: float, y0: float, x1: float, y1: float)
 
 // A THIN wall: the cut between the cells of `s` and everything else.  One edge thick,
 // and it separates by construction — in every one of the 24 headings.
+// Example: @HXE-009
 pub fn edges_cut(s: HexSet, e: EdgeSet) {
   for r in hexset_r0(s)..hexset_r0(s) + hexset_h(s) {
     for q in hexset_q0(s)..hexset_q0(s) + hexset_w(s) {
@@ -557,6 +610,7 @@ pub fn edges_cut(s: HexSet, e: EdgeSet) {
 // A SOLID body: every edge incident to an occupied cell, so the cells cannot be entered
 // at all.  This is the cell model expressed in the edge primitive — which is the point:
 // one collision layer serves both.
+// Example: @HXE-009
 pub fn edges_solid(s: HexSet, e: EdgeSet) {
   for r in hexset_r0(s)..hexset_r0(s) + hexset_h(s) {
     for q in hexset_q0(s)..hexset_q0(s) + hexset_w(s) {
@@ -587,6 +641,7 @@ pub fn edges_halfplane_surf(e: EdgeSet, q0: integer, r0: integer, w: integer, h:
 }
 
 // Back-compat: a halfplane wall with no surface recorded.
+// Example: @HXE-009
 pub fn edges_halfplane(e: EdgeSet, q0: integer, r0: integer, w: integer, h: integer,
                        nx: float, ny: float, c: float) {
   edges_halfplane_surf(e, q0, r0, w, h, nx, ny, c, SURF_NONE);
@@ -609,6 +664,7 @@ pub fn edges_halfplane(e: EdgeSet, q0: integer, r0: integer, w: integer, h: inte
 // The walk steps at 0.2 world units.  A hex inradius is sqrt(3)/2 = 0.866, so consecutive
 // samples cannot skip a cell: every cell change is a step to a NEIGHBOUR, and the edge
 // between them is exactly the one to test.
+// Example: @HXE-010
 pub fn sight_clear(e: EdgeSet, m: Materials, x0: float, y0: float, z0: float,
                    x1: float, y1: float, z1: float, opaque_at: float) -> boolean {
   dx = x1 - x0;
@@ -645,6 +701,7 @@ pub fn sight_clear(e: EdgeSet, m: Materials, x0: float, y0: float, z0: float,
 // other direction — a Feature states an INTERVAL in surface parameters (plan #5 P5), and
 // putting a door there means turning that interval back into a position. Without this the
 // only way to place a door on an existing opening is to search for it.
+// Example: @HXE-008
 pub fn surf_point(s: Surfaces, id: integer, t: float) -> (float, float) {
   if id <= 0 || id >= s.sf_n { return (0.0, 0.0); }
   if (s.sf_kind[id] ?? 0) == 1 {

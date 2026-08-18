@@ -22,25 +22,37 @@ Beside `hex_field` (cell sets and their outlines), `hex_way` (centrelines) and `
 Split out of `crawler`/`hexbody` on 2026-07-24, where it had been maintained as two
 byte-identical copies. `SPEC` **L11**: the library owns the shared table.
 
-## A note from a consumer: where `sweep_path` leaves you
+## Moving a body: thread the cell, do not re-derive it
 
-Found while building lavition's editor on this package (moros#10, 2026-07-28), and
-recorded here rather than changed, because it is a caller's obligation and not a defect:
+Found while building lavition's editor on this package (moros#10, 2026-07-28), and now
+answered in the library — **use `sweep_path_from` in a movement loop**:
 
-**A caller must not come to rest exactly at the fraction `sweep_path` returns.** The stop is
-exact and correct, and the position it leaves is *on the bisector between two cells* — so
-the next call's `hex_at(x0, y0)` has to round, and when it rounds to the far cell the sweep
-starts on the other side of the wall with the wall behind it. The character then walks
-through. The symptom is "collision does not work"; the truth is that it worked for exactly
-one step.
+```
+(t, cq, cr, d) = sweep_path_from(e, cq, cr, x0, y0, x1, y1);
+```
 
-The `havep` exclusion in `sweep_path` anticipates this *within* one call — the comment says
-so — but that memory does not survive the return. A fresh call beginning on a bisector has
-no previous cell to exclude and is genuinely ambiguous.
+carrying `cq, cr` from one step to the next. `sweep_path` is the same call with the
+starting cell derived by `hex_at`, which is right for a first step and wrong for the step
+after a stop.
 
-The consumer-side fix is a skin: stop a small distance short along the segment, so the
-resting position is unambiguously on the walkable side. Moros uses 1 cm at its scale.
+**Why.** Stopping at a wall leaves the position exactly *on the bisector between two
+cells* — the normal state, since it is where every blocked sweep ends. `hex_at` there has
+to break a tie, and it does not toss a coin: measured over all six directions it answers
+the **far** cell, every time. So the next call starts past the wall with the wall behind
+it, sees nothing, and reports the whole segment clear. The symptom is "collision does not
+work"; the truth is that it worked for exactly one step. The `havep` exclusion handles
+this *within* one call, but that memory does not survive the return — and the sweep
+already told you the cell, so hand it back.
 
-Whether the library should offer this — a `sweep_path_skin(…)`, or simply returning a
-fraction already backed off — is your call; the arithmetic is trivial and the trap is not
-obvious, which is the argument for it living here.
+**Why not a skin.** Coming to rest a small distance short does work — moros used 1 cm at
+its scale — but the smallest distance that works is not a constant. Measured: `1e-15` at
+the origin, `1e-11` about `1.7e3` world units out, `1e-9` about `1.7e6` out. It is a
+float-resolution floor rather than a geometric clearance, so a value calibrated where it
+was tested is silently wrong elsewhere in the same world, and the library has no better
+idea of the right number than the caller does. That is why there is no `sweep_path_skin`:
+the constant it would need does not exist. Threading the cell needs none.
+
+**The far-field limit**, which no cure removes: past roughly `5e6` cells from the origin a
+double position can no longer hold "on the bisector" to better than this code's `1e-9`
+tolerance. There the position itself is the limit, not the sweep, and the answer is to
+recentre the world rather than the arithmetic. Pinned in `@HXE-002`/`@HXE-003`.

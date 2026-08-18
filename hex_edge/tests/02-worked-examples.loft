@@ -1,0 +1,572 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Worked examples for `hex_edge` (@PLN141).  Each `test_*` below is a REAL,
+// run-every-CI demonstration of a contract the signature cannot state; the
+// function it teaches CITES it with `// Example: @HXE-0NN`, and
+// `check_doc_drift.sh examples` fails if a citation goes dangling.  These are
+// teaching examples, distinct from the conformance suite in `01-hex-edge.loft`.
+//
+// WHAT THIS PACKAGE ASKS OF A CALLER.  A wall is DERIVED from the geometry — an
+// edge of the lattice, carrying the id of the analytic surface it belongs to — so
+// the collision proxy cannot drift from the shape it stands for.  What a caller
+// gets wrong is one of three things:
+//
+//   A SLOT that is already taken   id 0 means "no surface", so a fresh set is not
+//                                  empty and the first surface you add is id 1
+//   A RESULT that must be THREADED the sweep returns the cell you are resting in
+//                                  BECAUSE the resting position cannot be turned
+//                                  back into a cell — it is on the bisector
+//   A VALUE that is legal and mute `collide` can answer "blocked" with a normal of
+//                                  (0,0), and reflecting off that does nothing
+//
+// The fixtures are written BY HAND and are as small as the claim allows: one wall,
+// one straight, two cells.  Distances are in the lattice's own world units, in
+// which a hex has circumradius 1 and one hex STEP is sqrt(3) ~ 1.7320508.
+use hex_edge;
+use hex_field;
+
+const SQ3_2 = 0.8660254037844386;
+
+fn centre_x(q: integer, r: integer) -> float { (lattice_k(q, r) as float) * SQ3_2 }
+fn centre_y(q: integer, r: integer) -> float { (lattice_m(q, r) as float) * 0.5 }
+
+// One blocked edge: between (bq,br) and its neighbour in direction `d`.
+fn one_wall(bq: integer, br: integer, d: integer) -> EdgeSet {
+  e = edgeset_new(bq - 6, br - 6, 13, 13);
+  edge_block(e, bq, br, nb_q(bq, br, d), nb_r(bq, br, d));
+  e
+}
+
+fn main() {
+  s = surfaces_new();
+  assert(s.sf_n == 1, "a fresh surface set already holds the reserved id 0");
+}
+
+// @HXE-001 — id 0 IS TAKEN, SO THE FIRST SURFACE YOU ADD IS id 1.
+//
+// A fresh `Surfaces` is not empty: slot 0 is reserved for "no surface", which is what
+// an unblocked edge stores.  So `sf_n` is 1 before you add anything, `surf_straight`
+// hands back 1, and a caller sizing a parallel array off the surface count, or looping
+// `0..sf_n` over "my surfaces", picks up the reserved slot as if it were one of theirs.
+//
+// THE RESERVED SLOT ANSWERS, IT DOES NOT FAIL, which is what makes the mistake quiet:
+// `surf_distance` of id 0 is 1000000.0 (a sentinel far away, so nearest-surface
+// arbitration never picks it) and `surf_normal` is (0,0).  Both are legal floats.
+fn test_surface_id_zero_is_reserved_and_still_answers() {
+  s = surfaces_new();
+  assert(s.sf_n == 1, "a fresh set holds one slot, not none, got {s.sf_n}");
+
+  wall = surf_straight(s, 1.0, 0.0, 2.0);
+  tower = surf_arc(s, 0.0, 0.0, 3.0);
+  assert(wall == 1, "the first surface added is id 1, not 0, got {wall}");
+  assert(tower == 2, "and the second is 2, got {tower}");
+  assert(s.sf_n == 3, "so sf_n counts the reserved slot too, got {s.sf_n}");
+
+  assert(surf_distance(s, 0, 0.0, 0.0) == 1000000.0,
+         "id 0 answers a sentinel distance rather than failing, got"
+         + " {surf_distance(s, 0, 0.0, 0.0)}");
+  (nx, ny) = surf_normal(s, 0, 1.0, 1.0);
+  assert(nx == 0.0 && ny == 0.0,
+         "and a zero normal, which is a legal pair of floats, got ({nx},{ny})");
+}
+
+// @HXE-002 — WHERE A SWEEP LEAVES YOU CANNOT BE TURNED BACK INTO A CELL.
+//
+// Stopping at a wall leaves the position exactly ON the bisector between two cells.
+// That is the normal state, not an edge case — it is where every blocked sweep ends.
+// A point on a bisector is equidistant from both centres, so `hex_at` has to break the
+// tie, and it is not a coin toss: measured over all six directions it answers the FAR
+// cell, every time.
+//
+// SO THE NEXT CALL STARTS PAST THE WALL, with the wall behind it. It sees nothing in
+// the way and reports the whole segment travellable. The symptom a consumer reports is
+// "collision does not work" (moros#10); the truth is that it worked for exactly one
+// step, and the second step is the one that walks through.
+//
+// Nothing about this is float noise — the numbers below are exact halves.
+fn test_a_sweep_comes_to_rest_on_a_bisector_and_hex_at_picks_the_far_cell() {
+  far_side = 0;
+  walked_through = 0;
+  for d in 0..6 {
+    e = one_wall(0, 0, d);
+    nq = nb_q(0, 0, d);
+    nr = nb_r(0, 0, d);
+    x0 = centre_x(0, 0);
+    y0 = centre_y(0, 0);
+    x1 = centre_x(nq, nr);
+    y1 = centre_y(nq, nr);
+
+    (t, cq, cr, bd) = sweep_path(e, x0, y0, x1, y1);
+    assert(t == 0.5, "centre to centre, the wall is exactly halfway, got {t} for d {d}");
+    assert(cq == 0 && cr == 0, "and the stop is in the cell we came from, for d {d}");
+    assert(bd == d, "blocked in the direction we were going, got {bd} for d {d}");
+
+    sx = x0 + t * (x1 - x0);
+    sy = y0 + t * (y1 - y0);
+    (aq, ar) = hex_at(sx, sy);
+    if aq != cq || ar != cr { far_side = far_side + 1; }
+
+    // the very next step, starting from exactly where we were left
+    (t2, _q2, _r2, b2) = sweep_path(e, sx, sy, x1, y1);
+    if b2 < 0 && t2 == 1.0 { walked_through = walked_through + 1; }
+  }
+  assert(far_side == 6,
+         "hex_at names the FAR cell in all six directions -- it does not round at random,"
+         + " got {far_side}");
+  assert(walked_through == 6,
+         "so the next sweep reports the whole segment clear, through the wall, in all six,"
+         + " got {walked_through}");
+}
+
+// @HXE-003 — THREAD THE CELL THE SWEEP GAVE YOU. DO NOT BACK OFF BY A LITTLE.
+//
+// `sweep_path` already returns the cell you are resting in, so the cure for @HXE-002 is
+// to hand it back rather than re-derive it: `sweep_path_from(e, cq, cr, …)`. Pressing on
+// into the wall then answers `t = 0` in the cell you are in, which is the honest answer
+// and needs no tolerance anywhere.
+//
+// THE OBVIOUS ALTERNATIVE IS A SKIN — come to rest a small distance short — and it does
+// work, which is why it is the tempting one. But the smallest distance that works is not
+// a constant. It is a float-resolution floor, so it grows with how far from the origin
+// you are playing:
+//
+//   at the origin           1e-15
+//   ~1.7e3 world units out  1e-11
+//   ~1.7e6 world units out  1e-9
+//
+// A skin calibrated where the author tested is silently wrong somewhere else in the same
+// world, and neither the library nor the caller has any principled way to pick it. That
+// is the argument against `sweep_path_skin(…)`: not that the arithmetic is hard, but that
+// the constant it needs does not exist.
+fn test_threading_the_cell_needs_no_skin_and_a_skin_needs_a_constant_that_does_not_exist() {
+  for d in 0..6 {
+    e = one_wall(0, 0, d);
+    nq = nb_q(0, 0, d);
+    nr = nb_r(0, 0, d);
+    x0 = centre_x(0, 0);
+    y0 = centre_y(0, 0);
+    x1 = centre_x(nq, nr);
+    y1 = centre_y(nq, nr);
+    (t, cq, cr, _bd) = sweep_path(e, x0, y0, x1, y1);
+    sx = x0 + t * (x1 - x0);
+    sy = y0 + t * (y1 - y0);
+
+    (t2, c2q, c2r, b2) = sweep_path_from(e, cq, cr, sx, sy, x1, y1);
+    assert(t2 == 0.0, "pressing on into the wall travels nothing, got {t2} for d {d}");
+    assert(b2 == d, "and still reports the wall, got {b2} for d {d}");
+    assert(c2q == cq && c2r == cr, "in the cell we were resting in, for d {d}");
+  }
+
+  // THE SKIN, MEASURED. A backoff that is enough at the origin is not enough further out.
+  origin_bad = skin_failures(0, 0, 0.000000000000001);
+  far_bad = skin_failures(1000, 1000, 0.000000000000001);
+  assert(origin_bad == 0,
+         "1e-15 of skin is enough at the origin, got {origin_bad} failures");
+  assert(far_bad > 0,
+         "and NOT enough 1.7e3 units out -- the constant does not travel, got {far_bad}"
+         + " failures");
+  assert(skin_failures(1000, 1000, 0.00000000001) == 0,
+         "out there it takes 1e-11, four orders of magnitude more");
+}
+
+// How many of the six directions still land on the far side after backing off `skin`
+// world units along the segment.  Nothing here is library code — it is the consumer-side
+// workaround from moros#10, written out so the test can measure it.
+fn skin_failures(bq: integer, br: integer, skin: float) -> integer {
+  bad = 0;
+  for d in 0..6 {
+    e = one_wall(bq, br, d);
+    nq = nb_q(bq, br, d);
+    nr = nb_r(bq, br, d);
+    x0 = centre_x(bq, br);
+    y0 = centre_y(bq, br);
+    x1 = centre_x(nq, nr);
+    y1 = centre_y(nq, nr);
+    (t, cq, cr, bd) = sweep_path(e, x0, y0, x1, y1);
+    if bd >= 0 {
+      vx = x1 - x0;
+      vy = y1 - y0;
+      vl = sqrt(vx * vx + vy * vy) ?? 1.0;
+      tb = t - ((skin / vl) ?? 0.0);
+      (aq, ar) = hex_at(x0 + tb * vx, y0 + tb * vy);
+      if aq != cq || ar != cr { bad = bad + 1; }
+    }
+  }
+  bad
+}
+
+// @HXE-004 — THERE IS NO STEP SIZE, SO DROPPING FRAMES CANNOT STEP OVER A WALL.
+//
+// The sweep solves for the crossing of each bisector directly — one linear solve per
+// neighbour — so the answer is a function of the SEGMENT, not of how many pieces the
+// caller cut it into. That is the property that makes movement safe on a slow frame or
+// during a long fall, and it is the reason there is no `max_step` parameter to tune.
+//
+// Below, one sweep across six cells and the same motion cut into twelve frames stop in
+// the SAME cell against the SAME wall.
+fn test_the_sweep_has_no_step_size() {
+  e = edgeset_new(-6, -6, 13, 13);
+  edge_block(e, 3, 0, 4, 0);
+  x0 = centre_x(0, 0);
+  y0 = centre_y(0, 0);
+  x1 = centre_x(6, 0);
+  y1 = centre_y(6, 0);
+
+  (t, cq, cr, bd) = sweep_path(e, x0, y0, x1, y1);
+  // the wall's midpoint sits at lattice k = 6+8 = 14, so x = 14 * sqrt(3)/4 = 6.0621778,
+  // against a full run of 12 * sqrt(3)/2 = 10.392305 -- exactly 7/12 of the way
+  assert(cq == 3 && cr == 0, "one sweep stops in (3,0), got ({cq},{cr})");
+  assert(bd == 0, "against the wall to its east, got dir {bd}");
+  assert(t > 0.5833333333 && t < 0.5833333334, "at 7/12 of the segment, got {t}");
+
+  // the same motion, twelve frames, each starting where the last one ended
+  px = x0;
+  py = y0;
+  hq = 0;
+  hr = 0;
+  hd = -1;
+  for i in 0..12 {
+    if hd < 0 {
+      fx = x0 + (((i + 1) as float) / 12.0 ?? 0.0) * (x1 - x0);
+      fy = y0 + (((i + 1) as float) / 12.0 ?? 0.0) * (y1 - y0);
+      (tf, qf, rf, df) = sweep_path(e, px, py, fx, fy);
+      px = px + tf * (fx - px);
+      py = py + tf * (fy - py);
+      if df >= 0 { hq = qf; hr = rf; hd = df; }
+    }
+  }
+  assert(hq == cq && hr == cr && hd == bd,
+         "twelve frames stop in the same cell against the same wall, got ({hq},{hr}) dir"
+         + " {hd}");
+}
+
+// @HXE-005 — THE "NOTHING BLOCKED" SIGNAL IS THE DIRECTION, NEVER A COORDINATE.
+//
+// `sweep_path` returns `(t, q, r, dir)` and says "clear" with `dir < 0`. It is worth
+// knowing why it cannot say it with the cell instead: hex coordinates are SIGNED, so a
+// -1 in `q` or `r` is an ordinary cell in any chunk that spans the origin. The first
+// version of this code used that sentinel and reported "no hit" for every wall at
+// q = -1 — a whole column of walls that worked everywhere except near the origin.
+fn test_the_clear_signal_is_the_direction_because_minus_one_is_a_real_cell() {
+  e = edgeset_new(-6, -6, 13, 13);
+  edge_block(e, -1, 0, 0, 0);                     // the wall on the far side of q = -1
+  x0 = centre_x(-3, 0);
+  y0 = centre_y(-3, 0);
+  x1 = centre_x(2, 0);
+  y1 = centre_y(2, 0);
+  (t, cq, cr, bd) = sweep_path(e, x0, y0, x1, y1);
+  assert(bd >= 0, "the wall is found, got dir {bd}");
+  assert(cq == -1 && cr == 0,
+         "and the cell it stopped in is genuinely q = -1, got ({cq},{cr})");
+  assert(t > 0.0 && t < 1.0, "part-way along, got {t}");
+
+  // and with nothing in the way, the SAME cell coordinates would be no signal at all
+  clear = edgeset_new(-6, -6, 13, 13);
+  (t2, _q, _r, b2) = sweep_path(clear, x0, y0, x1, y1);
+  assert(b2 < 0 && t2 == 1.0, "an empty field travels the whole segment, got {t2}/{b2}");
+}
+
+// @HXE-006 — FIRST-WRITER-WINS IS ORDER-DEPENDENT ON PURPOSE; ARBITRATION IS NOT.
+//
+// `edge_block_surf` keeps whichever surface claimed the edge first. That is the cheap
+// path, and it is correct only where one part can claim an edge. Where two parts MEET,
+// the order in which the caller happened to stamp them decides who owns the shared edge
+// — stamp the wall then the tower and you get a different world than the other way
+// round, which is the class of bug no unit test with one construction order will find.
+//
+// `edge_block_arb` decides on GEOMETRY instead: the surface nearest the edge's contact
+// point wins, ties to the lower id. Below, the same two surfaces are stamped in both
+// orders — 0.87 away and 49.13 away from the shared edge — and only the arbitrated pair
+// agrees with itself.
+fn test_two_parts_meeting_need_arbitration_not_stamping_order() {
+  sf = surfaces_new();
+  near = surf_straight(sf, 1.0, 0.0, 0.0);        // the line x = 0
+  far = surf_straight(sf, 1.0, 0.0, 50.0);        // the line x = 50
+
+  (ex, ey) = edge_point(0, 0, 1, 0);
+  assert(surf_distance(sf, near, ex, ey) > 0.866 && surf_distance(sf, near, ex, ey) < 0.867,
+         "the shared edge is sqrt(3)/2 from the near surface, got"
+         + " {surf_distance(sf, near, ex, ey)}");
+  assert(surf_distance(sf, far, ex, ey) > 49.13 && surf_distance(sf, far, ex, ey) < 49.14,
+         "and 49.13 from the far one, got {surf_distance(sf, far, ex, ey)}");
+
+  a = edgeset_new(-4, -4, 9, 9);
+  edge_block_surf(a, 0, 0, 1, 0, near);
+  edge_block_surf(a, 0, 0, 1, 0, far);
+  b = edgeset_new(-4, -4, 9, 9);
+  edge_block_surf(b, 0, 0, 1, 0, far);
+  edge_block_surf(b, 0, 0, 1, 0, near);
+  assert(edge_surf(a, 0, 0, 1, 0) == near && edge_surf(b, 0, 0, 1, 0) == far,
+         "first-writer-wins hands the edge to whoever was stamped first -- two different"
+         + " worlds from the same two parts");
+
+  c = edgeset_new(-4, -4, 9, 9);
+  edge_block_arb(c, sf, 0, 0, 1, 0, near, 0);
+  edge_block_arb(c, sf, 0, 0, 1, 0, far, 0);
+  d = edgeset_new(-4, -4, 9, 9);
+  edge_block_arb(d, sf, 0, 0, 1, 0, far, 0);
+  edge_block_arb(d, sf, 0, 0, 1, 0, near, 0);
+  assert(edge_surf(c, 0, 0, 1, 0) == near && edge_surf(d, 0, 0, 1, 0) == near,
+         "arbitration gives the edge to the NEARER surface either way, got"
+         + " {edge_surf(c, 0, 0, 1, 0)} and {edge_surf(d, 0, 0, 1, 0)}");
+}
+
+// @HXE-007 — "BLOCKED" AND "BOUNCEABLE" ARE TWO DIFFERENT ANSWERS.
+//
+// `edge_block` marks an edge with no recoverable geometry — `SURF_NONE`, which is 65535
+// rather than -1 because the slot is unsigned. `collide` on such an edge answers
+// `(true, 0.0, 0.0)`: genuinely blocked, and with a normal that is a legal pair of
+// floats carrying no direction.
+//
+// REFLECT A VELOCITY OFF (0,0) AND NOTHING HAPPENS — `v - 2(v·n)n` is `v`. So a body
+// meeting a bare blocker keeps its velocity and grinds along it, and the tuple's type
+// says nothing about which case you have. Check the normal, not just the flag: use
+// `edge_block_surf` with a real surface wherever a bounce matters.
+fn test_a_bare_blocker_is_blocked_with_no_usable_normal() {
+  sf = surfaces_new();
+  wall = surf_straight(sf, 1.0, 0.0, 0.0);
+
+  bare = edgeset_new(-4, -4, 9, 9);
+  edge_block(bare, 0, 0, 1, 0);
+  assert(edge_surf(bare, 0, 0, 1, 0) == SURF_NONE,
+         "a bare blocker stores the sentinel 65535, got {edge_surf(bare, 0, 0, 1, 0)}");
+  assert(!passable(bare, 0, 0, 1, 0), "and the edge is not passable");
+  (b1, nx1, ny1) = collide(bare, sf, 0, 0, 1, 0);
+  assert(b1, "collide agrees it is blocked");
+  assert(nx1 == 0.0 && ny1 == 0.0,
+         "but hands back a zero normal, got ({nx1},{ny1}) -- reflecting off it is a no-op");
+
+  known = edgeset_new(-4, -4, 9, 9);
+  edge_block_surf(known, 0, 0, 1, 0, wall);
+  (b2, nx2, ny2) = collide(known, sf, 0, 0, 1, 0);
+  assert(b2 && nx2 == 1.0 && ny2 == 0.0,
+         "an edge that names its surface bounces exactly, got ({nx2},{ny2})");
+}
+
+// @HXE-008 — A FEATURE RETARGETS THE MATERIAL AND NEVER THE SURFACE.
+//
+// A door is not a hole in the wall. `apply_features` gives the edges inside a feature's
+// interval that feature's MATERIAL, and leaves the surface id exactly as it was — so the
+// wall is still one wall to everything that reasons about geometry (the bounce normal,
+// the junction check, a matcher looking for a straight run), while the physics of that
+// stretch changes.
+//
+// Cut the surface instead and a doorway becomes two walls that happen to be collinear,
+// which is how a body starts catching on its own doorframe.
+fn test_a_door_changes_the_material_and_leaves_the_wall_one_wall() {
+  sf = surfaces_new();
+  wall = surf_straight(sf, 0.0, 1.0, 0.0);        // the line y = 0, normal +y
+
+  m = materials_new();
+  stone = material_add(m, true, 3.0, 1.0, 0.2, 0.0, 0.3);
+  doorway = material_add(m, false, 3.0, 0.0, 1.0, 1.0, 0.0);
+
+  e = edgeset_new(-4, -4, 9, 9);
+  // a run of edges along one row, every one of them owned by the same straight
+  for q in -2..3 { edge_block_full(e, q, 0, nb_q(q, 0, 2), nb_r(q, 0, 2), wall, stone); }
+
+  f = features_new();
+  (dx, _dy) = edge_point(0, 0, nb_q(0, 0, 2), nb_r(0, 0, 2));
+  t = surf_param(sf, wall, dx, 0.0);
+  feature_add(f, wall, t - 0.4, t + 0.4, 0.0, 2.0, FEAT_DOOR, doorway);
+
+  before = edge_surf(e, 0, 0, nb_q(0, 0, 2), nb_r(0, 0, 2));
+  hits = apply_features(e, sf, f, -4, -4, 9, 9);
+  assert(hits > 0, "the door lands on at least one edge, got {hits}");
+  assert(edge_mat(e, 0, 0, nb_q(0, 0, 2), nb_r(0, 0, 2)) == doorway,
+         "the doorway edge takes the door's material");
+  assert(edge_surf(e, 0, 0, nb_q(0, 0, 2), nb_r(0, 0, 2)) == before,
+         "and keeps the surface it had -- the wall is still one wall");
+
+  // the whole run still names one surface, which is what a geometry consumer reads
+  same = 0;
+  for q2 in -2..3 {
+    if edge_surf(e, q2, 0, nb_q(q2, 0, 2), nb_r(q2, 0, 2)) == wall { same = same + 1; }
+  }
+  assert(same == 5, "all five edges still belong to the one straight, got {same}");
+  assert(!mat_solid(m, doorway) && mat_solid(m, stone),
+         "while the physics of that stretch is what changed");
+
+  // and the interval is stated in the surface's own parameter, which goes both ways --
+  // `surf_param` asks where a point sits, `surf_point` puts you back there exactly
+  (bx, by) = surf_point(sf, wall, 2.5);
+  assert(surf_param(sf, wall, bx, by) == 2.5,
+         "surface parameter round-trips exactly, got {surf_param(sf, wall, bx, by)}");
+}
+
+// @HXE-009 — A WALL YOU CAN BE INSIDE, OR A BODY YOU CANNOT ENTER.
+//
+// Two ways to turn the same cells into collision, and they are not degrees of the same
+// thing. `edges_cut` marks only the boundary — the cut between the set and everything
+// else — so the region has an INTERIOR you can move around in: a building. `edges_solid`
+// marks every edge touching an occupied cell, so the cells cannot be entered at all: a
+// pillar, a rock.
+//
+// On the same seven-cell disc that is 18 edges against 30, and the difference is entirely
+// the twelve edges INSIDE. Pick `edges_solid` for a building and it has no rooms; pick
+// `edges_cut` for a rock and a body walks into the middle of it and is then trapped by
+// its own wall.
+fn test_a_cut_has_an_interior_and_a_solid_does_not() {
+  s = hexset_chunk(-3, -3, 7, 7);
+  hexdisk_into(s, 0, 0, 1);
+  assert(hexset_count(s) == 7, "a centre and its ring of six, got {hexset_count(s)}");
+
+  cut = edgeset_new(-4, -4, 9, 9);
+  edges_cut(s, cut);
+  solid = edgeset_new(-4, -4, 9, 9);
+  edges_solid(s, solid);
+
+  assert(marked(cut) == 18,
+         "the boundary is 6 ring cells x 3 outward edges = 18, got {marked(cut)}");
+  assert(marked(solid) == 30,
+         "and the solid body adds the 12 interior edges, got {marked(solid)}");
+
+  assert(passable(cut, 0, 0, 1, 0),
+         "inside a cut region you can move: centre to ring is open");
+  assert(!passable(solid, 0, 0, 1, 0),
+         "inside a solid one you cannot -- the same step is blocked");
+  assert(!passable(cut, 1, 0, 2, 0) && !passable(solid, 1, 0, 2, 0),
+         "both stop you leaving, which is the half they agree on");
+
+  // The third constructor is not a cell set at all: `edges_halfplane` marks every edge a
+  // LINE crosses, so a wall can run at any angle and is still exactly one edge thick.
+  // What it promises is SEPARATION, not a count, so that is what is measured -- at a
+  // heading the lattice has no axis for, which is where a cell-shaped wall would leak.
+  fence = edgeset_new(-6, -6, 13, 13);
+  edges_halfplane(fence, -6, -6, 13, 13, 0.0, 1.0, 0.5);
+  crossed = 0;
+  stayed = 0;
+  for i in 0..21 {
+    x = 0.0 - 5.0 + (i as float) * 0.5;
+    (_t, _q, _r, d) = sweep_path(fence, x, -2.0, x + 1.0, 4.0);
+    if d >= 0 { crossed = crossed + 1; }
+    (_t2, _q2, _r2, d2) = sweep_path(fence, x, -3.0, x + 1.0, -1.0);
+    if d2 < 0 { stayed = stayed + 1; }
+  }
+  assert(crossed == 21, "every path across the line is stopped, got {crossed} of 21");
+  assert(stayed == 21, "and every path that stays on one side is clear, got {stayed} of 21");
+
+  diagonal = edgeset_new(-6, -6, 13, 13);
+  edges_halfplane(diagonal, -6, -6, 13, 13, 0.7071067811865476, 0.7071067811865476, 0.5);
+  diag = 0;
+  for i2 in 0..21 {
+    x2 = 0.0 - 6.0 + (i2 as float) * 0.4;
+    (_t3, _q3, _r3, d3) = sweep_path(diagonal, x2 - 3.0, -4.0, x2 + 3.0, 4.0);
+    if d3 >= 0 { diag = diag + 1; }
+  }
+  assert(diag == 21,
+         "a wall at 45 degrees -- no lattice axis -- separates just as completely, got"
+         + " {diag} of 21");
+}
+
+// Every marked edge in the set, counted once: three canonical directions per cell own
+// each edge exactly once.
+fn marked(e: EdgeSet) -> integer {
+  n = 0;
+  for r in -4..5 {
+    for q in -4..5 {
+      for d in 0..3 { if edge_blocked(e, q, r, nb_q(q, r, d), nb_r(q, r, d)) { n = n + 1; } }
+    }
+  }
+  n
+}
+
+// @HXE-010 — SIGHT READS THE MATERIAL. MOVEMENT DOES NOT.
+//
+// A material carries six transmission terms, and the reason given for the vector is that
+// consumers want different ones: a chain-link fence is solid and transparent, a hedge is
+// permeable and opaque. Sight honours that — `sight_clear` reads `opacity` and `height`,
+// so a transparent edge stops a body and not a look.
+//
+// MOVEMENT DOES NOT READ ANY OF THEM. `passable` and `sweep_path` take an `EdgeSet` and no
+// `Materials`, so what blocks you is the MARK on the edge and nothing else. The sharpest
+// form of that: `material_set_solid` is documented as the dynamic-material mechanism — "a
+// level-crossing barrier, a door, a portcullis" — and lowering `solid` to false leaves
+// `passable` false and the sweep stopping in exactly the same place. Raising the
+// portcullis does not open it.
+//
+// So of the six terms, two change an answer in this package (`opacity`, `height`, both in
+// `sight_clear`) and four are data for the consumer to read: `solid`, `sound`, `perm`,
+// `bounce`. Clearing the edge mark is what opens a gate; the material says what kind of
+// gate it was.
+fn test_sight_reads_the_material_and_movement_does_not() {
+  sf = surfaces_new();
+  wall = surf_straight(sf, 1.0, 0.0, 0.0);
+  m = materials_new();
+  gate = material_add(m, true, 3.0, 1.0, 0.0, 0.0, 0.0);     // opaque, closed
+
+  e = edgeset_new(-4, -4, 9, 9);
+  edge_block_full(e, 0, 0, 1, 0, wall, gate);
+  ex = centre_x(0, 0);
+  ey = centre_y(0, 0);
+  tx = centre_x(1, 0);
+  ty = centre_y(1, 0);
+
+  assert(!passable(e, 0, 0, 1, 0), "closed, so you cannot walk through");
+  assert(!sight_clear(e, m, ex, ey, 1.0, tx, ty, 1.0, 0.5), "and cannot see through");
+
+  // raise it -- the documented dynamic-material mechanism
+  material_set_solid(m, gate, false);
+  assert(!mat_solid(m, gate), "the table now says the gate is open");
+  assert(!passable(e, 0, 0, 1, 0),
+         "and movement is UNCHANGED -- passable never consults a material");
+  (t, cq, cr, d) = sweep_path(e, ex, ey, centre_x(2, 0), centre_y(2, 0));
+  assert(d == 0 && cq == 0 && cr == 0,
+         "the sweep still stops at the raised gate, got dir {d} in ({cq},{cr})");
+  assert(t == 0.25, "in exactly the same place as before, got {t}");
+
+  // sight, by contrast, follows the material it is given
+  clear_mat = material_add(m, true, 3.0, 0.0, 0.0, 0.0, 0.0);   // solid, TRANSPARENT
+  g = edgeset_new(-4, -4, 9, 9);
+  edge_block_full(g, 0, 0, 1, 0, wall, clear_mat);
+  assert(!passable(g, 0, 0, 1, 0), "a chain-link fence still stops a body");
+  assert(sight_clear(g, m, ex, ey, 1.0, tx, ty, 1.0, 0.5),
+         "and does not stop a look -- sight reads opacity, movement reads the mark");
+
+  // The other three terms are stored and readable and change no answer in this package.
+  // That is not a gap to fix here: they are what a consumer's audio, fluid and bounce
+  // code reads off the same edge, which is the reason a material is a vector at all.
+  hedge = material_add(m, false, 1.5, 1.0, 12.5, 0.75, 0.1);
+  assert(mat_sound(m, hedge) == 12.5, "sound is carried, got {mat_sound(m, hedge)}");
+  assert(mat_perm(m, hedge) == 0.75, "permeability too, got {mat_perm(m, hedge)}");
+  assert(mat_bounce(m, hedge) == 0.1, "and bounce, got {mat_bounce(m, hedge)}");
+
+  h = edgeset_new(-4, -4, 9, 9);
+  edge_block_full(h, 0, 0, 1, 0, wall, hedge);
+  assert(!passable(h, 0, 0, 1, 0),
+         "a hedge declared permeable still stops a body -- the mark is what blocks");
+}
+
+// @HXE-011 — A JUNCTION RECORDS WHAT WAS INTENDED, SO A CORNER IS NOT A KINK.
+//
+// Where two surfaces meet, "the tangents disagree" is not by itself an error: a building
+// corner is supposed to disagree, and a wall running into a round tower is supposed to
+// agree. Without the recorded intent the same measurement has to mean both, so either
+// every corner is a defect or no broken smooth join is.
+//
+// `junction_ok` therefore checks the tangent AGAINST the declared kind: `JOIN_SMOOTH`
+// wants the normals parallel, `JOIN_CORNER` wants them not. Below, one pair of
+// perpendicular walls is a valid corner and an invalid smooth join -- the same geometry,
+// two verdicts, and the declaration is the whole difference.
+fn test_a_junction_is_checked_against_the_continuity_it_declared() {
+  sf = surfaces_new();
+  ew = surf_straight(sf, 1.0, 0.0, 0.0);          // the line x = 0
+  ns = surf_straight(sf, 0.0, 1.0, 0.0);          // the line y = 0
+  tower = surf_arc(sf, 5.0, 0.0, 5.0);            // touches x = 0 at the origin
+
+  j = junctions_new();
+  junction_add(j, ew, ns, JOIN_CORNER, 0.0, 0.0);
+  junction_add(j, ew, ns, JOIN_SMOOTH, 0.0, 0.0);
+  junction_add(j, ew, tower, JOIN_SMOOTH, 0.0, 0.0);
+
+  assert(junction_ok(j, 0, sf), "two perpendicular walls ARE a valid deliberate corner");
+  assert(!junction_ok(j, 1, sf),
+         "and the same two are NOT a valid smooth join -- the intent is what decides");
+  assert(junction_ok(j, 2, sf),
+         "a wall meeting a tower tangentially is a valid smooth join");
+
+  // G0 is the other half, and it is separate: both surfaces must pass through the seam
+  assert(junction_g0(j, 2, sf, 0.000001),
+         "and both surfaces really do pass through the seam point");
+}
