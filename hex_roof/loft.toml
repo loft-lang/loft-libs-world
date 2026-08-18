@@ -1,8 +1,18 @@
 [package]
 name    = "hex_roof"
-version = "0.1.0"
+version = "0.1.1"
 loft    = ">=0.8"
 
+# 0.1.1 is a WARNING-ONLY fix and changes no behaviour: `roof_hip`'s fill loop
+# named a counter it never read, which a newer loft diagnoses as `never-read`
+# and which fails this package -- and `hex_draw` and `hex_fit`, which reach it
+# as a dependency -- under the unified library-ci's LOFT_DENY_WARNINGS=1.
+#
+# ⚠ It is released rather than left on main because the PUBLISHED 0.1.0 tarball
+# carries the warning, so a registry consumer running its own CI under
+# LOFT_DENY_WARNINGS=1 hits it from this library's source and cannot fix it.
+# That is the whole reason for the version: nothing about the API or the data
+# moved, and both pins say so.
 api_compatible_with  = "0.1.0"   # oldest own release this is a drop-in for
 data_compatible_with = "0.1.0"   # oldest own release whose stored data this reads
 [library]
