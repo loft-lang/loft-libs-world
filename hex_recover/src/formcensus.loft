@@ -127,6 +127,7 @@ fn oriented_keys(cells: HexSet, o: integer) -> vector<integer> {
 // THE DIGEST: the lexicographically smallest of the 12 oriented, translated, sorted key vectors.
 // Two cell sets have the same digest **iff** one is an orientation-image of the other — which is
 // exactly "the same stencil", and makes law I visible from the census side.
+// Example: @HXV-001
 pub fn field_digest(cells: HexSet) -> vector<integer> {
   best = oriented_keys(cells, 0);
   for di in 1..12 {
@@ -166,6 +167,7 @@ pub fn form_key(f: Form) -> text {
   s
 }
 
+// Example: @HXV-002
 pub fn form_key_noturn(f: Form) -> text {
   s = "h{f.fm_h0}|";
   lens = f.fm_len;
@@ -176,6 +178,7 @@ pub fn form_key_noturn(f: Form) -> text {
 // The DEGRADED digest for the second control: cell COUNT alone. A census keyed on a summary
 // instead of the shape collides immediately — both level-1 triangle classes have 3 cells — which
 // is what proves the real digest is carrying the weight.
+// Example: @HXV-002
 pub fn count_digest(cells: HexSet) -> integer { hexset_count(cells) }
 
 // Are two turn sequences the SAME CLOSED CYCLE, written from a different corner?
@@ -185,6 +188,7 @@ pub fn count_digest(cells: HexSet) -> integer { hexset_count(cells) }
 // (h0, turns) — so the census MUST, or it reports a stencil as several and its collisions as law F
 // failures.  This is the census discovering a requirement on the canonical text (S6): fixing the
 // winding (C3) is not enough, the starting CORNER has to be fixed too.
+// Example: @HXV-006
 pub fn turns_cyclic_eq(a: vector<integer>, b: vector<integer>) -> boolean {
   n = len(a);
   if len(b) != n { return false; }
@@ -213,6 +217,7 @@ pub fn turns_cyclic_eq(a: vector<integer>, b: vector<integer>) -> boolean {
 // translation quotient (every entry is drawn at the same anchor, so position is part of the
 // answer). Using the census digest here reported 17 false law F failures on a 10-entry corpus
 // before the distinction was drawn.
+// Example: @HXV-001
 pub fn field_exact(cells: HexSet) -> vector<integer> {
   raw: vector<integer> = [];
   for xr in hexset_r0(cells)..hexset_r0(cells) + hexset_h(cells) {
@@ -234,6 +239,7 @@ pub fn field_exact_text(cells: HexSet) -> text { digest_text(field_exact(cells))
 //   field_digest   quotient orientation + translation   "how many SHAPES?"        (census, law I)
 //   field_exact    quotient nothing                     "is draw INJECTIVE?"      (corpus, law F)
 //   field_norm     quotient translation only            "which STENCIL is this?"  (rebuild, R1)
+// Example: @HXV-001
 pub fn field_norm(cells: HexSet) -> vector<integer> { oriented_keys(cells, 0) }
 
 pub fn field_norm_text(cells: HexSet) -> text { digest_text(field_norm(cells)) }
@@ -256,6 +262,7 @@ pub fn form_maxlen(f: Form) -> integer {
 }
 
 // Every admitted 3-sided form with all side lengths in 1..maxlen, canonicalised and deduplicated.
+// Example: @HXV-009
 pub fn forms_upto(maxlen: integer) -> vector<Form> {
   out: vector<Form> = [];
   texts: vector<text> = [];
@@ -286,6 +293,7 @@ pub fn forms_upto(maxlen: integer) -> vector<Form> {
 }
 
 // Only the forms NEW at this level — longest side exactly `n`.
+// Example: @HXV-009
 pub fn forms_at_level(n: integer) -> vector<Form> {
   all = forms_upto(n);
   out: vector<Form> = [];
@@ -303,6 +311,7 @@ pub fn forms_at_level(n: integer) -> vector<Form> {
 // sides, so it is achiral and its mirror is just a rotation.  Unequal sides make a form and its
 // mirror genuinely different texts — `turn 3,5,4` against `turn 3,4,5` — that draw mirror-image
 // fields and therefore share a SHAPE digest.  That is law **I**, not a law F failure.
+// Example: @HXV-007
 pub fn turns_reverse_eq(a: vector<integer>, b: vector<integer>) -> boolean {
   n = len(a);
   if len(b) != n { return false; }

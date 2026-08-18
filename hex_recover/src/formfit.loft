@@ -19,11 +19,54 @@ use hex_field;
 use hex_form;
 use formcensus;
 
-// A compact window: every level-1 shape is a handful of cells around the anchor.
-const FW = 25;
-const FH = 25;
-const FQ0 = -12;
-const FR0 = -12;
+// ── THE WINDOW EVERY REDRAW GOES INTO — SIZED FROM THE FORM, NOT FROM A GUESS ─
+//
+// Recovery draws a candidate and compares it with the field. That redraw needs a chunk, and the
+// chunk used to be a constant 25x25 around the anchor -- "a compact window: every level-1 shape
+// is a handful of cells around the anchor", which was true of the enumeration and FALSE of the
+// thing that replaced it. `form_fill` clips to the chunk silently, so an oversized form redrew
+// SHORT and the comparison then reported the exact answer it had just computed as R2 content.
+// An equilateral triangle of side 13 came back "R2, residual 2" with `rb_form` exactly right;
+// at an odd (vertex-direction) heading the refusal started at side 7 -- an 85-cell shape refused
+// while a 105-cell one passed, because the limit was never a size, it was a DISTANCE from the
+// anchor and the two headings cover it at different rates.
+//
+// So the window is derived. `form_fill` sets exactly the cells whose lattice centre `(2q + (r&1),
+// 3r)` lies on or inside the turtle polygon, and `form_poly_k`/`form_poly_m` give that polygon's
+// corners; its bounding box therefore bounds the drawing. Every `head_step` moves `m` by a
+// multiple of 3, so `r` is bounded exactly; `k` gives `q` within one, and a one-cell pad on every
+// side absorbs that. Costs nothing -- for the shipped candidate set the derived window is far
+// SMALLER than the old constant, so the census got faster as well as correct.
+fn fdiv(a: integer, b: integer) -> integer {
+  q = (a / b) ?? 0;
+  if a < 0 && q * b != a { return q - 1; }
+  q
+}
+
+// Example: @HXV-003
+pub fn fit_chunk(f: Form) -> HexSet {
+  vk = form_poly_k(f);
+  vm = form_poly_m(f);
+  n = len(vk);
+  if n == 0 { return hexset_chunk(0, 0, 1, 1); }
+  mink = vk[0] ?? 0;
+  maxk = mink;
+  minm = vm[0] ?? 0;
+  maxm = minm;
+  for bi in 0..n {
+    kk = vk[bi] ?? 0;
+    mm = vm[bi] ?? 0;
+    if kk < mink { mink = kk; }
+    if kk > maxk { maxk = kk; }
+    if mm < minm { minm = mm; }
+    if mm > maxm { maxm = mm; }
+  }
+  r0 = fdiv(minm, 3) - 1;
+  r1 = fdiv(maxm, 3) + 1;
+  q0 = fdiv(mink - 1, 2) - 1;
+  q1 = fdiv(maxk, 2) + 1;
+  hexset_chunk(q0, r0, q1 - q0 + 1, r1 - r0 + 1)
+}
 
 pub const REGIME_R1 = 1;
 pub const REGIME_R2 = 2;
@@ -48,6 +91,7 @@ pub const LEVEL = 2;
 // ENUMERATING THIS IS THE EXPENSIVE PART, so callers that recover many fields must build it ONCE
 // and pass it to `rebuild_with`. `rebuild` re-enumerates on every call, which is fine for a single
 // lookup and quadratic waste over a corpus.
+// Example: @HXV-004
 pub fn candidate_forms() -> vector<Form> {
   out = forms_upto(LEVEL);
   a3 = forms_a3();
@@ -99,6 +143,7 @@ fn sym_diff(a: vector<integer>, b: vector<integer>) -> integer {
 
 // THE ROUTINE. Match the field against every admitted form, translation-normalised — WHERE it was
 // drawn is placement's business (the `place` element), not the stencil's.
+// Example: @HXV-005
 pub fn rebuild(cells: HexSet) -> Rebuilt { rebuild_with(candidate_forms(), cells) }
 
 // The core, with the candidate set supplied — build it once per gate run, not once per lookup.
@@ -109,7 +154,7 @@ pub fn rebuild_with(cand: vector<Form>, cells: HexSet) -> Rebuilt {
   rho = -1;
   for ci in 0..len(cand) {
     cf = cand[ci] ?? form_new(0, [], []);
-    cc = hexset_chunk(FQ0, FR0, FW, FH);
+    cc = fit_chunk(cf);
     form_fill(cf, 0, 0, cc);
     got = field_norm(cc);
     d = sym_diff(want, got);
@@ -174,11 +219,12 @@ pub struct RecoveryIndex {
   ri_fills:      integer,   // draws performed to build it (the cost, reported not guessed)
 }
 
+// Example: @HXV-002
 pub fn index_build(cand: vector<Form>) -> RecoveryIndex {
   idx = RecoveryIndex { ri_map: [], ri_count: 0, ri_collisions: 0, ri_fills: 0 };
   for ii in 0..len(cand) {
     cf = cand[ii] ?? form_new(0, [], []);
-    cc = hexset_chunk(FQ0, FR0, FW, FH);
+    cc = fit_chunk(cf);
     form_fill(cf, 0, 0, cc);
     idx.ri_fills = idx.ri_fills + 1;
     dg = field_norm_text(cc);
@@ -199,6 +245,7 @@ pub fn index_build(cand: vector<Form>) -> RecoveryIndex {
 // A MISS falls back to the scan, and only then, purely to compute the R2 residual. R2 is the
 // exceptional path (content no grammar form draws), so paying O(N) there costs nothing in
 // practice and keeps `rho > 0` a real measurement rather than a placeholder.
+// Example: @HXV-008
 pub fn rebuild_indexed(idx: RecoveryIndex, cand: vector<Form>, cells: HexSet) -> Rebuilt {
   hit = idx.ri_map[field_norm_text(cells)];
   if hit != null {
@@ -339,6 +386,8 @@ pub fn side_len(dk: integer, dm: integer, h: integer) -> integer {
 }
 
 // THE ROUTINE: recover the form from the field, then verify by re-drawing it.
+// Example: @HXV-003
+// Example: @HXV-004
 pub fn rebuild_construct(cells: HexSet) -> Rebuilt {
   hk = hull_keys(cells);
   nh = len(hk);
@@ -377,7 +426,7 @@ pub fn rebuild_construct(cells: HexSet) -> Rebuilt {
                      rb_rho: hexset_count(cells), rb_matches: 0 };
   }
   // VERIFY by re-drawing. The construction proposes; this confirms, so `rho = 0` stays measured.
-  chk = hexset_chunk(FQ0, FR0, FW, FH);
+  chk = fit_chunk(cf);
   form_fill(cf, 0, 0, chk);
   d2 = sym_diff(field_norm(cells), field_norm(chk));
   if d2 == 0 {

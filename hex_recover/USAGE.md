@@ -39,3 +39,13 @@ Run them yourself: `loft --interpret --tests tests` from the `hex_recover/` dire
   a *reason* and an *offer*, and your editor should show them rather than treating the call as failed.
 - **No `ε` in an R1 comparison.** For content you authored, recovery is exact; a tolerance there is
   a defect, not a knob (`SPEC` **P4**).
+- **`rho` is a COUNT of cells, not a distance.** It does not shrink towards a match. On the
+  constructive path it is the number of cells the field's own convex hull ADDS, so a ring of six
+  scores `rho 1` — the smallest positive value there is, and still a flat refusal, because no
+  grammar form has a hole. Read a small `rho` as *"the hull is tight"*, never as *"nearly a
+  stencil"* (`@HXV-005`).
+- **Recovery does not depend on which way the stencil faces, or on how big it is.** It used to:
+  the redraw that verifies a construction went into a fixed 25×25 window and clipped anything
+  larger, so a side-13 triangle came back R2 with the right answer in hand, and at a vertex
+  heading an 85-cell shape was refused while a 105-cell one passed. Fixed in 0.1.1; the window is
+  derived from the form (`fit_chunk`), and `@HXV-003` pins it at all twelve headings.

@@ -14,6 +14,12 @@ Part of the `hex_*` family beside `hex_field` (cell sets), `hex_grid` (the latti
 (collision), `hex_way` (linework) and `hex_roof` (height profiles). Produced by **hexbody**, the
 workshop that proves the family against an exact round trip.
 
+**Two routines, two reaches.** `rebuild` matches the field against the ENUMERATED candidate set
+(three sides up to `LEVEL`, plus four to six sides at length 1), so its R2 means *"nothing in the
+admitted set draws this"* — not *"no stencil draws this"*. `rebuild_construct` enumerates nothing
+and is bounded only by the field: an unequal-sided house is R2 to the first and R1 to the second,
+and both answers are correct.
+
 ## Using it
 
 Add the dependency, `use hex_recover;`, and call the maps below. **`USAGE.md` is the worked guide**, with

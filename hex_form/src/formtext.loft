@@ -89,7 +89,11 @@ fn cmp_vec(a: vector<integer>, b: vector<integer>) -> integer {
 // Example: @HXF-004
 pub fn form_canon(f: Form) -> Form {
   n = len(f.fm_len);
-  if n == 0 { return f; }
+  // A FRESH value on this path too, never the parameter itself. Returning a by-value struct
+  // PARAMETER on one path and a fresh value on another leaks the fresh one -- one store per
+  // call, on the path that IS taken, on both backends (loft#982). `form_canon` is called once
+  // per admitted form by every enumerator, so the census leaked thousands of `Form`s.
+  if n == 0 { return form_new(f.fm_h0, f.fm_len, f.fm_turn); }
   bt = shift_turns(f.fm_turn, 0);
   bl = shift_lens(f.fm_len, 0);
   bh = shift_h0(f, 0);

@@ -1,0 +1,506 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Worked examples for `hex_recover` (@PLN141).  Each `test_*` below is a REAL,
+// run-every-CI demonstration of a contract the signature cannot state; the
+// function it teaches CITES it with `// Example: @HXV-0NN`, and
+// `check_doc_drift.sh examples` fails if a citation goes dangling.  These are
+// teaching examples, distinct from the conformance suite in `01-hex-recover.loft`.
+//
+// WHAT THIS PACKAGE ASKS OF A CALLER.  Recovery is EXACT — integers throughout,
+// no epsilon anywhere, and none is wanted (`SPEC` **P4**).  What a caller gets
+// wrong is never the arithmetic; it is one of three things:
+//
+//   WHICH DIGEST   three of them answer three different questions about the same
+//                  field, and two of the three are `vector<integer>` with the same
+//                  spelling.  Reaching for the wrong one reported 17 law F failures
+//                  on a corpus where nothing was wrong
+//   WHICH ROUTINE  `rebuild` matches an ENUMERATED set and is bounded by `LEVEL`;
+//                  `rebuild_construct` reads the form off the field and is not.
+//                  A shape can be R2 to one and R1 to the other, and both answers
+//                  are right
+//   WHAT `rho` IS  a COUNT of cells, not a distance — so it does not shrink towards
+//                  a match, and a residual of 1 is a refusal rather than a near miss
+//
+// The fixtures are written BY HAND and are as small as the claim allows: a
+// three-cell triangle, a four-cell wedge, a ring of six.  Where a claim needs a
+// LARGE shape it is still hand-written — `form_new(h, [n,n,n], [4,4,4])` is three
+// numbers, and its cell count is `(n+1)(n+2)/2`, checked in the test.
+use hex_recover;
+use hex_form;
+use hex_field;
+
+// A chunk big enough for anything this file draws, for the times a test wants to
+// see a redraw WITHOUT the library's own window logic in the way.
+fn wide() -> HexSet { hexset_chunk(-40, -40, 81, 81) }
+
+// The equilateral triangle of side `n`, starting at heading `h`.  Three numbers,
+// and `(n+1)(n+2)/2` cells.
+fn tri(h: integer, n: integer) -> Form { form_new(h, [n, n, n], [4, 4, 4]) }
+
+fn drawn(f: Form) -> HexSet {
+  c = wide();
+  form_fill(f, 0, 0, c);
+  c
+}
+
+// How many of `a`'s keys are absent from `b`.  Both come from `field_norm`, so this
+// is asked after translation is quotiented away.
+fn missing_from(a: vector<integer>, b: vector<integer>) -> integer {
+  n = 0;
+  for i in 0..len(a) {
+    found = false;
+    for j in 0..len(b) { if (a[i] ?? 0) == (b[j] ?? 0) { found = true; } }
+    if !found { n = n + 1; }
+  }
+  n
+}
+
+fn main() {
+  assert(len(candidate_forms()) > 0, "there is a candidate set to match against");
+}
+
+// @HXV-001 — THREE DIGESTS, ONE FIELD, AND THE NUMBER THAT TELLS THEM APART.
+//
+// `field_exact`, `field_norm` and `field_digest` all take a `HexSet` and all return
+// a `vector<integer>`.  Nothing in a call site says which question you asked, so
+// this example asks all three of one field and shows where they disagree:
+//
+//   field_exact    quotients NOTHING              "is `draw` injective?"   (law F)
+//   field_norm     quotients translation          "which stencil is this?" (rebuild)
+//   field_digest   translation AND orientation    "how many SHAPES?"       (law I)
+//
+// AND THE DIGEST IS THE CELL LIST, NOT A HASH.  A hash collision in a census would
+// look exactly like a law F violation, so there is no modular arithmetic anywhere:
+// a cell at lattice `(k,m)` packs to `(k+400)*1600 + (m+400)` and the digest is
+// those numbers, sorted.  The unit triangle's three cells sit at `(0,0)`, `(2,0)`
+// and `(1,3)`, so its digest is `640400.642003.643600` — written out here because
+// a number you can derive by hand is the proof that nothing was hashed.
+fn test_three_digests_of_one_field_and_where_they_disagree() {
+  t = tri(0, 1);
+  a = drawn(t);
+  assert(hexset_count(a) == 3, "the unit triangle is three cells, got {hexset_count(a)}");
+  assert(field_exact_text(a) == "640400.642003.643600",
+         "the digest IS the sorted cell list, got {field_exact_text(a)}");
+
+  // the SAME stencil, dropped somewhere else
+  moved = wide();
+  form_fill(t, 3, 2, moved);
+  assert(!digest_eq(field_exact(a), field_exact(moved)),
+         "field_exact quotients nothing, so moving the stencil changes it");
+  assert(digest_eq(field_norm(a), field_norm(moved)),
+         "field_norm quotients translation, so moving the stencil does not");
+  assert(digest_eq(field_digest(a), field_digest(moved)),
+         "and neither does the shape digest");
+
+  // the SAME stencil, turned 60 degrees — one of the twelve orientations
+  turned = drawn(tri(2, 1));
+  assert(!digest_eq(field_norm(a), field_norm(turned)),
+         "field_norm is orientation-SENSITIVE: a turned stencil is a different field");
+  assert(digest_eq(field_digest(a), field_digest(turned)),
+         "the shape digest quotients orientation too -- law I, one stencil");
+
+  // the summary that cannot tell any of them apart
+  assert(count_digest(a) == 3 && count_digest(turned) == 3,
+         "a cell COUNT is the same for both, which is why it is only a control");
+}
+
+// @HXV-002 — LAW F IS DECIDED OVER THE SPACE THAT SHIPS, AND IT COSTS MILLISECONDS.
+//
+// Law F is injectivity — `draw(m1) = draw(m2) => m1 = m2` — and its COVERAGE is a
+// measurement, not a theorem.  The measurement people picture is the open-ended one:
+// push the level ladder up and see where injectivity stops.  That is a long-running
+// exploration and it is not what a caller needs.  The question a caller has is
+// narrower and finite: **is `draw` injective over the set THIS BUILD matches
+// against?**  Building the index answers it for the whole space at once — two
+// candidates sharing a digest would overwrite each other in the map, so the build
+// COUNTS the clashes — and the whole census is the 119 forms below.
+//
+// That is strictly stronger than the per-lookup `rb_matches` count, which only ever
+// checks the corner of the space some field happened to land in.
+//
+// The numbers move when `LEVEL` moves, and they SHOULD: this is a measurement of the
+// shipped candidate set, so a level raised without re-reading it is exactly the
+// silent change the test exists to catch.
+fn test_law_f_is_decided_over_the_whole_shipped_candidate_set() {
+  cand = candidate_forms();
+  assert(len(cand) == 119,
+         "LEVEL 2 (3 sides) plus A3 (4-6 sides at len 1) admits 119 forms, got {len(cand)}");
+
+  idx = index_build(cand);
+  assert(idx.ri_count == 119, "every one of them is indexed, got {idx.ri_count}");
+  assert(idx.ri_collisions == 0,
+         "and no two draw the same field -- law F holds here, got {idx.ri_collisions} clashes");
+  assert(idx.ri_fills == len(cand),
+         "the cost is reported, not guessed: one draw per candidate, got {idx.ri_fills}");
+
+  // CONTROL — the digest has to be doing work.  Key the same 119 fields on the cell
+  // COUNT instead of the shape and the space collapses to 9 classes.  If a summary
+  // were as discriminating as the field, "no collisions" above would be free.
+  counts: vector<integer> = [];
+  for ci in 0..len(cand) {
+    cf = cand[ci] ?? form_new(0, [], []);
+    cc = fit_chunk(cf);
+    form_fill(cf, 0, 0, cc);
+    counts += [count_digest(cc)];
+  }
+  classes = 0;
+  for i in 0..len(counts) {
+    fresh = true;
+    for j in 0..i { if (counts[j] ?? -1) == (counts[i] ?? -2) { fresh = false; } }
+    if fresh { classes = classes + 1; }
+  }
+  assert(classes == 9,
+         "CONTROL: keyed on cell count the 119 fields collapse to 9, got {classes}");
+  assert(classes < idx.ri_count,
+         "CONTROL did not fire -- a cell-count key is as discriminating as the field");
+
+  // CONTROL B — the IDENTITY has to see the corners.  `form_key_noturn` drops the turn
+  // sequence, and at level 2 that merges four forms that differ only in where they bend.
+  // A census keyed on it would report those four as one and their four distinct fields
+  // as law F failures.
+  lvl2 = forms_upto(2);
+  keys: vector<text> = [];
+  blind: vector<text> = [];
+  for ki in 0..len(lvl2) {
+    kf = lvl2[ki] ?? form_new(0, [], []);
+    keys += [form_key(kf)];
+    blind += [form_key_noturn(kf)];
+  }
+  nfull = 0;
+  for i2 in 0..len(keys) {
+    f1 = true;
+    for j2 in 0..i2 { if (keys[j2] ?? "") == (keys[i2] ?? "") { f1 = false; } }
+    if f1 { nfull = nfull + 1; }
+  }
+  nblind = 0;
+  for i3 in 0..len(blind) {
+    f2 = true;
+    for j3 in 0..i3 { if (blind[j3] ?? "") == (blind[i3] ?? "") { f2 = false; } }
+    if f2 { nblind = nblind + 1; }
+  }
+  assert(nfull == 32, "level 2 holds 32 distinct identities, got {nfull}");
+  assert(nblind == 28,
+         "CONTROL: turn-blind they collapse to 28 -- four forms lost, got {nblind}");
+}
+
+// @HXV-003 — `rho` MEASURES THE FIELD, NOT THE WINDOW.
+//
+// `rebuild_construct` reads `(h0, lens, turns)` off the field's own convex hull and
+// then VERIFIES by re-drawing: the construction proposes, the redraw confirms, and
+// that is what keeps `rho = 0` a measured fact rather than a claim.  The redraw
+// needs a chunk to draw into, and the chunk used to be a constant 25x25 around the
+// anchor — a window sized for the level-1 enumeration that the constructive path
+// exists to replace.  `form_fill` clips to its chunk silently, so:
+//
+//   heading 0, side 12   91 cells   R1, rho 0
+//   heading 0, side 13  105 cells   R2, rho 2     <- correct answer, thrown away
+//   heading 2, side 13  105 cells   R2, rho 196   <- more unexplained cells than cells
+//   heading 3, side  7   85 cells   R2, rho 3     <- SMALLER shape, refused sooner
+//
+// Every one of those had the right form in `rb_form` already.  The step that makes
+// the answer trustworthy was the step that discarded it, and `rho` — documented as
+// "the smallest unexplained-cell count" — was reporting the distance from the anchor
+// to the edge of a constant.  The 85-cell refusal beside the 105-cell pass is what
+// says the limit was never a size: an odd (vertex-direction) heading covers two rows
+// per unit of side and an even one covers one, so the same stencil turned reached the
+// edge at half the length.  A stencil and its orientation-image are ONE stencil
+// (law I), so a recovery that depends on which way it faces is not a recovery.
+//
+// The window is now derived from the form itself (`fit_chunk`), and the invariant
+// this pins is the one clipping broke: on the verified path the redraw CONTAINS the
+// field, so `rho` counts only what the hull ADDS and never what the chunk dropped.
+fn test_rho_measures_the_field_and_not_the_window() {
+  // the four cells of the table above
+  a = drawn(tri(0, 12));
+  assert(hexset_count(a) == 91, "side 12 is 13*14/2 cells, got {hexset_count(a)}");
+  ra = rebuild_construct(a);
+  assert(ra.rb_regime == REGIME_R1 && ra.rb_rho == 0,
+         "side 12 recovers exactly, got regime {ra.rb_regime} rho {ra.rb_rho}");
+
+  b = drawn(tri(0, 13));
+  assert(hexset_count(b) == 105, "side 13 is 14*15/2 cells, got {hexset_count(b)}");
+  rb = rebuild_construct(b);
+  assert(rb.rb_regime == REGIME_R1 && rb.rb_rho == 0,
+         "and so does side 13 -- one cell more is not a regime change, got regime"
+         + " {rb.rb_regime} rho {rb.rb_rho}");
+
+  c = drawn(tri(2, 13));
+  assert(hexset_count(c) == 105, "the same shape turned 60 degrees, got {hexset_count(c)}");
+  rc = rebuild_construct(c);
+  assert(rc.rb_regime == REGIME_R1 && rc.rb_rho == 0,
+         "turning a stencil cannot change whether it recovers, got regime {rc.rb_regime}"
+         + " rho {rc.rb_rho}");
+
+  d = drawn(tri(3, 7));
+  assert(hexset_count(d) == 85, "a vertex-heading triangle of side 7 is 85 cells,"
+         + " got {hexset_count(d)}");
+  rd = rebuild_construct(d);
+  assert(rd.rb_regime == REGIME_R1 && rd.rb_rho == 0,
+         "85 cells is SMALLER than the 105 that passed -- size was never the limit,"
+         + " got regime {rd.rb_regime} rho {rd.rb_rho}");
+
+  // ALL TWELVE HEADINGS, one side length.  This is the property, not the four cells.
+  for h in 0..12 {
+    f = tri(h, 13);
+    r = rebuild_construct(drawn(f));
+    assert(r.rb_regime == REGIME_R1,
+           "heading {h} must recover like every other -- got regime {r.rb_regime}");
+    assert(form_write(r.rb_form, "x") == form_write(form_canon(f), "x"),
+           "and recover the same form it was drawn from, at heading {h}");
+  }
+
+  // THE INVARIANT.  On the verified path the redraw is a SUPERSET of the field: no
+  // cell of the field is ever missing from it, so `rho` counts additions only.
+  for h2 in 0..12 {
+    f2 = tri(h2, 13);
+    cells = drawn(f2);
+    r2 = rebuild_construct(cells);
+    redraw = fit_chunk(r2.rb_form);
+    form_fill(r2.rb_form, 0, 0, redraw);
+    assert(missing_from(field_norm(cells), field_norm(redraw)) == 0,
+           "the redraw must never DROP a cell of the field, at heading {h2}");
+  }
+
+  // CONTROL — the check above can say no.  The old constant window, written out here,
+  // makes the redraw drop cells of exactly these fields.  Without this the containment
+  // assertion would pass on any window large enough for the fixtures it happened to use.
+  dropped = 0;
+  for h3 in 0..12 {
+    f3 = tri(h3, 13);
+    cells3 = drawn(f3);
+    r3 = rebuild_construct(cells3);
+    old = hexset_chunk(-12, -12, 25, 25);              // the window this row removed
+    form_fill(r3.rb_form, 0, 0, old);
+    if missing_from(field_norm(cells3), field_norm(old)) > 0 { dropped = dropped + 1; }
+  }
+  assert(dropped == 12,
+         "CONTROL: a fixed 25x25 window drops cells at every heading, got {dropped} of 12");
+}
+
+// @HXV-004 — THE CONSTRUCTIVE PATH REACHES WHAT THE ENUMERATION CANNOT, AND BOTH
+// ANSWERS ARE RIGHT.
+//
+// `rebuild` matches against `candidate_forms()`, which is enumerated: three sides up
+// to `LEVEL`, plus four to six sides at length 1.  An unequal-sided house is in
+// neither, and there is no level you can raise to reach it cheaply — the 4-sided
+// class is around 1.2M proposals (`X43`).  `rebuild_construct` does not enumerate at
+// all: it hulls the filled cells, reads each side's heading and length off the hull,
+// and re-draws once to confirm.
+//
+// SO A FIELD CAN BE R2 TO ONE ROUTINE AND R1 TO THE OTHER, and neither is wrong.
+// `rebuild`'s R2 means "nothing in the admitted set draws this"; it does NOT mean
+// "no stencil draws this".  Read it as the second and you will refuse content the
+// library can recover exactly.
+fn test_the_constructive_path_reaches_past_the_enumerated_level() {
+  // a 3-by-2 rectangle: four sides, two lengths, every turn a quarter of the circle
+  rect = form_new(0, [3, 2, 3, 2], [3, 3, 3, 3]);
+  assert(form_admissible(rect), "the rectangle is an admitted form");
+  cells = drawn(rect);
+  assert(hexset_count(cells) == 18, "3 by 2 is 18 cells, got {hexset_count(cells)}");
+
+  scan = rebuild(cells);
+  assert(scan.rb_regime == REGIME_R2,
+         "the enumeration does not hold it, got regime {scan.rb_regime}");
+  assert(scan.rb_matches == 0, "nothing matched, got {scan.rb_matches}");
+  assert(scan.rb_rho > 0, "so a residual is reported, got {scan.rb_rho}");
+  assert(rebuild_text(cells, "roof") == "",
+         "and no text is offered -- an R2 guess must not be spelled as a stencil");
+
+  built = rebuild_construct(cells);
+  assert(built.rb_regime == REGIME_R1,
+         "the construction reaches it, got regime {built.rb_regime}");
+  assert(built.rb_rho == 0, "exactly, got rho {built.rb_rho}");
+  assert(rebuild_construct_text(cells, "roof") == form_write(form_canon(rect), "roof"),
+         "and its text is the canonical spelling of the form it was drawn from");
+}
+
+// @HXV-005 — R2 IS A REFUSAL WITH A NUMBER, NEVER A FALSE R1 — AND `rho` IS NOT A
+// DISTANCE.
+//
+// The one thing recovery must never do is return a confident R1 for content no
+// grammar form draws.  It does not, and the way it says no carries information — but
+// `rho` is a COUNT of cells, so reading it as "how close was it" is the trap:
+//
+//   a ring of six with a hole   rho 1   the hull adds exactly the missing centre
+//   three scattered cells       rho 3   no form was built at all; everything is unexplained
+//
+// A residual of ONE is the smallest positive value there is, and it is not a near
+// miss: no grammar form has a hole, so the donut is as firmly outside the grammar as
+// the scatter.  Small `rho` means the hull is tight, nothing more.
+fn test_r2_is_a_refusal_with_a_number_and_rho_is_not_a_distance() {
+  // a ring of six around an empty centre — the smallest field with a HOLE
+  donut = hexset_chunk(-3, -3, 7, 7);
+  hexdisk_into(donut, 0, 0, 1);
+  hexset_set(donut, 0, 0, false);
+  assert(hexset_count(donut) == 6, "six around an empty middle, got {hexset_count(donut)}");
+  rd = rebuild_construct(donut);
+  assert(rd.rb_regime == REGIME_R2, "a hole is not a grammar form, got {rd.rb_regime}");
+  assert(rd.rb_rho == 1,
+         "and the hull adds exactly the one cell that is missing, got {rd.rb_rho}");
+
+  // three cells, one of them far away
+  blob = hexset_chunk(-20, -20, 41, 41);
+  hexset_set(blob, 0, 0, true);
+  hexset_set(blob, 1, 0, true);
+  hexset_set(blob, 5, 5, true);
+  rb = rebuild_construct(blob);
+  assert(rb.rb_regime == REGIME_R2, "an arbitrary blob is R2, got {rb.rb_regime}");
+  assert(rb.rb_rho == 3,
+         "no form was built, so the whole field is unexplained, got {rb.rb_rho}");
+
+  // CONTROL — the door is not simply always shut
+  ok = rebuild_construct(drawn(tri(0, 3)));
+  assert(ok.rb_regime == REGIME_R1 && ok.rb_rho == 0,
+         "CONTROL: a real form still comes back R1, got regime {ok.rb_regime}");
+}
+
+// @HXV-006 — A CLOSED CYCLE HAS NO FIRST CORNER.
+//
+// `[2,5,5]`, `[5,5,2]` and `[5,2,5]` are one shape walked from three different
+// starting points.  The enumeration cannot know that — it sweeps `(h0, turns)` and
+// hands back all three — so the census MUST, or it reports one stencil as three and
+// its own re-spellings as law F failures.
+//
+// This is the census discovering a requirement on the canonical text (`S6`): fixing
+// the WINDING (`C3`) is not enough, the starting CORNER has to be fixed too.
+fn test_a_closed_cycle_has_no_first_corner() {
+  assert(turns_cyclic_eq([2, 5, 5], [5, 5, 2]),
+         "the same cycle read from the next corner");
+  assert(turns_cyclic_eq([2, 5, 5], [5, 2, 5]),
+         "and from the one after that");
+  assert(turns_cyclic_eq([2, 5, 5], [2, 5, 5]),
+         "a cycle is a rotation of itself");
+
+  // CONTROL — it has to be able to say no, or "every collision is explained" is free
+  assert(!turns_cyclic_eq([2, 5, 5], [2, 5, 4]),
+         "CONTROL: one turn different is a different cycle");
+  assert(!turns_cyclic_eq([2, 5, 5], [2, 5]),
+         "CONTROL: a different number of sides is a different cycle");
+}
+
+// @HXV-007 — A MIRROR PAIR SHARES A SHAPE DIGEST, AND THAT IS LAW I, NOT A LAW F
+// FAILURE.
+//
+// The flip is one of the twelve orientations, and mirroring a turtle walk REVERSES
+// its turn sequence.  At level 1 it never shows: every admitted form has equal sides,
+// so it is achiral and its mirror is just a rotation of it.  Unequal sides make a
+// form and its mirror two genuinely different texts that draw mirror-image fields —
+// and therefore share a `field_digest`, which quotients orientation away.
+//
+// READ THAT COLLISION AS A LAW F FAILURE AND YOU WILL "FIND" DOZENS THAT ARE NOT
+// THERE — the first version of the census reported 36.  Law F asks about `field_norm`,
+// which does NOT quotient orientation, and there the pair is two distinct fields.
+fn test_a_mirror_pair_shares_a_shape_digest_and_that_is_law_i() {
+  a = form_new(0, [1, 1, 2], [3, 5, 4]);
+  b = form_new(1, [1, 1, 2], [3, 4, 5]);
+  fa = drawn(a);
+  fb = drawn(b);
+  assert(hexset_count(fa) == 4 && hexset_count(fb) == 4,
+         "four cells each, got {hexset_count(fa)} and {hexset_count(fb)}");
+
+  assert(turns_reverse_eq(a.fm_turn, b.fm_turn), "their turn sequences are reverses");
+  assert(!turns_cyclic_eq(a.fm_turn, b.fm_turn), "and not re-spellings of one cycle");
+
+  assert(digest_eq(field_digest(fa), field_digest(fb)),
+         "so they are one SHAPE -- law I, and the shape digest says so");
+  assert(!digest_eq(field_norm(fa), field_norm(fb)),
+         "while law F asks field_norm, where they are two distinct fields");
+
+  // CONTROL — the mirror test must be able to say no
+  assert(!turns_reverse_eq([3, 4, 5], [3, 4, 5]),
+         "CONTROL: a chiral cycle is not its own mirror");
+  assert(turns_reverse_eq([3, 4, 5], [3, 5, 4]),
+         "CONTROL: and a genuine mirror is not rejected");
+}
+
+// @HXV-008 — THE INDEX IS A COST FIX, NOT A REACH FIX.
+//
+// `rebuild_with` re-DRAWS every candidate on every lookup — O(N) fills per field.
+// `index_build` draws each candidate once and keys a map on its digest, so recovery
+// becomes a single probe.  That is the whole of what it buys.
+//
+// IT DOES NOT MOVE THE FRONTIER.  Building the index still walks the enumeration in
+// full (`ri_fills` says so, out loud), so a form the enumeration cannot reach is
+// exactly as far away as before: `rebuild_indexed` misses, falls back to the scan,
+// and reports R2 — the same answer `rebuild` gives, at the same reach.  Reaching
+// further is `rebuild_construct`'s job, and it is a different mechanism, not a
+// faster table.
+fn test_the_index_is_a_cost_fix_not_a_reach_fix() {
+  cand = candidate_forms();
+  idx = index_build(cand);
+  assert(idx.ri_fills == len(cand),
+         "building it walked the whole enumeration, got {idx.ri_fills} fills");
+
+  // a candidate: one probe, the same answer as the scan
+  f = tri(0, 2);
+  cells = drawn(f);
+  hit = rebuild_indexed(idx, cand, cells);
+  scan = rebuild_with(cand, cells);
+  assert(hit.rb_regime == REGIME_R1 && scan.rb_regime == REGIME_R1,
+         "both find it, got {hit.rb_regime} and {scan.rb_regime}");
+  assert(form_write(hit.rb_form, "x") == form_write(scan.rb_form, "x"),
+         "and agree on the form -- the digest IS the field, compared in full");
+
+  // above the enumerated set: the index reaches no further than what built it
+  rect = drawn(form_new(0, [3, 2, 3, 2], [3, 3, 3, 3]));
+  miss = rebuild_indexed(idx, cand, rect);
+  assert(miss.rb_regime == REGIME_R2,
+         "the index cannot reach past its own candidate set, got {miss.rb_regime}");
+  assert(rebuild_construct(rect).rb_regime == REGIME_R1,
+         "while the construction does -- a different mechanism, not a faster table");
+
+  // every route to a TEXT is empty unless the answer is R1, so a caller cannot spell an
+  // R2 guess as if it were an authored stencil
+  want = form_write(form_canon(f), "back");
+  assert(rebuild_text_with(cand, cells, "back") == want, "the scan spells it");
+  assert(rebuild_indexed_text(idx, cand, cells, "back") == want, "the index spells the same");
+  assert(rebuild_text_with(cand, rect, "back") == "", "and R2 spells nothing");
+  assert(rebuild_indexed_text(idx, cand, rect, "back") == "", "through either route");
+}
+
+// @HXV-009 — A FORM'S LEVEL IS ITS LONGEST SIDE, AND THE LADDER NESTS EXACTLY.
+//
+// `forms_upto(n)` is every admitted 3-sided form with all sides in `1..n`;
+// `forms_at_level(n)` is only what is NEW at `n` — the forms whose longest side is
+// exactly `n`.  That definition is what keeps a committed corpus valid forever: the
+// entries generated at level 1 stay generated at level 1 when the ladder is raised,
+// so `corpus/a1` is never regenerated and a level-2 run only has to author what
+// level 2 adds.
+//
+// THE ARITHMETIC IS THE PROMISE: `|upto(n-1)| + |at_level(n)| = |upto(n)|`, with no
+// overlap and nothing dropped.  Read `forms_at_level` as "the forms at that size"
+// rather than "the forms NEW at that size" and a corpus regenerates itself every
+// time the level moves.
+fn test_the_level_ladder_nests_exactly() {
+  u1 = forms_upto(1);
+  u2 = forms_upto(2);
+  u3 = forms_upto(3);
+  assert(len(u1) == 10 && len(u2) == 32 && len(u3) == 60,
+         "the ladder measures 10, 32, 60, got {len(u1)}, {len(u2)}, {len(u3)}");
+  assert(len(forms_at_level(1)) == 10, "level 1 adds all ten, got {len(forms_at_level(1))}");
+  assert(len(u1) + len(forms_at_level(2)) == len(u2),
+         "level 2 adds exactly the rest of upto(2), got {len(forms_at_level(2))}");
+  assert(len(u2) + len(forms_at_level(3)) == len(u3),
+         "and level 3 the rest of upto(3), got {len(forms_at_level(3))}");
+
+  // every level-1 form survives into level 2 -- the ladder GROWS, it does not re-cut
+  kept = 0;
+  for i in 0..len(u1) {
+    t1 = form_write(u1[i] ?? form_new(0, [], []), "x");
+    for j in 0..len(u2) {
+      if form_write(u2[j] ?? form_new(0, [], []), "x") == t1 { kept = kept + 1; }
+    }
+  }
+  assert(kept == len(u1), "all ten reappear in upto(2), got {kept}");
+
+  // and a level-1 form's longest side is 1 -- that is what "level" means
+  for k in 0..len(u1) {
+    assert(form_maxlen(u1[k] ?? form_new(0, [], [])) == 1,
+           "every level-1 form has longest side 1");
+  }
+
+  // `level1_forms` is retained for the A1 gates and must stay the same set
+  assert(len(level1_forms()) == len(forms_at_level(1)),
+         "level1_forms is forms_at_level(1), got {len(level1_forms())}");
+}
