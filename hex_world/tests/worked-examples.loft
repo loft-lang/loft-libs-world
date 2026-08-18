@@ -1,0 +1,176 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Worked examples for `hex_world` (@PLN141).  Each `test_*` below is a REAL,
+// run-every-CI demonstration of a contract the signature cannot state; the
+// function documents itself by CITING the tag with `// Example: @HXW-00N`.
+// Teaching examples, distinct from the assertion suite in `hex_world.loft`.
+//
+// This is a SPARSE container, and every contract it has comes from that one
+// word.  A sparse store has to answer three questions a dense one never faces —
+// what a read of an absent region means, when a region starts existing, and when
+// it stops — and none of the three is visible in a signature that says
+// `get_cell(self, q, r) -> Cell`.
+use hex_world;
+
+// @HXW-001 — `get_cell` cannot tell you "there is no chunk here".  It answers
+// `cell_empty()` both for a cell that was never written and for a chunk that
+// does not exist, which is the sparse-world convention working as intended: an
+// absent chunk IS all-empty.  The consequence is the part a caller has to know:
+// reading never allocates, so a read loop over a large region stays free, while
+// `set_cell` allocates a whole 32x32 chunk on first touch.  `has_chunk` is the
+// only way to ask the question `get_cell` is deliberately not answering.
+fn test_reading_an_absent_chunk_is_not_an_error_and_not_a_read() {
+  w = hex_world::world_empty();
+
+  // An absent chunk reads as empty and stays absent — no allocation, no error.
+  c = hex_world::get_cell(w, 5, 5);
+  assert(c.c_color == 0, "an absent chunk reads as an empty cell");
+  assert(len(w.chunks) == 0, "…and reading did NOT create it");
+  assert(hex_world::has_chunk(w, 5, 5) == false, "has_chunk is the real question");
+
+  // Existence is a separate act, and it does not change what `get_cell` answers.
+  w.ensure_chunk(5, 5);
+  assert(len(w.chunks) == 1, "ensure_chunk allocates the 32x32");
+  assert(hex_world::has_chunk(w, 5, 5), "now it exists");
+  assert(hex_world::get_cell(w, 5, 5).c_color == 0, "and reads exactly the same");
+
+  // So a sweep that only reads is cheap however wide it is, and a sweep that
+  // writes is 1024 cells per chunk touched.  Neither call site says so.
+  assert(hex_world::get_cell(w, 4000, 4000).c_color == 0, "far away: still free");
+  assert(len(w.chunks) == 1, "…and still one chunk");
+}
+
+// @HXW-002 — the `(q, r)` here are AXIAL, and `hex_grid`'s `(q, r)` in this same
+// repository are ODD-R OFFSET.  `neighbour_count` walks the six axial deltas
+// with no parity term at all — which is correct for axial and wrong for offset,
+// where four of the six shift by a column between even and odd rows.  Both are
+// `(integer, integer)` named `q` and `r`, in one monorepo, so nothing catches a
+// coordinate handed from one to the other.
+fn test_the_q_r_here_are_axial_not_the_offset_pair_hex_grid_uses() {
+  w = hex_world::world_empty();
+  // The six axial neighbours of the origin.
+  fill(w, 1, 0);
+  fill(w, -1, 0);
+  fill(w, 0, 1);
+  fill(w, 0, -1);
+  fill(w, 1, -1);
+  fill(w, -1, 1);
+  assert(hex_world::neighbour_count(w, 0, 0) == 6, "all six axial neighbours");
+
+  // (1,1) and (-1,-1) are NOT among them — in axial coordinates those are two
+  // steps away.  Fill them and the count does not move.
+  fill(w, 1, 1);
+  fill(w, -1, -1);
+  assert(hex_world::neighbour_count(w, 0, 0) == 6,
+         "(1,1) and (-1,-1) are two steps away in AXIAL, so they do not count");
+
+  // And the deltas do not depend on the row's parity, which is the giveaway.
+  // An offset lattice needs a parity term; this one has none, on any row.
+  ok = true;
+  for r in 0..4 {
+    v = hex_world::world_empty();
+    v.set_cell(0, r + 1, hex_world::Cell { c_color: 1, c_height: 0, c_age: 0 });
+    if hex_world::neighbour_count(v, 0, r) != 1 { ok = false; }
+  }
+  assert(ok, "(q, r+1) is a neighbour on EVERY row — an offset lattice cannot say that");
+}
+
+fn fill(fl_w: hex_world::World, fl_q: integer, fl_r: integer) {
+  fl_w.set_cell(fl_q, fl_r, hex_world::Cell { c_color: 1, c_height: 0, c_age: 0 });
+}
+
+// @HXW-003 — `chunk_idx_32` and `hex_idx_32` are not conveniences, they are the
+// contract.  loft's `/` and `%` round toward ZERO, so the obvious `q / 32` and
+// `q % 32` put every negative coordinate in the wrong chunk and then index it
+// with a NEGATIVE slot.  West and north of the origin is not an edge case in a
+// world that grows in all four directions — it is half of it.
+fn test_negative_coordinates_need_the_helpers_not_slash_and_percent() {
+  assert(hex_world::chunk_idx_32(-1) == -1, "cell -1 lives in chunk -1");
+  assert((-1) / 32 == 0, "…but plain division says chunk 0 — the wrong chunk");
+  assert(hex_world::hex_idx_32(-1) == 31, "and it is slot 31 of that chunk");
+  assert((-1) % 32 == -1, "…where plain modulo hands back a negative index");
+
+  // The floor/mod pair is what makes the addressing continuous across zero:
+  // stepping one cell west must step one slot, never jump a chunk boundary twice.
+  ok = true;
+  for i in 0..64 {
+    v = i - 32;
+    cx = hex_world::chunk_idx_32(v);
+    hx = hex_world::hex_idx_32(v);
+    if cx * 32 + hx != v { ok = false; }
+  }
+  assert(ok, "chunk*32 + slot reconstructs the coordinate, for negatives too");
+
+  // Which the naive pair does not do:
+  assert(((-1) / 32) * 32 + ((-1) % 32) == -1, "the naive pair happens to reconstruct…");
+  assert(((-1) % 32) < 0, "…but only by carrying a negative slot no vector can index");
+}
+
+// @HXW-004 — nothing in this library ever removes an empty chunk.  The doc
+// comment on `World` says empty chunks are removed by "the tick loop's GC pass",
+// and that pass belongs to the CALLER: `set_cell` says it does not GC, and
+// `tick_and_decay` empties cells without touching `chunks`.  So an in-memory
+// world grows monotonically — a cell written once and erased leaves its 32x32
+// behind forever, and `has_chunk` keeps answering true over a region that is
+// entirely empty.  `world_save` is what compacts, because it writes only the
+// non-empty chunks; a save/load round trip is the library's only reclaim.
+fn test_an_emptied_chunk_stays_until_a_save_load_round_trip() {
+  w = hex_world::world_empty();
+  fill(w, 100, 100);
+  assert(len(w.chunks) == 1 && hex_world::cell_count(w) == 1, "one chunk, one cell");
+
+  // Erase the only cell.  The chunk remains.
+  w.set_cell(100, 100, hex_world::cell_empty());
+  assert(hex_world::cell_count(w) == 0, "no cells left");
+  assert(len(w.chunks) == 1, "…and the chunk is still there");
+
+  // Ticking does not collect it either, however many times you tick.
+  w.tick_and_decay(1, 0, 1);
+  w.tick_and_decay(1, 0, 1);
+  assert(len(w.chunks) == 1, "tick_and_decay empties cells; it does not free chunks");
+  assert(hex_world::has_chunk(w, 100, 100),
+         "has_chunk still says yes over a wholly empty region");
+
+  // The save path counts non-empty chunks for its header, so the round trip is
+  // what actually reclaims.
+  path = "zz-hxw-004.world";
+  hex_world::world_save(w, path);
+  v = hex_world::world_empty();
+  v.world_load(path);
+  assert(len(v.chunks) == 0, "a save/load round trip drops the empty chunk");
+  assert(hex_world::cell_count(v) == 0, "with no cells lost — there were none");
+  delete(path);
+}
+
+// @HXW-005 — `c_color == 0` is the EMPTY sentinel, not a colour.  A cell whose
+// colour is 0 stores its other fields faithfully and is invisible to every
+// aggregate in the library: `cell_count` skips it, `neighbour_count` does not
+// see it, `tick_and_decay` never ages it, and `world_save` will not write the
+// chunk it is alone in.  So a palette whose entry 0 is a real colour has an
+// eraser for its first swatch, and the write that looks like it worked is the
+// one that removed the cell.
+fn test_colour_zero_is_the_empty_sentinel_not_a_colour() {
+  w = hex_world::world_empty();
+
+  // The write lands — the height comes back — and the cell counts for nothing.
+  w.set_cell(2, 2, hex_world::Cell { c_color: 0, c_height: 9, c_age: 0 });
+  assert(hex_world::get_cell(w, 2, 2).c_height == 9, "the other fields are stored");
+  assert(hex_world::cell_count(w) == 0, "…but the cell is not counted");
+
+  // Nor seen as a neighbour, so a colour-0 cell cannot support the ones around it.
+  w.set_cell(3, 2, hex_world::Cell { c_color: 0, c_height: 9, c_age: 0 });
+  assert(hex_world::neighbour_count(w, 2, 2) == 0, "a colour-0 neighbour is no neighbour");
+
+  // One non-zero colour is all it takes for the same cell to become real.
+  w.set_cell(3, 2, hex_world::Cell { c_color: 1, c_height: 9, c_age: 0 });
+  assert(hex_world::neighbour_count(w, 2, 2) == 1, "colour 1 is a neighbour");
+  assert(hex_world::cell_count(w) == 1, "and counts");
+
+  // The rule to carry: reserve 0, and start a palette at 1 — which is what the
+  // TTT and demo consumers both do (1 = X, 2 = O; 1-9 = palette colours).
+  assert(live_colour(0) == false, "0 never means a colour");
+  assert(live_colour(1), "a palette starts at 1");
+}
+
+fn live_colour(lc_c: integer) -> boolean { lc_c != 0 }

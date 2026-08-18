@@ -5,3 +5,4 @@ target/
 .loft/
 _tmp_*.bin
 native-auto/
+*/loft.lock

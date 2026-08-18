@@ -1,0 +1,249 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Worked examples for `hex_grid` (@PLN141).  Each `test_*` below is a REAL,
+// run-every-CI demonstration of a contract the signature cannot state; the
+// function documents itself by CITING the tag with `// Example: @HXG-00N`, and
+// `check_doc_drift.sh examples` fails if a citation goes dangling.  These are
+// teaching examples, distinct from the correctness suite in `01-hex-grid.loft`
+// and the cross-language parity gate in `02-parity.loft`.
+//
+// This library is pure geometry — no structs, no state — so every contract it
+// has lives in what the NUMBERS mean, and the compiler sees none of it.  Two
+// coordinate systems, two lattices and six directions all travel as bare
+// `integer`s through signatures that read the same:
+//
+//   (integer, integer)        an offset (col,row) — or an axial (q,r), and the
+//                             two are different hexes with the same type
+//   (float, float)            a world point — with +y NORTH in one half of this
+//                             module and +y SOUTH in the other
+//   integer                   a direction 0..5 — or -1, meaning "there isn't one"
+//
+// Nothing below needs a fixture or a window; they are the cheapest tests in the
+// repo and they pin the traps that cost the most to find.
+use hex_grid;
+
+// Float comparison for world coordinates: the library reaches a point through an
+// expression tree a caller will not reproduce exactly, so an exact `==` on a
+// derived coordinate is a test that fails for the wrong reason.
+fn about(ab_a: float, ab_b: float) -> boolean {
+  d = ab_a - ab_b;
+  if d < 0.0 { d = 0.0 - d; }
+  d < 0.000001
+}
+
+// @HXG-001 — `hex_round` answers AXIAL coordinates; everything else in this
+// module takes ODD-R OFFSET.  Both are `(integer, integer)`, so handing one
+// where the other is wanted type-checks perfectly and lands you on a DIFFERENT
+// hex — an adjacent one, which is the worst kind of wrong because the result
+// stays plausible for a long time.  `px_to_hex` is the function that does the
+// conversion for you; reach for `hex_round` only if you are converting axial
+// coordinates you already hold.
+fn test_hex_round_answers_axial_not_offset() {
+  // The centre of the hex at OFFSET (0, 3).  Row 3 is odd, so it is shifted
+  // half a hex east: x = SQRT3/2, y = 1.5 * 3.
+  (hx, hy) = hex_grid::hex_to_px(0, 3);
+  assert(about(hx, 0.8660254037844386), "odd row is shifted half a hex east");
+  assert(about(hy, 4.5), "y = 1.5 * row");
+
+  // The right way in: `px_to_hex` answers the OFFSET cell, which is what
+  // `hex_neighbor`, `hex_distance` and `hex_to_px` all expect.
+  (oq, orr) = hex_grid::px_to_hex(hx, hy);
+  assert(oq == 0 && orr == 3, "px_to_hex answers offset (col,row)");
+
+  // `hex_round` is the axial half of that conversion, exposed on its own.  Fed
+  // the same fractional coordinates px_to_hex computes internally, it answers
+  // (-1, 3) — the AXIAL name of that very same hex.
+  (aq, ar) = hex_grid::hex_round(0.0 - 1.0, 3.0);
+  assert(aq == -1 && ar == 3, "hex_round answers axial (q,r)");
+
+  // Same hex, two names — and nothing in the types says so.  Read the axial
+  // pair as though it were offset and you are one hex west:
+  assert(hex_grid::hex_distance(oq, orr, aq, ar) == 1,
+         "read as offset, the axial answer is the WEST NEIGHBOUR, not this hex");
+
+  // Which is the error a caller actually makes: it is a real cell, it is next
+  // door, and every downstream call keeps working.
+  (bx, by) = hex_grid::hex_to_px(aq, ar);
+  assert(about(by, hy), "same row, so the mistake never shows up in y");
+  assert(bx < hx, "only x moved — by one full hex step");
+}
+
+// @HXG-002 — the four DIAGONAL neighbour deltas depend on row parity.  In odd-r
+// offset coordinates only due east and due west are parity-free; the other four
+// shift by one column between even and odd rows.  So the obvious optimisation —
+// a hardcoded six-entry delta table — is correct on every even row and wrong on
+// every odd one, and the failure is not a crash or an out-of-range cell: it
+// hands back a DIFFERENT NEIGHBOUR of the same hex, one direction over.
+fn test_neighbor_deltas_depend_on_row_parity() {
+  // Direction 1 is SE.  From an even row it is (q, r-1) …
+  (ea, eb) = hex_grid::hex_neighbor(4, 4, 1);
+  assert(ea == 4 && eb == 3, "even row: SE is (q, r-1)");
+  // … and from an odd row it is (q+1, r-1).
+  (oa, ob) = hex_grid::hex_neighbor(4, 5, 1);
+  assert(oa == 5 && ob == 4, "odd row: SE is (q+1, r-1)");
+
+  // A caller who cached the even-row delta and applied it on row 5 lands on
+  // (4, 4).  That cell is not garbage — it is this hex's SOUTH-WEST neighbour:
+  assert(hex_grid::hex_neighbor_dir(4, 5, 4, 4) == 2,
+         "the naive delta answers direction 2 (SW), not the 1 (SE) that was asked for");
+  assert(hex_grid::hex_distance(4, 5, 4, 4) == 1,
+         "still adjacent, so nothing downstream complains");
+
+  // Only east and west survive a hardcoded table, which is exactly why a
+  // half-written one passes its first tests.
+  ok = true;
+  for r in 0..8 {
+    (px, py) = hex_grid::hex_neighbor(3, r, 0);
+    if px != 4 || py != r { ok = false; }
+    (mx, my) = hex_grid::hex_neighbor(3, r, 3);
+    if mx != 2 || my != r { ok = false; }
+  }
+  assert(ok, "E and W are parity-free on every row; the other four are not");
+}
+
+// @HXG-003 — a wall lives on the EDGE BETWEEN two hexes, and this module stores
+// it once.  Each hex owns only directions 0, 1 and 2; a wall in direction 3, 4
+// or 5 belongs to the neighbour.  `hex_canon_edge` is what resolves any of the
+// six to the one slot that holds it, and skipping it does not lose the wall —
+// it makes ONE wall into TWO half-walls that disagree, so a character is
+// blocked walking north and walks straight through going south.
+fn test_one_wall_has_exactly_one_canonical_slot() {
+  // Direction 4 (NW) from (5,5) is stored on the NEIGHBOUR, as its edge 1.
+  (cq, cr, ce) = hex_grid::hex_canon_edge(5, 5, 4);
+  assert(cq == 5 && cr == 6 && ce == 1, "dir 4 is the neighbour's edge 1");
+
+  // The same physical wall, approached from the other side, resolves to the
+  // same three numbers — which is the whole point of the canonical form.
+  (nq, nr) = hex_grid::hex_neighbor(5, 5, 4);
+  back = hex_grid::hex_neighbor_dir(nq, nr, 5, 5);
+  (bq, br, be) = hex_grid::hex_canon_edge(nq, nr, back);
+  assert(bq == cq && br == cr && be == ce, "both sides name the same slot");
+
+  // Keyed on the raw (q, r, dir) instead, the two sides are two DIFFERENT keys.
+  assert(wall_key(5, 5, 4) == wall_key(nq, nr, back), "canonical keys agree");
+  assert(raw_key(5, 5, 4) != raw_key(nq, nr, back),
+         "raw keys do not — one wall, stored twice, half of it invisible");
+
+  // It holds for all six directions from any hex, which is the invariant to
+  // rely on rather than the dir < 3 arithmetic.
+  ok = true;
+  for d in 0..6 {
+    (aq, ar) = hex_grid::hex_neighbor(2, 3, d);
+    ad = hex_grid::hex_neighbor_dir(aq, ar, 2, 3);
+    if wall_key(2, 3, d) != wall_key(aq, ar, ad) { ok = false; }
+  }
+  assert(ok, "every direction from a hex agrees with its neighbour's view");
+}
+
+// The recommended idiom: never key a wall on the direction you happened to
+// approach it from.  Canonicalise first, and the key is the wall.
+fn wall_key(wk_q: integer, wk_r: integer, wk_dir: integer) -> text {
+  (kq, kr, ke) = hex_grid::hex_canon_edge(wk_q, wk_r, wk_dir);
+  "{kq}:{kr}:{ke}"
+}
+
+// What the example above warns against — shown so the difference is readable.
+fn raw_key(rk_q: integer, rk_r: integer, rk_dir: integer) -> text {
+  "{rk_q}:{rk_r}:{rk_dir}"
+}
+
+// @HXG-004 — the two halves of this module disagree about which way `r` goes,
+// and they do it while returning the same types.  In the HEX family `r`
+// increases NORTH (`hex_neighbor(q, r, 5)` is NE and raises r); in the CELL
+// family `r` increases SOUTH (`cell_neighbor(q, r, 1)` is S and raises r).  Both
+// raise world y.  So a structure laid out in cell coordinates and placed on the
+// hex world with the same mental picture comes out MIRRORED vertically, and
+// every individual call was right.
+fn test_the_two_families_disagree_on_which_way_r_goes() {
+  // Identical arithmetic, opposite compass.
+  (hq, hr) = hex_grid::hex_neighbor(4, 4, 5);
+  (sq, sr) = hex_grid::cell_neighbor(4, 4, 1);
+  assert(hq == sq && hr == sr, "both answer (4,5) — the same pair of integers");
+  // hex direction 5 is NE; cell direction 1 is S.  Nothing in the result says which.
+
+  // The corner families carry the same split.  Hex corner 0 is the TOP corner,
+  // at +y …
+  (tx, ty) = hex_grid::hex_corner_offset(0);
+  assert(about(tx, 0.0) && about(ty, 1.0), "hex corner 0 is the top, at +y");
+  // … while cell corner 0 is the NORTH-west corner, at -y.
+  (nx, ny) = hex_grid::cell_corner_offset(0);
+  assert(about(nx, -0.5) && about(ny, -0.5), "cell corner 0 is NW, at -y");
+
+  // Read together: in the hex half, north is +y; in the cell half, north is -y.
+  // A caller that picks one convention for the whole module is wrong for half
+  // of it, and a vertical mirror is the symptom.
+  (ya, yb) = hex_grid::hex_to_px(0, 1);
+  (za, zb) = hex_grid::hex_to_px(0, 0);
+  assert(yb > zb, "hex row 1 is NORTH of row 0, and has the larger y");
+  (wa, wb) = hex_grid::cell_to_px(0, 1);
+  (va, vb) = hex_grid::cell_to_px(0, 0);
+  assert(wb > vb, "cell row 1 is SOUTH of row 0, and also has the larger y");
+}
+
+// @HXG-005 — "distance 1" and "adjacent" are the SAME question in the hex family
+// and DIFFERENT questions in the cell family.  `cell_distance` is the Chebyshev
+// (king-move) metric, so it answers 1 for a diagonal pair — but `cell_neighbor`
+// offers only four orthogonal directions, so no single step gets you there.  A
+// caller who writes `cell_distance(a, b) == 1` as an adjacency test silently
+// admits diagonals, which is how a wall gets walked around through its corner.
+fn test_distance_one_is_not_adjacency_for_cells() {
+  assert(hex_grid::cell_distance(0, 0, 1, 1) == 1, "Chebyshev: a diagonal is 1 away");
+  assert(hex_grid::cell_neighbor_dir(0, 0, 1, 1) == -1, "…and is not a neighbour");
+  assert(cell_adjacent(0, 0, 1, 1) == false, "the predicate to use instead");
+  assert(cell_adjacent(0, 0, 1, 0), "orthogonal pairs still adjacent");
+
+  // In the hex family the two predicates coincide, because all six neighbours
+  // are at distance 1 and nothing else is — which is why the cell case surprises.
+  ok = true;
+  for d in 0..6 {
+    (aq, ar) = hex_grid::hex_neighbor(3, 3, d);
+    if hex_grid::hex_distance(3, 3, aq, ar) != 1 { ok = false; }
+    if hex_grid::hex_neighbor_dir(3, 3, aq, ar) < 0 { ok = false; }
+  }
+  assert(ok, "hex: distance 1 and adjacency agree");
+}
+
+// The predicate to reach for: ask the direction function, not the metric.
+fn cell_adjacent(ca_q1: integer, ca_r1: integer, ca_q2: integer, ca_r2: integer) -> boolean {
+  hex_grid::cell_neighbor_dir(ca_q1, ca_r1, ca_q2, ca_r2) >= 0
+}
+
+// @HXG-006 — `-1` means "there is no such direction", and it is an `integer`, so
+// it flows straight into every function that takes a direction.  Nothing raises.
+// `hex_edge_corners` and `hex_neighbor` both end in a fall-through arm, so -1
+// silently BECOMES direction 5; `hex_canon_edge` takes its `dir < 3` branch and
+// hands back an edge index of -1, which then indexes a wall table.  Check the
+// answer before you spend it — the check is one comparison and there is no
+// null to remind you.
+fn test_minus_one_is_not_null_and_it_indexes() {
+  bad = hex_grid::hex_neighbor_dir(0, 0, 5, 5);
+  assert(bad == -1, "distant hexes have no direction between them");
+
+  // -1 is not rejected anywhere; it is absorbed as direction 5.
+  (ma, mb) = hex_grid::hex_edge_corners(-1);
+  (fa, fb) = hex_grid::hex_edge_corners(5);
+  assert(ma == fa && mb == fb, "hex_edge_corners(-1) answers the direction-5 corners");
+  (na, nb) = hex_grid::hex_neighbor(4, 4, -1);
+  (va, vb) = hex_grid::hex_neighbor(4, 4, 5);
+  assert(na == va && nb == vb, "hex_neighbor(q,r,-1) answers the direction-5 neighbour");
+
+  // …except here, where it survives as an edge index of -1 rather than becoming 5.
+  // Two different wrong answers from one bad direction is what makes this hard to
+  // trace back: the wall is stored under an index no reader will ever ask for.
+  (ca, cb, ce) = hex_grid::hex_canon_edge(4, 4, -1);
+  assert(ca == 4 && cb == 4 && ce == -1, "hex_canon_edge keeps the -1 as an edge index");
+
+  // The guard, in full: one comparison, before the direction is used for anything.
+  assert(step_or_stay(4, 4, 0, 0) == "4:4", "no direction: stay put");
+  assert(step_or_stay(4, 4, 5, 4) == "5:4", "a real direction: take the step");
+}
+
+// The recommended idiom: turn the sentinel into a decision at the boundary,
+// rather than letting it travel as a direction.
+fn step_or_stay(ss_q: integer, ss_r: integer, ss_tq: integer, ss_tr: integer) -> text {
+  d = hex_grid::hex_neighbor_dir(ss_q, ss_r, ss_tq, ss_tr);
+  if d < 0 { return "{ss_q}:{ss_r}"; }
+  (nq, nr) = hex_grid::hex_neighbor(ss_q, ss_r, d);
+  "{nq}:{nr}"
+}

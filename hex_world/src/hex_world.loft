@@ -30,7 +30,11 @@
 // surface in chunk-major order.
 //
 // c_color = 0 means "empty" (no crystal, no TTT mark).  Both clients
-// treat 0 as background; non-zero as live content.
+// treat 0 as background; non-zero as live content.  It is a SENTINEL, not a
+// colour: a colour-0 cell stores its other fields but is invisible to
+// cell_count, neighbour_count, the decay pass and world_save.  Start a palette
+// at 1.
+// Example: @HXW-005
 pub struct Cell {
   c_color:  u8,
   c_height: u8,
@@ -48,7 +52,12 @@ pub struct Chunk {
 
 // Top-level container.  Sparse: only chunks with at least one
 // non-empty cell live in `chunks`; empty chunks are removed by the
-// tick loop's GC pass.  `tick` is monotonic per server lifetime.
+// tick loop's GC pass — that pass is the CALLER's.  Nothing in this
+// library frees a chunk: `set_cell` says so, `tick_and_decay` empties cells
+// without touching `chunks`, and the only reclaim it offers is a
+// `world_save` / `world_load` round trip, which writes non-empty chunks only.
+// `tick` is monotonic per server lifetime.
+// Example: @HXW-004
 pub struct World {
   chunks: vector<Chunk>,
   tick:   integer,
@@ -62,13 +71,18 @@ pub struct World {
 
 // floor(v / 32) — handles negative v correctly (C-style `/` rounds
 // toward zero, which silently maps cell (-1, 0) to chunk 0 instead
-// of chunk -1).
+// of chunk -1).  Use this rather than `v / 32` for any coordinate that
+// can go west or north of the origin, which in a world that grows both
+// ways is half of them.
+// Example: @HXW-003
 pub fn chunk_idx_32(v: integer) -> integer {
   vr = v % 32;
   if vr < 0 { (v - vr - 32) / 32 } else { (v - vr) / 32 }
 }
 
-// v mod 32, always in [0, 31].
+// v mod 32, always in [0, 31].  `v % 32` is NOT this: it answers a negative
+// slot for a negative v, which then indexes nothing.
+// Example: @HXW-003
 pub fn hex_idx_32(v: integer) -> integer {
   vr = v % 32;
   if vr < 0 { vr + 32 } else { vr }
@@ -77,7 +91,9 @@ pub fn hex_idx_32(v: integer) -> integer {
 // ── Constructors ──────────────────────────────────────────────────
 
 // Default empty cell.  All fields zero; serialises to four 0x00
-// bytes on the wire.
+// bytes on the wire.  Also what `get_cell` answers for a cell that is not
+// there at all — the two are deliberately indistinguishable.
+// Example: @HXW-001, @HXW-005
 pub fn cell_empty() -> Cell {
   Cell { c_color: 0, c_height: 0, c_age: 0 }
 }
@@ -104,7 +120,10 @@ pub fn world_empty() -> World {
 // indexed variant lives in moros_map's pattern and can be lifted
 // here.
 
-// True iff a chunk exists at the global (q, r).
+// True iff a chunk exists at the global (q, r).  The only way to distinguish
+// "no chunk here" from "chunk here, cell empty" — `get_cell` answers the same
+// thing for both, on purpose.
+// Example: @HXW-001
 pub fn has_chunk(self: World, q: integer, r: integer) -> boolean {
   cx = chunk_idx_32(q);
   cz = chunk_idx_32(r);
@@ -115,7 +134,9 @@ pub fn has_chunk(self: World, q: integer, r: integer) -> boolean {
 }
 
 // Ensure a chunk exists at the global (q, r); creates a 32x32 of
-// empty cells if absent.
+// empty cells if absent — 1024 cells per first touch, and never freed again
+// by this library.
+// Example: @HXW-001, @HXW-004
 pub fn ensure_chunk(self: &World, q: integer, r: integer) {
   cx = chunk_idx_32(q);
   cz = chunk_idx_32(r);
@@ -127,7 +148,9 @@ pub fn ensure_chunk(self: &World, q: integer, r: integer) {
 
 // Read the cell at global (q, r).  Returns `cell_empty()` when the
 // chunk does not exist (sparse-world convention — empty chunks are
-// implicitly all-empty).
+// implicitly all-empty).  Reading never allocates, so a read sweep over any
+// region is free however wide; ask `has_chunk` if you need the difference.
+// Example: @HXW-001
 pub fn get_cell(self: World, q: integer, r: integer) -> Cell {
   cx = chunk_idx_32(q);
   cz = chunk_idx_32(r);
@@ -146,7 +169,8 @@ pub fn get_cell(self: World, q: integer, r: integer) -> Cell {
 
 // Write a cell at global (q, r).  Creates the containing chunk on
 // demand; does NOT GC empty chunks (the tick loop's end-of-tick
-// pass owns that).
+// pass owns that — and it is the caller's loop, not this library's).
+// Example: @HXW-001, @HXW-004
 pub fn set_cell(self: &World, q: integer, r: integer, value: Cell) {
   ensure_chunk(self, q, r);
   cx = chunk_idx_32(q);
@@ -165,7 +189,9 @@ pub fn set_cell(self: &World, q: integer, r: integer, value: Cell) {
 
 // ── Aggregates + neighbour counting ────────────────────────────────
 
-// Total number of non-empty cells across every chunk.
+// Total number of non-empty cells across every chunk.  "Non-empty" is
+// `c_color != 0`, so this can answer 0 for a world holding heights and ages.
+// Example: @HXW-005
 pub fn cell_count(self: World) -> integer {
   cct_total = 0;
   for cct_c in self.chunks {
@@ -178,7 +204,10 @@ pub fn cell_count(self: World) -> integer {
 
 // Count filled axial-hex neighbours of the cell at global (q, r).
 // Returns 0..=6.  Empty centre cell is fine — neighbours are read
-// independently of the centre's state.
+// independently of the centre's state.  AXIAL: the six deltas carry no parity
+// term, so these (q, r) are not the odd-r offset pair `hex_grid` uses, though
+// both are `(integer, integer)` spelled q and r.  "Filled" is `c_color != 0`.
+// Example: @HXW-002, @HXW-005
 pub fn neighbour_count(self: World, q: integer, r: integer) -> integer {
   nc_count = 0;
   if get_cell(self, q + 1, r    ).c_color != 0 { nc_count += 1; }
