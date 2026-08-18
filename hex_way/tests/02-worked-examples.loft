@@ -1,0 +1,446 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Worked examples for `hex_way` (@PLN141).  Each `test_*` below is a REAL,
+// run-every-CI demonstration of a contract the signature cannot state; the
+// function documents itself by CITING the tag with `// Example: @HXY-00N`, and
+// `check_doc_drift.sh examples` fails if a citation goes dangling.  These are
+// teaching examples, distinct from the conformance suite in `01-hex-way.loft`.
+//
+// THE ONE IDEA.  A way is authored as ONE exact centreline, and every other
+// line it has — rails, kerbs, platform faces, lane markings — is an OFFSET of
+// that centreline, computed on demand.  Nothing but the centreline is stored.
+//
+// WHY IT IS WORTH THE TROUBLE.  The obvious alternative is to store the band of
+// cells and read the edges back off it.  That works, and it quantises: the cells
+// come from a lattice, so the width you asked for is not the width you get, and
+// the error does not shrink as you refine the request.  `test_the_rasterised
+// _band_has_a_floor_the_offset_does_not` measures the floor — and it is not one
+// number, it is one number PER HEADING.
+//
+// WHAT GOES WRONG ANYWAY.  Every trap below is the same species: a call that
+// answers something entirely plausible, passes every cheap check, and is wrong.
+// An offset on the far side of the way is still exactly `d` from the centreline.
+// A band asked for at half the width comes back the same size.  A road stamped
+// part by part covers the same cells as one stamped correctly.  In each case the
+// number that can tell them apart is NOT the one a caller reaches for first, and
+// naming that number is what these examples are for.
+use hex_way;
+use hex_field;
+use hex_edge;
+
+const Q0 = -6;
+const R0 = -6;
+const W  = 13;
+const H  = 13;
+
+// The lattice -> world map every distance here is measured in.  A cell is one unit
+// from centre to corner, so it is `sqrt(3)` = 1.732 across the flats and 1.5 from
+// one row to the next — an anisotropy two of the examples below are about.
+fn wx(q: integer, r: integer) -> float { ((lattice_k(q, r)) as float) * 0.8660254037844386 }
+fn wy(q: integer, r: integer) -> float { ((lattice_m(q, r)) as float) * 0.5 }
+
+// How far apart the end of one segment and the start of the next actually are.
+fn joint_gap(t: Track, i: integer) -> float {
+  (ax, ay) = seg_point(t, i, seg_len(t, i));
+  (bx, by) = seg_point(t, i + 1, 0.0);
+  sqrt((ax - bx) * (ax - bx) + (ay - by) * (ay - by)) ?? 0.0
+}
+
+fn abs_f(v: float) -> float { if v < 0.0 { return 0.0 - v; } v }
+
+// The cell count a band of this halfwidth rasterises to.
+fn band_cells(t: Track, hw: float) -> integer {
+  s = hexset_chunk(-8, -8, 17, 17);
+  way_mark(t, hw, s);
+  hexset_count(s)
+}
+
+// Edges that are blocked while BOTH their cells are inside the footprint — a wall
+// standing in the middle of the road.  Each such edge is reached from both of its
+// cells, so the raw count is halved.
+fn walls_inside(s: HexSet, e: EdgeSet) -> integer {
+  n = 0;
+  for r in R0..R0 + H {
+    for q in Q0..Q0 + W {
+      if hexset_get(s, q, r) {
+        for d in 0..6 {
+          nq = nb_q(q, r, d);
+          nr = nb_r(q, r, d);
+          if hexset_get(s, nq, nr) && edge_blocked(e, q, r, nq, nr) { n = n + 1; }
+        }
+      }
+    }
+  }
+  n / 2 ?? 0
+}
+
+// The biggest height difference between two NEIGHBOURING cells of a flight, and how
+// many neighbouring pairs there were to look at — a flight whose cells are not
+// neighbours has no risers to measure, and would otherwise read as perfectly smooth.
+fn worst_riser(s: HexSet, f: Heights) -> float {
+  m = 0.0;
+  for r in R0..R0 + H {
+    for q in Q0..Q0 + W {
+      if hexset_get(s, q, r) {
+        for d in 0..6 {
+          nq = nb_q(q, r, d);
+          nr = nb_r(q, r, d);
+          if hexset_get(s, nq, nr) {
+            dz = abs_f(height_get(f, q, r) - height_get(f, nq, nr));
+            if dz > m { m = dz; }
+          }
+        }
+      }
+    }
+  }
+  m
+}
+
+fn adjacent_pairs(s: HexSet) -> integer {
+  n = 0;
+  for r in R0..R0 + H {
+    for q in Q0..Q0 + W {
+      if hexset_get(s, q, r) {
+        for d in 0..6 {
+          if hexset_get(s, nb_q(q, r, d), nb_r(q, r, d)) { n = n + 1; }
+        }
+      }
+    }
+  }
+  n
+}
+
+fn main() {
+  assert(track_len(track_new()) == 0.0, "an empty way is zero long");
+}
+
+// @HXY-001 — AN OFFSET HAS TO JOIN, AND EQUIDISTANCE CANNOT SEE THAT IT DOES.
+//
+// `track_offset` is the whole reason a way is stored as a centreline: the rail,
+// the kerb, the platform face are all this one call at different `d`.  So the
+// property everyone reaches for is equidistance — every point of the offset is
+// `d` from the centreline — and it is the wrong property to check ALONE, because
+// it holds just as exactly on the wrong side.
+//
+// Offset a way that goes straight and then turns.  If the turn's offset lands on
+// the far side, the result is still a valid pair of curves, each still exactly
+// `d` from the line, and the rail now JUMPS by `2d` where the straight meets the
+// turn.  A train would need to be lifted over it.
+//
+// The number that sees it is the gap at the joint, and it is zero here for every
+// combination of turn direction and side — which is what "left normal positive"
+// has to mean for arcs too.  It did not: the arc branch read the sweep direction
+// the other way up and put every turn on the far side.  Fixed in 0.1.1, and this
+// is the test that would have caught it.  A dedicated equidistance gate did not.
+fn test_an_offset_has_to_join_where_the_centreline_joins() {
+  // A left turn: 10 units of straight, then a quarter circle about (10, 5).
+  left = track_new();
+  track_straight(left, 0.0, 0.0, 10.0, 0.0);
+  track_arc(left, 10.0, 5.0, 5.0, -1.5707963267948966, 0.0);
+
+  // A right turn: the mirror, about (10, -5), swept the other way.
+  right = track_new();
+  track_straight(right, 0.0, 0.0, 10.0, 0.0);
+  track_arc(right, 10.0, -5.0, 5.0, 1.5707963267948966, 0.0);
+
+  assert(joint_gap(left, 0) < 0.000000001, "the centreline itself joins");
+  assert(joint_gap(right, 0) < 0.000000001, "and so does the mirrored one");
+
+  // `d` positive is the LEFT of travel, for a straight and for a turn alike, so
+  // the left rail of the left turn starts at (10, 1) — the same point the offset
+  // straight ends at.
+  lo = track_offset(left, 1.0);
+  (bx, by) = seg_point(lo, 1, 0.0);
+  assert(abs_f(bx - 10.0) < 0.000000001 && abs_f(by - 1.0) < 0.000000001,
+         "the left rail of a left turn starts at (10, 1), got ({bx}, {by})");
+
+  // All four combinations of turn direction and side, and the gap is the check.
+  k = 1;
+  while k <= 8 {
+    d = (k as float) * 0.5;                       // 0.5 .. 4.0, all inside the limit
+    assert(joint_gap(track_offset(left, d), 0) < 0.000000001,
+           "left turn, left rail at d={d} joins");
+    assert(joint_gap(track_offset(left, 0.0 - d), 0) < 0.000000001,
+           "left turn, right rail at d={d} joins");
+    assert(joint_gap(track_offset(right, d), 0) < 0.000000001,
+           "right turn, left rail at d={d} joins");
+    assert(joint_gap(track_offset(right, 0.0 - d), 0) < 0.000000001,
+           "right turn, right rail at d={d} joins");
+    k = k + 1;
+  }
+
+  // And the property that could not tell the two apart, so nobody mistakes this
+  // for a test of it: equidistance holds — it held before the fix too.
+  o = track_offset(left, 1.0);
+  (mx, my) = seg_point(o, 1, seg_len(o, 1) * 0.5);
+  assert(abs_f(track_distance(left, mx, my) - 1.0) < 0.000000001,
+         "the offset is exactly 1.0 from the centreline");
+
+  // `seg_curvature` states the same left/right convention as a number, and the two
+  // have to agree: on a turn signed POSITIVE the positive offset is the INSIDE one,
+  // so its rail is the shorter of the two.  Disagree, and one of them is the bug.
+  assert(abs_f(seg_curvature(left, 1) - 0.2) < 0.000000001,
+         "a left turn of radius 5 has curvature +0.2, got {seg_curvature(left, 1)}");
+  assert(abs_f(seg_curvature(right, 1) + 0.2) < 0.000000001,
+         "the right turn has -0.2, got {seg_curvature(right, 1)}");
+  assert(seg_curvature(left, 0) == 0.0, "and a straight has none");
+  assert(seg_len(track_offset(left, 1.0), 1) < seg_len(left, 1),
+         "the left rail of a left turn is the inside one, so it is shorter");
+  assert(seg_len(track_offset(right, 1.0), 1) > seg_len(right, 1),
+         "and of a right turn it is the outside one, so it is longer");
+}
+
+// @HXY-002 — THE RASTERISED BAND HAS A FLOOR; THE OFFSET DOES NOT.
+//
+// This is why nothing but the centreline is stored.  `way_mark` marks every cell
+// whose CENTRE is within `halfwidth` of the way, so the width you get is the
+// width of the nearest ring of cell centres — and between two rings, a whole
+// interval of requested widths gives the identical footprint.
+//
+// The interval is the floor, and the module header quotes it as "around 0.5 hex
+// widths".  That is the best case, not the case.  Measured here: a way along a
+// ROW cannot resolve anything finer than 1.5 (0.87 hex widths); the same way
+// along a COLUMN resolves 0.866 (0.5 hex widths).  The floor is a function of
+// the heading, and the two headings differ by sqrt(3).
+//
+// So a caller asking for a 0.1-wide footpath and a 1.4-wide lane along a row
+// gets the same cells twice.  `track_offset` at those two widths gets two
+// different exact lines, which is the point: the cells are a rasterisation of
+// the way, never the way.
+fn test_the_rasterised_band_has_a_floor_the_offset_does_not() {
+  along_row = track_new();
+  track_straight(along_row, -20.0, 0.0, 20.0, 0.0);
+  along_col = track_new();
+  track_straight(along_col, 0.0, -20.0, 0.0, 20.0);
+
+  // Along a row the rings of cell centres are 1.5 apart.
+  narrow = band_cells(along_row, 0.1);
+  assert(band_cells(along_row, 1.4999) == narrow,
+         "a 0.1 path and a 1.4999 lane rasterise identically along a row");
+  assert(band_cells(along_row, 1.5001) > narrow,
+         "and the footprint only grows once 1.5 is crossed");
+
+  // Along a column they are sqrt(3)/2 = 0.866 apart — a finer floor, same way.
+  thin = band_cells(along_col, 0.1);
+  assert(band_cells(along_col, 0.8659) == thin,
+         "the same two widths along a column rasterise identically too");
+  assert(band_cells(along_col, 0.8661) > thin,
+         "and that footprint grows at 0.866, not at 1.5");
+
+  // The two floors are a factor sqrt(3) apart: the SAME requested width resolves
+  // differently depending only on which way the road points.
+  assert(band_cells(along_row, 1.0) == narrow, "1.0 is below the row floor");
+  assert(band_cells(along_col, 1.0) > thin, "and above the column floor");
+
+  // The offset has no floor at all: ask for the two widths, get two lines.
+  a = track_offset(along_row, 0.1);
+  b = track_offset(along_row, 1.4999);
+  (ax, ay) = seg_point(a, 0, 5.0);
+  (bx, by) = seg_point(b, 0, 5.0);
+  assert(abs_f(ay - 0.1) < 0.000000001, "the 0.1 offset is at y = 0.1, got {ay}");
+  assert(abs_f(by - 1.4999) < 0.000000001, "the 1.4999 offset is at y = 1.4999, got {by}");
+  assert(abs_f(ax - bx) < 0.000000001, "both run along the same x");
+}
+
+// @HXY-003 — `offset_legal` IS A WIDTH TEST, NOT AN OFFSET TEST.
+//
+// It takes `d` and uses `|d|`, which looks like a needless restriction until you
+// remember what a way is: the left rail AND the right rail, at +d and -d.  The
+// outer one is never in trouble; the inner one collapses when `|d|` reaches the
+// tightest turn radius on the whole track.  So the question `offset_legal`
+// answers is "may this WAY be this wide", and the answer is set by the sharpest
+// turn anywhere along it — which is the minimum curve radius, falling out of the
+// geometry rather than being chosen.
+//
+// Past the limit `track_offset` still returns a Track, and it is nonsense in two
+// measurable ways: the inner arc's radius goes negative, so its length is
+// NEGATIVE and the way gets shorter as it gets wider; and equidistance — the one
+// guarantee the whole design rests on — stops holding.  Asked for 6.0 on a
+// radius-5 turn, the "offset" sits 5.71 from the centreline.
+fn test_offset_legal_is_a_width_test_set_by_the_sharpest_turn() {
+  t = track_new();
+  track_straight(t, 0.0, 0.0, 10.0, 0.0);
+  track_arc(t, 10.0, 5.0, 5.0, -1.5707963267948966, 0.0);      // R = 5
+
+  assert(offset_legal(t, 4.5), "a way 9 wide fits a radius-5 turn");
+  assert(offset_legal(t, -4.5), "and the sign does not matter — it is a width");
+  assert(!offset_legal(t, 5.0), "at the turn radius the inner rail is a point");
+  assert(!offset_legal(t, -5.0), "from either side");
+
+  // Just inside the limit everything still holds exactly.
+  ok = track_offset(t, 4.5);
+  assert(seg_len(ok, 1) > 0.0, "the inner arc still has a positive length");
+  (px, py) = seg_point(ok, 1, seg_len(ok, 1) * 0.5);
+  assert(abs_f(track_distance(t, px, py) - 4.5) < 0.000000001,
+         "and is exactly 4.5 from the centreline");
+
+  // Just outside it, both failures are visible.
+  bad = track_offset(t, 6.0);
+  assert(seg_len(bad, 1) < 0.0,
+         "past the limit the inner arc has a NEGATIVE length, got {seg_len(bad, 1)}");
+  assert(track_len(bad) < track_len(ok),
+         "so the way gets SHORTER as it gets wider");
+  (qx, qy) = seg_point(bad, 1, seg_len(bad, 1) * 0.5);
+  assert(abs_f(track_distance(t, qx, qy) - 6.0) > 0.25,
+         "and equidistance is gone: asked 6.0, sits {track_distance(t, qx, qy)} out");
+
+  // It is the whole track's tightest turn that decides, not the one being read.
+  two = track_new();
+  track_arc(two, 0.0, 0.0, 9.0, 0.0, 0.5);       // a gentle sweep
+  track_arc(two, 0.0, 0.0, 2.0, 0.0, 0.5);       // and a tight one
+  assert(offset_legal(two, 1.5), "1.5 clears the tight turn as well as the gentle one");
+  assert(!offset_legal(two, 2.0), "2.0 does not — the R=2 turn sets the limit for both");
+}
+
+// @HXY-004 — MARK EVERY PART, THEN CUT ONCE.  STAMPING PART BY PART IS WRONG,
+// AND THE FOOTPRINT CANNOT TELL YOU SO.
+//
+// `way_stamp` marks a way's cells and cuts its boundary in one call, which is
+// exactly what you want for ONE way and exactly what you must not do for two.
+// Cutting turns "outside the footprint" into a blocked edge — and the footprint
+// grows when the next part lands, so an edge that was a boundary becomes an
+// interior edge with a wall still standing in it.  Nothing ever clears it.
+//
+// Two lanes of a road, side by side.  All three routes below cover the SAME 23
+// cells, so a footprint check passes on all three.  Stamping them one at a time
+// leaves 22 walls down the middle of the road, and WHICH surface owns them
+// depends on which lane was stamped first — the order-dependence the two-phase
+// rule exists to remove.  `way_mark` both, then `cut_arb` once: no walls, and
+// the answer never looks at what was stamped when.
+fn test_mark_every_part_then_cut_once() {
+  a = track_new();
+  track_straight(a, -9.0, 0.0, 9.0, 0.0);
+  b = track_new();
+  track_straight(b, -9.0, 1.5, 9.0, 1.5);        // the neighbouring row of cells
+
+  sf = surfaces_new();
+  fa = way_surfaces(a, sf);
+  fb = way_surfaces(b, sf);
+  // `way_surfaces` answers the FIRST id and promises the rest are contiguous, which
+  // is what lets `way_stamp` name a segment's surface as `first + i` with no lookup.
+  assert(fa == 1 && fb == fa + a.tk_n,
+         "ids are contiguous across parts: {fa} then {fb}");
+
+  s1 = hexset_chunk(Q0, R0, W, H);
+  e1 = edgeset_new(Q0, R0, W, H);
+  way_stamp(a, 0.7, s1, e1, fa, 1);
+  way_stamp(b, 0.7, s1, e1, fb, 1);
+
+  s2 = hexset_chunk(Q0, R0, W, H);
+  e2 = edgeset_new(Q0, R0, W, H);
+  way_stamp(b, 0.7, s2, e2, fb, 1);              // the same two lanes, other order
+  way_stamp(a, 0.7, s2, e2, fa, 1);
+
+  s3 = hexset_chunk(Q0, R0, W, H);
+  e3 = edgeset_new(Q0, R0, W, H);
+  way_mark(a, 0.7, s3);
+  way_mark(b, 0.7, s3);
+  cut_arb(s3, e3, sf, fb + b.tk_n, 1);
+
+  // The check a caller would make, and it cannot see any of this.
+  assert(hexset_count(s1) == 23, "lane A then B covers 23 cells");
+  assert(hexset_count(s2) == 23, "B then A covers the same 23");
+  assert(hexset_count(s3) == 23, "and so does mark-both-then-cut");
+
+  assert(walls_inside(s1, e1) == 22, "stamping part by part leaves 22 walls inside the road");
+  assert(walls_inside(s2, e2) == 22, "the other order leaves 22 as well");
+  assert(walls_inside(s3, e3) == 0, "marking both and cutting once leaves none");
+
+  // And the stale walls are order-dependent: the same edge, two different owners.
+  assert(edge_surf(e1, 0, 0, 0, 1) == fa, "A stamped first owns the shared edge");
+  assert(edge_surf(e2, 0, 0, 0, 1) == fb, "B stamped first owns the very same edge");
+  assert(edge_surf(e3, 0, 0, 0, 1) == 0, "cut once, nothing owns it — it is not a wall");
+}
+
+// @HXY-005 — A MILEPOST NEAR THE START OF A TURN SNAPS TO THE NEARER END, NOT
+// THE FARTHER ONE.
+//
+// `way_param` is the parameter everything along a way is stated in — stations,
+// signals, the steps below.  On an arc it is an ANGLE turned into a length, and
+// an angle wraps: a point that sits just BEFORE the start of the turn is at
+// -0.1 radians, which is 2*pi - 0.1 going the arc's way round, i.e. very nearly
+// a full circle of travel.
+//
+// Clamping that into the arc's span would hand it the parameter of the END of
+// the turn.  On a staircase that is the last step's height given to the first
+// cell of the flight — a full-flight riser between two neighbouring cells, and
+// the reason this is a worked example rather than a footnote.  `seg_param`
+// instead snaps to whichever end is angularly nearer, so a point before the
+// start reads 0.
+fn test_a_milepost_before_a_turn_reads_zero_not_a_full_lap() {
+  arc = track_new();
+  track_arc(arc, 0.0, 0.0, 4.0, 0.0, 1.5707963267948966);   // R = 4, a quarter turn
+  span = seg_len(arc, 0);
+  assert(abs_f(span - 6.283185307179586) < 0.000001, "the quarter turn is 6.283 long");
+
+  // On the arc, the parameter is the arc length as expected.
+  mid = seg_param(arc, 0, 4.0 * cos(0.7853981633974483), 4.0 * sin(0.7853981633974483));
+  assert(abs_f(mid - span * 0.5) < 0.000001, "halfway round reads half the length, got {mid}");
+
+  // 0.1 radians BEFORE the start.  The wrap says 6.18; the answer is 0.
+  before = seg_param(arc, 0, 4.0 * cos(-0.1), 4.0 * sin(-0.1));
+  assert(before == 0.0, "a point before the turn reads 0, got {before}");
+  assert(before < span * 0.5, "and emphatically not the far end of the turn");
+
+  // 0.1 radians after the end, which really does belong at the far end.
+  after = seg_param(arc, 0, 4.0 * cos(1.67), 4.0 * sin(1.67));
+  assert(abs_f(after - span) < 0.000001, "a point past the turn reads the full span, got {after}");
+}
+
+// @HXY-006 — THE SHORTEST SAFE TREAD IS A FUNCTION OF THE HEADING.
+//
+// `way_steps` raises the ground by `rise` every `tread` of travel, which is a
+// staircase, a terrace, or a ramp at rise 0.  The tread is continuous; the cells
+// it is quantised onto are not, and their spacing ALONG the way depends on which
+// way the way points — sqrt(3) = 1.732 apart down a row, 1.5 apart down a
+// column.  Ask for a tread finer than that spacing and consecutive cells skip a
+// step: a DOUBLE RISER between two neighbours, which is a trip hazard on a stair
+// and a cliff on a terrace.
+//
+// So there is no single "fine enough" tread.  1.5 is exactly right along a
+// column and produces double risers along a row.  Whatever the flight's heading,
+// the shortest tread it can carry is the spacing of its own cells — and this
+// example measures both, rather than quoting one.
+//
+// This is @HXY-002's anisotropy seen end-on: the lattice that makes the ACROSS
+// resolution coarser along a row is the one that makes the ALONG spacing coarser
+// there too.
+fn test_the_shortest_safe_tread_depends_on_the_heading() {
+  along_row = track_new();
+  track_straight(along_row, -12.0, 0.0, 12.0, 0.0);
+  along_col = track_new();
+  track_straight(along_col, 0.0, -12.0, 0.0, 12.0);
+
+  // A halfwidth of 1.0 clears the column floor (0.866) and not the row floor
+  // (1.5), which is what makes BOTH footprints connected — a flight whose cells
+  // are not neighbours has no risers, and would read as flawless.
+  sr = hexset_chunk(Q0, R0, W, H);
+  way_mark(along_row, 1.0, sr);
+  sc = hexset_chunk(Q0, R0, W, H);
+  way_mark(along_col, 1.0, sc);
+  assert(adjacent_pairs(sr) > 0 && adjacent_pairs(sc) > 0,
+         "both flights are connected, so there is something to measure");
+
+  // A tread of 1.5: right for the column, one step short for the row.
+  fr = heights_new(Q0, R0, W, H);
+  way_steps(along_row, sr, fr, 1.0, 1.5);
+  fc = heights_new(Q0, R0, W, H);
+  way_steps(along_col, sc, fc, 1.0, 1.5);
+  assert(worst_riser(sr, fr) > 1.5,
+         "along a row, a 1.5 tread skips steps: riser {worst_riser(sr, fr)} for a 1.0 rise");
+  assert(worst_riser(sc, fc) < 1.5,
+         "along a column the same tread is clean: riser {worst_riser(sc, fc)}");
+
+  // Give the row its own cell spacing and it is clean too.
+  fr2 = heights_new(Q0, R0, W, H);
+  way_steps(along_row, sr, fr2, 1.0, 1.7320508075688772);
+  assert(worst_riser(sr, fr2) < 1.5,
+         "at a tread of sqrt(3) the row flight is clean: riser {worst_riser(sr, fr2)}");
+
+  // And the column tolerates nothing finer than its own: 1.4 breaks it.
+  fc2 = heights_new(Q0, R0, W, H);
+  way_steps(along_col, sc, fc2, 1.0, 1.4);
+  assert(worst_riser(sc, fc2) > 1.5,
+         "just under 1.5 the column flight skips: riser {worst_riser(sc, fc2)}");
+}
