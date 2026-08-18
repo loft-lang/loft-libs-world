@@ -103,7 +103,7 @@ pub fn roof_hip(s: HexSet, f: Heights, eave: float, per_ring: float) -> integer 
   bq: vector<integer> = [];
   br: vector<integer> = [];
   bd: vector<integer> = [];
-  for i in 0..cap { bq += [0]; br += [0]; bd += [0]; }
+  for _ in 0..cap { bq += [0]; br += [0]; bd += [0]; }
   vis = hexset_chunk(hexset_q0(s), hexset_r0(s), hexset_w(s), hexset_h(s));
   n = 0;
   for r in hexset_r0(s)..hexset_r0(s) + hexset_h(s) {
