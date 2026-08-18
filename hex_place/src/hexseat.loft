@@ -34,6 +34,8 @@ pub const SEAT_MEAN = 1;    // seat at the mean — the residual is smallest, sp
 pub const SEAT_HIGH = 2;    // seat at the highest — the building is buried into the slope
 
 // The height to seat at, under `policy`.  A pure read of the terrain under the footprint.
+//
+// Example: @HXP-004
 pub fn seat_height(cells: HexSet, terr: Heights, policy: integer) -> float {
   lo = 0.0;
   hi = 0.0;
@@ -60,6 +62,8 @@ pub fn seat_height(cells: HexSet, terr: Heights, policy: integer) -> float {
 // THE RESIDUAL, and it is returned rather than swallowed (`G5`): the largest gap between the seat
 // height and the ground under any footprint cell.  Zero on flat ground; on a slope it is the
 // cut-and-fill the placement owes, and the editor must show it.
+//
+// Example: @HXP-004
 pub fn seat_residual(cells: HexSet, terr: Heights, z: float) -> float {
   worst = 0.0;
   for r in hexset_r0(cells)..hexset_r0(cells) + hexset_h(cells) {
@@ -77,6 +81,8 @@ pub fn seat_residual(cells: HexSet, terr: Heights, z: float) -> float {
 // SEAT THE STENCIL: write the seat height into the `height` slot for every footprint cell.  Cells
 // and edges are untouched — that is the whole point, and it is what keeps `rebuild` exact.  Returns
 // the number of cells whose height was written.
+//
+// Example: @HXP-004
 pub fn seat_write(cells: HexSet, terr: Heights, z: float) -> integer {
   n = 0;
   for r in hexset_r0(cells)..hexset_r0(cells) + hexset_h(cells) {

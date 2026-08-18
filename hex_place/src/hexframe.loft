@@ -52,6 +52,12 @@ pub fn pose_fwd_y(p: Pose, lx: float, ly: float) -> float {
 
 // The round-trip residual |p(p⁻¹(W)) − W|∞ at one world point — the transform's numerical error,
 // which is what `ε_seam` bounds.  Exactly 0 in exact arithmetic; ~machine ε in float.
+//
+// AT ONE WORLD POINT is the load-bearing half: this is a jagged, deterministic function of the
+// point, not a constant.  Near the frame origin it commonly reads exactly 0, and reading it there
+// and adopting that as ε_seam is the mistake the number exists to prevent.
+//
+// Example: @HXP-005
 pub fn pose_residual(p: Pose, wx: float, wy: float) -> float {
   lx = pose_inv_x(p, wx, wy);
   ly = pose_inv_y(p, wx, wy);
@@ -82,11 +88,15 @@ pub fn disk_hit(p: Pose, cx: float, cy: float, rr: float, wx: float, wy: float) 
 
 // The fail-safe verdict at a point claimed by two frames: solid if EITHER is solid.  Order-free
 // (symmetric) and conservative — a gap only where both agree it is a gap.
+//
+// Example: @HXP-006
 pub fn arb_solid(a_solid: boolean, b_solid: boolean) -> boolean { a_solid || b_solid }
 
 // Which frame OWNS a contested point — its material/surface wins.  The lowest id among the frames
 // claiming *solid* (a total order on frames), or -1 if none is solid.  Intrinsic, so it does not
 // depend on the order the frames are visited.
+//
+// Example: @HXP-006
 pub fn arb_owner(a_solid: boolean, a_id: integer, b_solid: boolean, b_id: integer) -> integer {
   if a_solid && b_solid {
     if a_id < b_id { return a_id; }

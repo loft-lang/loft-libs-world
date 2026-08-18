@@ -18,6 +18,8 @@ workshop that proves the family against an exact round trip.
 
 Add the dependency, `use hex_place;`, and call the maps below. **`USAGE.md` is the worked guide**, with
 every example pointed at a passing test in `tests/01-hex-place.loft` — the tests are the executable documentation.
+The six places a caller goes wrong — and in each case the nearby call that looks the same and is not —
+are worked in `tests/02-worked-examples.loft` (`@HXP-001..006`), cited from the functions they belong to.
 
 Split from `ROUNDTRIP.md`'s objects and maps (`SPEC` **I-EXTEND**: a library defines its primitives
 from its own semantics, for consumers it will never meet). See hexbody's `plans/lib-split/`.

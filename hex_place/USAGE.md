@@ -23,6 +23,22 @@ slot alone, so its footprint is untouched. Arbitration fails safe toward solid.
 
 ## The worked examples, in the tests
 
+[`tests/02-worked-examples.loft`](tests/02-worked-examples.loft) works the six contracts a caller
+gets wrong, each beside the nearby call that looks identical and is not:
+
+| tag | what it teaches |
+|---|---|
+| `@HXP-001` | two adjacent stencils: **nobody** owns the shared edge — cut the union once, and the seam is interior |
+| `@HXP-002` | order-free **by construction**, overlap included: the tie is the lower material id, not the stamp order |
+| `@HXP-003` | a level is a **filter before the cut**, not an arbitration after it — and it is not a height |
+| `@HXP-004` | seating writes the **height slot only**; the footprint never moves and the residual is returned |
+| `@HXP-005` | the pose is the sole float step — and **one measurement of its error is not a bound** |
+| `@HXP-006` | arbitration fails safe toward **solid**, the owner is the lowest id, and `-1` is a sentinel |
+
+`@HXP-001` is the same question `hex_grid`'s `@HXG-003` answers one level down — there, one wall
+between two hexes must resolve to one stored slot; here, one seam between two stencils should not
+be stored at all.
+
 Each `fn test_*` in [`tests/01-hex-place.loft`](tests/01-hex-place.loft) is a small, complete program you can copy:
 
 - `fn main()` — the smallest call that does something real.
@@ -39,3 +55,8 @@ Run them yourself: `loft --interpret --tests tests` from the `hex_place/` direct
   a *reason* and an *offer*, and your editor should show them rather than treating the call as failed.
 - **No `ε` in an R1 comparison.** For content you authored, recovery is exact; a tolerance there is
   a defect, not a knob (`SPEC` **P4**).
+- **Never draw two stencils' walls and overlay them.** Union first, cut once. The overlay is
+  order-dependent and grows a wall down the middle of what the author drew as one building
+  (`@HXP-001`).
+- **Do not take `ε_seam` from one measurement.** `pose_residual` is a jagged, deterministic
+  function of the point; near the frame origin it commonly reads exactly zero (`@HXP-005`).

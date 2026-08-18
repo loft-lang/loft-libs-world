@@ -52,6 +52,9 @@ pub fn field_union(a: HexSet, b: HexSet) -> HexSet {
 // disjoint ones — otherwise "order-free" would quietly hold only for the adjacency case gated here.
 // (crawler's full `cut_arb` breaks the same tie by nearest SURFACE then lower id; with no surfaces
 // in play the lower id is the whole rule.  Overlap itself is a separate, ungated A8 axis.)
+//
+// Example: @HXP-001
+// Example: @HXP-002
 pub fn combine_cut(a: HexSet, ma: integer, b: HexSet, mb: integer, e: EdgeSet) -> integer {
   u = field_union(a, b);
   n = 0;
@@ -99,6 +102,8 @@ pub fn combine_cut(a: HexSet, ma: integer, b: HexSet, mb: integer, e: EdgeSet) -
 // the survivors are then cut exactly as `combine_cut` does.  Two stencils on different levels can
 // therefore never fuse, never arbitrate and never contend — at either level, one of them simply is
 // not there.  Returns the number of edges cut at this level.
+//
+// Example: @HXP-003
 pub fn combine_cut_level(a: HexSet, la: integer, ma: integer,
                          b: HexSet, lb: integer, mb: integer,
                          at: integer, e: EdgeSet) -> integer {
@@ -138,6 +143,8 @@ pub fn combine_cut_level(a: HexSet, la: integer, ma: integer,
 // The contention degree at one cell, counted **per level**: how many of the two stencils claim it
 // *at level `at`*.  This is `κ` (`X53`) made level-aware — two stencils that overlap in `(q,r)` but
 // sit on different sheets give `κ = 1` at each level, never `κ = 2` at either.
+//
+// Example: @HXP-003
 pub fn kappa_at_level(a: HexSet, la: integer, b: HexSet, lb: integer,
                       at: integer, q: integer, r: integer) -> integer {
   k = 0;
@@ -149,6 +156,8 @@ pub fn kappa_at_level(a: HexSet, la: integer, b: HexSet, lb: integer,
 // How many marked edges separate an `a`-cell from a `b`-cell — the "shared wall" run.  Zero after
 // `combine_cut` (the seam fuses); non-zero after a per-body overlay (a spurious seam wall).  This
 // is the measurable form of "who owns the shared edge?": nobody, if the parts were combined right.
+//
+// Example: @HXP-001
 pub fn shared_marked(a: HexSet, b: HexSet, e: EdgeSet) -> integer {
   n = 0;
   for r in hexset_r0(a)..hexset_r0(a) + hexset_h(a) {

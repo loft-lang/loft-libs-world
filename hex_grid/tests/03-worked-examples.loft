@@ -108,6 +108,10 @@ fn test_neighbor_deltas_depend_on_row_parity() {
 // six to the one slot that holds it, and skipping it does not lose the wall —
 // it makes ONE wall into TWO half-walls that disagree, so a character is
 // blocked walking north and walks straight through going south.
+//
+// `hex_place`'s @HXP-001 is the same question one level UP — one seam between
+// two adjacent STENCILS — and there the answer is that it should not be stored
+// at all: cut the union once and the seam is interior, so nobody owns it.
 fn test_one_wall_has_exactly_one_canonical_slot() {
   // Direction 4 (NW) from (5,5) is stored on the NEIGHBOUR, as its edge 1.
   (cq, cr, ce) = hex_grid::hex_canon_edge(5, 5, 4);

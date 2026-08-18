@@ -13,9 +13,9 @@
 # NOTHING HERE IS `exempt`.  This is the largest repo in the ecosystem — fourteen
 # packages, ~478 public functions — and it is geometry, which is the tier where a
 # call site teaches most.  The first pass took the tier-1 package (`hex_grid`, the
-# convention every other one is expressed in) and `hex_world`; `hex_form` followed as
-# @PLN141 Phase E row 1.  The eleven rows below say what their examples would teach,
-# so the next pass starts from a list rather than from a re-read.
+# convention every other one is expressed in) and `hex_world`; `hex_form` (Phase E row 1)
+# and `hex_place` (row 2) followed.  The ten rows below say what their examples would
+# teach, so the next pass starts from a list rather than from a re-read.
 #
 # package	verdict	reason
 hex_body	deferred	A body is a RIG — bones and joint limits — never a pose, and the pose is COMPUTED from the current rig. That is the contract a caller gets wrong, and showing it needs a rig small enough to hand-compute a world frame for. Unblocked by picking that rig; 0.3.0 made the frame checkable (rig_world_seg3 was discarding it).
@@ -23,7 +23,6 @@ hex_draw	deferred	The contract worth showing is the inverse read: a wall's analy
 hex_edge	deferred	The example is already written as prose — the sweep_path resting-position trap from moros#10, now in this package's README: a caller must not come to rest exactly at the fraction returned, because that point is on the bisector and the next hex_at may round to the far side. Turning it into a tagged test is blocked on the design question the note ends with, which is the owner's: whether a sweep_path_skin belongs here or every caller keeps its own.
 hex_field	deferred	The largest surface in the repo (82 public functions) and the one with a real oracle — it must reproduce the Python's golden JSON byte for byte, which is possible only because the whole representation is INTEGER. That exactness is what an example should teach. Unblocked by choosing which golden fixture is small enough to read in a test.
 hex_fit	deferred	A stencil description that carries linework, and a round trip that notices when it does not survive. The round trip is the contract; it is only readable once the canonical TEXT a stencil round-trips through is itself demonstrated, so this follows hex_form.
-hex_place	deferred	"Two stencils adjacent: who owns the shared edge" is the same question @HXG-003 answers one level down, and the two should cite each other. Unblocked now that @HXG-003 exists.
 hex_recover	deferred	Law F is injectivity, and its coverage is a MEASUREMENT over an admitted space — a census, which is a long-running test rather than a teaching one. Unblocked by deciding what a fast readable subset of that census looks like.
 hex_roof	deferred	One mechanism, several profiles: every roof form is the same function of a DISTANCE, and only the distance SOURCE changes. Which source a profile reads is the thing a caller gets wrong. Small surface (15 functions); nothing blocks it but a pass.
 hex_shape	deferred	From a run of slots marked ROUNDED, are the centre and radius recoverable EXACTLY or only as a fit? The file says the answer is split, and a split answer is precisely what a signature cannot carry. Nothing blocks it but a pass.

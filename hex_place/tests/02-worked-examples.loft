@@ -1,0 +1,227 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Worked examples for `hex_place` (@PLN141).  Each `test_*` below is a REAL,
+// run-every-CI demonstration of a contract the signature cannot state; the
+// function documents itself by CITING the tag with `// Example: @HXP-00N`, and
+// `check_doc_drift.sh examples` fails if a citation goes dangling.  These are
+// teaching examples, distinct from the conformance suite in `01-hex-place.loft`.
+//
+// WHAT THIS PACKAGE IS ABOUT.  Everything here answers one question — what
+// happens where two things MEET — and the answers all have the same shape: the
+// contention is removed by CONSTRUCTION rather than settled by a rule applied
+// afterwards.  Two stencils fuse because the seam is interior to the union that
+// was cut.  Two levels never contend because the level filters before the cut.
+// Terrain never moves a footprint because seating writes a different slot.
+//
+// That shape is exactly what a signature cannot carry: every one of these is a
+// call that quietly does the right thing, and a NEARBY call that quietly does
+// the wrong one.  The nearby call is what each example shows beside the right
+// one, because a demonstration of only the good half teaches nothing about
+// which half you are in.
+use hex_place;
+use hex_field;
+
+// A 3x3 block of cells, its left column at `off`, in a chunk with room around it.
+fn box3(off: integer) -> HexSet {
+  s = hexset_chunk(-10, -10, 21, 21);
+  for r in 0..3 { for q in 0..3 { hexset_set(s, q + off, r, true); } }
+  s
+}
+
+// @HXP-001 — TWO ADJACENT STENCILS: WHO OWNS THE SHARED EDGE?  Nobody — and
+// that is a property of HOW you cut, not of the stencils.  Union the footprints
+// first and cut the boundary of the union once ("mark all, then cut once"), and
+// the shared edge is interior to that union, so it is never cut: the two become
+// one fabric with no seam wall between them.
+//
+// Draw each stencil's own walls instead and overlay them, and both sides mark
+// the seam — a wall appears down the middle of what the author drew as one
+// building, and every cell of it is reachable, so nothing downstream complains.
+//
+// This is the same question `hex_grid`'s @HXG-003 answers one level down: there,
+// ONE wall between two hexes must resolve to one stored slot, or it becomes two
+// half-walls that disagree.  Here it is one seam between two STENCILS, and the
+// answer is that it should not be stored at all.
+fn test_the_shared_edge_belongs_to_nobody_if_you_cut_once() {
+  a = box3(0);                    // cells q 0..2
+  b = box3(3);                    // cells q 3..5 — adjacent, not overlapping
+
+  // THE WRONG WAY, shown first: cut each stencil's own boundary into one edge
+  // set.  `combine_cut(a, 1, a, 1, e)` is exactly "a's own walls".
+  naive = edgeset_new(-10, -10, 21, 21);
+  na = combine_cut(a, 1, a, 1, naive);
+  nb = combine_cut(b, 2, b, 2, naive);
+  assert(na == 22 && nb == 22, "each 3x3 block alone has 22 boundary edges");
+  seam = shared_marked(a, b, naive);
+  assert(seam == 5, "and a wall now runs between them: {seam} marked edges");
+
+  // THE RIGHT WAY: one call, one cut, over the union.
+  fused = edgeset_new(-10, -10, 21, 21);
+  ng = combine_cut(a, 1, b, 2, fused);
+  assert(shared_marked(a, b, fused) == 0, "no wall on the shared interior");
+
+  // And the arithmetic says exactly where the difference went: the five seam
+  // edges were each cut twice by the overlay and not at all by the union.
+  assert(ng == na + nb - 2 * seam, "{ng} = {na} + {nb} - 2 * {seam}");
+}
+
+// @HXP-002 — ORDER-FREE BY CONSTRUCTION, including where the stencils OVERLAP.
+// The result reads the finished union and a fixed source map, never which
+// stencil was stamped when, so swapping the arguments cannot change a single
+// edge.  Where two stencils claim the same cell the tie goes to the LOWER
+// MATERIAL ID — an intrinsic property of the pair, not a positional one.
+//
+// The distinction matters because "last writer wins" is the natural way to
+// build this and is indistinguishable from correct on ONE stencil.  It only
+// diverges on two, and then only sometimes, which is the worst way for a bug
+// to present.
+fn test_swapping_the_two_stencils_changes_nothing() {
+  c = box3(0);                    // q 0..2
+  d = box3(2);                    // q 2..4 — the q=2 column is in BOTH
+
+  one = edgeset_new(-10, -10, 21, 21);
+  two = edgeset_new(-10, -10, 21, 21);
+  n1 = combine_cut(c, 1, d, 2, one);
+  n2 = combine_cut(d, 2, c, 1, two);
+  assert(n1 == 30 && n2 == 30, "the same {n1} edges either way round");
+
+  // Not just the same count — the same material on every edge.
+  same = true;
+  for r in -10..11 {
+    for q in -10..11 {
+      for dir in 0..6 {
+        nq = nb_q(q, r, dir);
+        nr = nb_r(q, r, dir);
+        if edge_mat(one, q, r, nq, nr) != edge_mat(two, q, r, nq, nr) { same = false; }
+      }
+    }
+  }
+  assert(same, "and the same material on every one of them");
+}
+
+// @HXP-003 — A LEVEL IS A FILTER APPLIED BEFORE THE CUT, not an arbitration
+// rule applied after it.  Two stencils on different levels do not fuse, do not
+// arbitrate and do not contend: at either level, one of them simply is not
+// there.  So the contention degree is 1 at each level even where the two
+// overlap in (q,r) — a bridge over a road contends with nothing.
+//
+// A LEVEL IS NOT A HEIGHT.  It is a discrete sheet index; the actual z comes
+// from the height slot (@HXP-004).  Two things can share a z on different
+// levels, or sit at different z on the same one.
+fn test_two_levels_never_contend_however_much_they_overlap() {
+  c = box3(0);                    // q 0..2
+  d = box3(2);                    // q 2..4 — overlaps c at q=2
+
+  // Seen at level 0, with c on level 0 and d on level 1, only c is there —
+  // so the cut is c's own boundary, exactly as if d did not exist.
+  lv = edgeset_new(-10, -10, 21, 21);
+  n0 = combine_cut_level(c, 0, 1, d, 1, 2, 0, lv);
+  solo = edgeset_new(-10, -10, 21, 21);
+  nsolo = combine_cut(c, 1, c, 1, solo);
+  assert(n0 == nsolo, "at level 0 the cut is c alone: {n0} edges");
+
+  // The overlap cell is claimed once at each level, never twice at either.
+  assert(kappa_at_level(c, 0, d, 1, 0, 2, 0) == 1, "one claim at level 0");
+  assert(kappa_at_level(c, 0, d, 1, 1, 2, 0) == 1, "one claim at level 1");
+
+  // Put them on the SAME level and that same cell is contended by two.
+  assert(kappa_at_level(c, 0, d, 0, 0, 2, 0) == 2, "same level: two claims, one cell");
+}
+
+// @HXP-004 — SEATING WRITES THE HEIGHT SLOT AND NOTHING ELSE.  A stencil is
+// authored flat and the ground under it is not, so seating has to give somewhere
+// — and where it gives is a number RETURNED to you, never a change to the
+// footprint.  The cells are byte-identical on flat ground and on a slope, which
+// is what lets the model be recovered from the cells either way.
+//
+// The policy (low / mean / high) chooses the residual, not the shape: a building
+// perches, splits the difference, or is buried, and the footprint is the same
+// three by three cells in all three cases.  Read `seat_residual` and show it —
+// it is the cut and fill the placement owes, and swallowing it is the one thing
+// this design refuses to do for you.
+fn test_seating_moves_the_height_never_the_footprint() {
+  a = box3(0);
+  terr = heights_new(-10, -10, 21, 21);
+  for r in 0..3 { for q in 0..3 { height_set(terr, q, r, q as float); } }   // a slope, 0..2
+
+  // Three policies, three seat heights, over the same nine cells.
+  assert(seat_height(a, terr, SEAT_LOW) == 0.0, "perch on the lowest ground");
+  assert(seat_height(a, terr, SEAT_MEAN) == 1.0, "or split the difference");
+  assert(seat_height(a, terr, SEAT_HIGH) == 2.0, "or bury into the slope");
+
+  // The residual is the choice's cost, and it is handed back rather than absorbed.
+  assert(seat_residual(a, terr, 1.0) == 1.0, "seated at the mean, the worst gap is 1.0");
+  assert(seat_residual(a, terr, 0.0) == 2.0, "perched, it is 2.0 — the same slope, a worse fit");
+
+  // Seating writes heights.  The footprint does not move.
+  before = hexset_count(a);
+  wrote = seat_write(a, terr, 1.0);
+  assert(wrote == 9, "nine cells got a height");
+  assert(hexset_count(a) == before, "and the footprint is the same {before} cells");
+  assert(height_get(terr, 0, 0) == 1.0, "the ground under the stencil now reads the seat height");
+}
+
+// @HXP-005 — THE POSE TRANSFORM IS THE ONLY PLACE FLOAT ERROR LIVES, and ONE
+// MEASUREMENT OF IT IS NOT A BOUND.  Inside a frame every test is exact
+// integer work; across frames it cannot be, because a pose is continuous.  The
+// design confines that error to the transform so the whole stack has one error
+// budget — but the size of it depends on WHERE you evaluate it.
+//
+// Measure the residual near the frame origin and you will very reasonably read
+// exactly zero, and conclude the transform is exact.  The same pose, at a point
+// a hundred times further out, is not zero.  It is deterministic — the same
+// inputs always give the same answer, which is what replay needs — but it is a
+// jagged function of the point, not a constant you can sample once.
+//
+// So: never compare cross-frame coordinates with `==`, and never take a
+// tolerance from a measurement made next to the origin.
+fn test_one_sample_of_the_seam_error_is_not_a_bound() {
+  g = pose_new(0.8660254037844386, 0.5, 3.0, 4.0);     // a 30-degree pose
+
+  // Near the origin: exactly zero, and that is a true measurement.
+  near = pose_residual(g, 10.0, 7.0);
+  assert(near == 0.0, "at (10,7) the round trip is exact");
+
+  // The same pose, further out: not zero.
+  far = pose_residual(g, 1000.0, 700.0);
+  assert(far > 0.0, "at (1000,700) it is not, though nothing about the pose changed");
+  assert(far < 0.000001, "it is still tiny — the seam is tight, it is simply not zero");
+
+  // Deterministic, which is what byte-identical replay rests on.
+  assert(pose_residual(g, 1000.0, 700.0) == far, "the same inputs give the same answer");
+
+  // Inside the frame there is no such caveat: the forward map lands a local
+  // point exactly on the boundary of a local disk test, radius 5 about (0,0).
+  wx = pose_fwd_x(g, 3.0, 4.0);
+  wy = pose_fwd_y(g, 3.0, 4.0);
+  assert(disk_hit(g, 0.0, 0.0, 25.0, wx, wy), "the local test is exact in its own frame");
+}
+
+// @HXP-006 — ARBITRATION FAILS SAFE TOWARD SOLID, and the owner is INTRINSIC.
+// Where two frames disagree about a point, `arb_solid` answers solid if either
+// does: a crack between presentations yields a spurious contact rather than a
+// body falling through the world. It is symmetric, so it cannot depend on which
+// frame you happened to visit first.
+//
+// `arb_owner` breaks the tie by LOWEST ID — a total order on frames, not
+// "whichever is nearer" and not iteration order, either of which would make a
+// replay diverge. Its no-owner answer is **-1**, and -1 is a sentinel, not an
+// id: in loft a negative index reads from the END of a vector rather than
+// failing, so handing it on unchecked finds a frame, just not the right one.
+fn test_arbitration_prefers_solid_and_names_an_owner_intrinsically() {
+  assert(arb_solid(true, false), "solid over gap is solid");
+  assert(arb_solid(false, true), "and so is gap over solid — it is symmetric");
+  assert(!arb_solid(false, false), "only where both agree is it a gap");
+
+  // Both solid: the lower id owns it, whichever way round you ask.
+  assert(arb_owner(true, 7, true, 3) == 3, "lowest id wins");
+  assert(arb_owner(true, 3, true, 7) == 3, "and the answer does not depend on the order");
+
+  // One solid: that one owns it, high id or not.
+  assert(arb_owner(false, 7, true, 3) == 3, "the solid frame owns it");
+  assert(arb_owner(true, 7, false, 3) == 7, "even when its id is the larger");
+
+  // Neither: -1, which is not a frame.
+  assert(arb_owner(false, 7, false, 3) == -1, "no owner is -1, and -1 is not an id");
+}
