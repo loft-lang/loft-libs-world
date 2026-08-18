@@ -1,0 +1,272 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Worked examples for `hex_roof` (@PLN141).  Each `test_*` below is a REAL,
+// run-every-CI demonstration of a contract the signature cannot state; the
+// function documents itself by CITING the tag with `// Example: @HXR-00N`, and
+// `check_doc_drift.sh examples` fails if a citation goes dangling.  These are
+// teaching examples, distinct from the conformance suite in `01-hex-roof.loft`.
+//
+// THE ONE IDEA, AND WHERE IT LEAKS.  Every roof form here is the same function
+// of a DISTANCE, and only the distance SOURCE changes: a point gives a cone, a
+// line a gable, a segment a hip, the FOOTPRINT ITSELF a proper hip-and-valley.
+// So this is not a catalogue of forms and there are no special cases to learn.
+//
+// What a caller has to get right instead is which source a profile reads, and
+// that is where every example below lives.  The trouble is that a roof built
+// from the wrong source still looks like a roof: it still has an apex, it still
+// sheds water, and it still passes every property the conformance suite checks.
+// The damage shows at the EAVE, which is the last place anyone looks.
+use hex_roof;
+use hex_way;
+use hex_field;
+
+const W = 9;
+const H = 9;
+
+// A quantised disc: 29 cells, and deliberately not a circle — that is the whole
+// point of everything below.
+fn disc() -> HexSet {
+  s = hexset_chunk(0, 0, W, H);
+  for r in 0..H {
+    for q in 0..W {
+      dq = q - 4;
+      dr = r - 4;
+      if dq * dq + dr * dr <= 9 { hexset_set(s, q, r, true); }
+    }
+  }
+  s
+}
+
+// The lattice -> world map, which is what this module measures distances in.
+fn wx(q: integer, r: integer) -> float { ((lattice_k(q, r)) as float) * 0.8660254037844386 }
+fn wy(q: integer, r: integer) -> float { ((lattice_m(q, r)) as float) * 0.5 }
+
+fn peak_of(s: HexSet, f: Heights) -> float {
+  m = -1000000.0;
+  for r in 0..H { for q in 0..W { if hexset_get(s, q, r) {
+    z = height_get(f, q, r);
+    if z > m { m = z; }
+  } } }
+  m
+}
+
+// @HXR-001 — A HIP IS A GABLE WITH A SHORTER RIDGE.  Not "like" one: the same
+// call, with a shorter `Track`.  `track_distance` clamps to the segment, so past
+// the ridge's end the distance stops running across the ridge and starts running
+// to its tip — and the ends slope in on their own.
+//
+// This is what "the list of roof forms is a list of distance sources" means in
+// practice.  If you are reaching for a `roof_gable` and a `roof_hip_roof`, stop:
+// you are choosing a Track length.
+fn test_a_hip_is_a_gable_with_a_shorter_ridge() {
+  s = disc();
+
+  // One ridge the full width of the footprint, and one covering its middle third.
+  full = track_new();
+  track_straight(full, wx(0, 4), wy(4, 4), wx(8, 4), wy(4, 4));
+  short = track_new();
+  track_straight(short, wx(3, 4), wy(4, 4), wx(5, 4), wy(4, 4));
+
+  gable = heights_new(0, 0, W, H);
+  hip = heights_new(0, 0, W, H);
+  roof_ridge(s, gable, full, 5.0, 1.0, 100.0);
+  roof_ridge(s, hip, short, 5.0, 1.0, 100.0);
+
+  // Over the middle the two are identical — both cells sit on their ridge.
+  assert(height_get(gable, 4, 4) == 5.0, "the gable is at full height on the ridge");
+  assert(height_get(hip, 4, 4) == 5.0, "and so is the hip — same ridge, same height");
+
+  // Near the end they are not: the gable still runs at full height to the wall,
+  // the hip has sloped away because the ridge ran out.
+  assert(height_get(gable, 1, 4) == 5.0, "the gable carries the ridge to the end wall");
+  assert(height_get(hip, 1, 4) < 2.0, "the hip has sloped in, to {height_get(hip, 1, 4)}");
+
+  // Both drain, because both are one profile of one distance.
+  assert(roof_ponds(s, gable) == 0 && roof_ponds(s, hip) == 0, "neither ponds");
+}
+
+// @HXR-002 — ON A QUANTISED FOOTPRINT A POINT-SOURCE CONE CANNOT GET BOTH THE
+// EAVE AND THE DRAINAGE RIGHT.  Drive the roof from each cell's own radius and
+// the eave inherits the footprint's roundness deviation.  Clamp at `dmax` to
+// level it — which is what the clamp is for — and the clamped cells become a
+// flat plateau that ponds.  There is no `dmax` that escapes both, and the reason
+// is measurable: on a quantised disc the boundary and the interior OVERLAP in
+// radius, so no single radius separates them.
+//
+// `roof_hip` has neither problem, because it does not measure a radius at all:
+// it walks inward from the boundary, and the boundary is ring 0 BY DEFINITION,
+// whatever radius its cells happen to sit at.
+//
+// Reach for `roof_cone` when the footprint really is a circle you control, and
+// for `roof_hip` when it is a footprint someone drew.
+fn test_the_eave_is_where_a_cone_on_a_quantised_footprint_goes_wrong() {
+  s = disc();
+  cx = wx(4, 4);
+  cy = wy(4, 4);
+
+  // The measurement that explains everything below: the innermost BOUNDARY cell
+  // is closer to the centre than the outermost INTERIOR one.
+  blo = 1000.0;
+  ihi = -1000.0;
+  for r in 0..H { for q in 0..W { if hexset_get(s, q, r) {
+    dx = wx(q, r) - cx;
+    dy = wy(q, r) - cy;
+    d = sqrt(dx * dx + dy * dy) ?? 0.0;
+    edge = false;
+    for i in 0..6 { if !hexset_get(s, nb_q(q, r, i), nb_r(q, r, i)) { edge = true; } }
+    if edge { if d < blo { blo = d; } } else { if d > ihi { ihi = d; } }
+  } } }
+  assert(ihi > blo, "interior reaches {ihi}, the nearest eave cell is at {blo} — they overlap");
+
+  // Unclamped: drains perfectly, and the eave wobbles by more than two units.
+  loose = heights_new(0, 0, W, H);
+  roof_cone(s, loose, cx, cy, 5.0, 1.0, 100.0);
+  assert(roof_ponds(s, loose) == 0, "it sheds water");
+  assert(peak_of(s, loose) == 5.0, "it reaches its stated peak");
+  assert(eave_spread(s, loose) > 2.0, "but the eave is {eave_spread(s, loose)} out of level");
+
+  // Clamped low enough to level the eave: now the plateau ponds.
+  tight = heights_new(0, 0, W, H);
+  roof_cone(s, tight, cx, cy, 5.0, 1.0, 3.0);
+  assert(eave_spread(s, tight) < 0.000001, "the eave is level");
+  assert(roof_ponds(s, tight) == 3, "and three interior cells now hold water");
+
+  // In between, both are wrong at once — there is no setting that works.
+  mid = heights_new(0, 0, W, H);
+  roof_cone(s, mid, cx, cy, 5.0, 1.0, 3.25);
+  assert(eave_spread(s, mid) > 0.0 && roof_ponds(s, mid) > 0, "the crossover is not a solution");
+
+  // Driven from the footprint instead: level eave AND no ponding, by construction.
+  hip = heights_new(0, 0, W, H);
+  rings = roof_hip(s, hip, 0.0, 1.0);
+  assert(rings == 2, "the disc is {rings} rings deep");
+  assert(eave_spread(s, hip) == 0.0, "every boundary cell is ring 0, so the eave is exactly level");
+  assert(roof_ponds(s, hip) == 0, "and it still drains");
+}
+
+// @HXR-003 — THE CENTRE AND THE TRACK ARE IN WORLD UNITS, NOT CELL INDICES.
+// A pointy-top odd-r lattice is not the integer grid its indices look like:
+// cell (4,4) sits at world (6.93, 6.0).  Pass `(4.0, 4.0)` meaning "the middle
+// cell" and the cone is centred outside the middle of the building.
+//
+// What makes this expensive is that the result is still a valid roof.  It has a
+// positive peak, it is not flat, and it does not pond — so a suite that checks
+// the apex passes it.  What moved is the apex's LOCATION and the eave's level.
+fn test_the_centre_is_a_world_point_not_a_cell_index() {
+  s = disc();
+  assert(wx(4, 4) > 6.9 && wx(4, 4) < 6.94, "cell (4,4) is at world x {wx(4, 4)}, not 4.0");
+  assert(wy(4, 4) == 6.0, "and world y {wy(4, 4)}, not 4.0");
+
+  right = heights_new(0, 0, W, H);
+  wrong = heights_new(0, 0, W, H);
+  roof_cone(s, right, wx(4, 4), wy(4, 4), 5.0, 1.0, 100.0);
+  roof_cone(s, wrong, 4.0, 4.0, 5.0, 1.0, 100.0);          // cell indices — the mistake
+
+  // The apex is on the centre cell when the centre is a world point.
+  assert(height_get(right, 4, 4) == 5.0, "the peak lands on the middle cell");
+  assert(height_get(wrong, 4, 4) < 2.0, "and does not: {height_get(wrong, 4, 4)}");
+
+  // Every cheap check still passes on the wrong one, which is why it survives.
+  assert(roof_ponds(s, wrong) == 0, "the wrong roof still sheds water");
+  assert(peak_of(s, wrong) > 0.0, "it still has a positive peak");
+
+  // The eave is the tell — nearly four times worse than the merely-quantised one.
+  assert(eave_spread(s, wrong) > 7.0, "the eave gives it away: {eave_spread(s, wrong)}");
+}
+
+// @HXR-004 — GROIN AND CLOISTER ARE THE SAME TWO BARRELS AND THE OPPOSITE
+// OPERATOR.  `vault_groin` takes the higher of the two surfaces, so both crown
+// lines stay at full height and every wall keeps its arch.  `vault_cloister`
+// takes the lower, so the vault springs continuously off all four walls and no
+// wall has an opening at all.
+//
+// Identical argument lists, one word different at the call site, and a different
+// building.  If you have picked the wrong one, nothing about the call will say
+// so — look at whether the walls have openings.
+fn test_groin_and_cloister_differ_only_in_which_surface_wins() {
+  s = disc();
+  ew = track_new();
+  track_straight(ew, wx(0, 4), wy(4, 4), wx(8, 4), wy(4, 4));
+  ns = track_new();
+  track_straight(ns, wx(4, 1), wy(4, 1), wx(4, 7), wy(4, 7));
+
+  groin = heights_new(0, 0, W, H);
+  cloister = heights_new(0, 0, W, H);
+  vault_groin(s, groin, ew, ns, 0.0, 3.0);
+  vault_cloister(s, cloister, ew, ns, 0.0, 3.0);
+
+  // The higher surface never drops below the lower one, anywhere.
+  same = 0;
+  higher = 0;
+  for r in 0..H { for q in 0..W { if hexset_get(s, q, r) {
+    g = height_get(groin, q, r);
+    c = height_get(cloister, q, r);
+    if g >= c { same = same + 1; }
+    if g > c { higher = higher + 1; }
+  } } }
+  assert(same == 29, "the groin is never lower, on all {same} cells");
+  assert(higher == 27, "and strictly higher on {higher} of them — this is a different vault");
+}
+
+// @HXR-005 — PONDING COUNTS INTERIOR CELLS ONLY, AND THAT IS DELIBERATE.  A
+// pond is water that cannot leave.  A cell on the boundary always can — it
+// drains off the eave, which is its job — so a boundary local minimum is not a
+// defect and is not counted.
+//
+// So `roof_ponds(s, f) == 0` does NOT mean "the field has no local minima".  If
+// you are looking for a dip at the edge of a roof, this is not the function that
+// finds it.
+fn test_a_low_spot_on_the_eave_is_not_a_pond() {
+  s = disc();
+
+  // Sink a BOUNDARY cell far below everything around it: still no ponds.
+  edged = heights_new(0, 0, W, H);
+  roof_hip(s, edged, 0.0, 1.0);
+  height_set(edged, 4, 1, -50.0);
+  assert(roof_ponds(s, edged) == 0, "a hollow on the eave drains off it");
+
+  // Sink an INTERIOR cell by the same amount: that is a pond.
+  inner = heights_new(0, 0, W, H);
+  roof_hip(s, inner, 0.0, 1.0);
+  height_set(inner, 4, 4, -50.0);
+  assert(roof_ponds(s, inner) == 1, "the same hollow inside is water that cannot leave");
+
+  // The control that keeps the number honest: a dead-flat field is all ponds.
+  assert(roof_ponds(s, heights_new(0, 0, W, H)) == 10, "a flat roof ponds everywhere inside");
+}
+
+// @HXR-006 — RECOVER THE SURFACE AND DRAW THAT, NEVER THE CELLS.  The heights
+// are STORAGE; the analytic surface is the truth.  `roof_match` reads a height
+// field back and names the profile, and `roof_eval` is then exact at any
+// resolution — where drawing the cells directly gives a staircase of hexes
+// wearing a cone.
+//
+// Two things to know about the answer.  A PLANE WINS TIES, because it is the
+// simpler statement and a cone fitted to a flat roof puts its apex somewhere
+// arbitrary.  And the fit is an R2 recovery with a TOLERANCE, by design — it
+// recovers a profile from an arbitrary field, not from one you authored, so the
+// recovered apex is not bit-identical to the one you asked for.
+fn test_the_recovered_surface_is_the_thing_to_draw() {
+  s = disc();
+
+  // A field that IS a plane comes back as a plane.
+  plane = heights_new(0, 0, W, H);
+  for r in 0..H { for q in 0..W { if hexset_get(s, q, r) {
+    height_set(plane, q, r, 2.0 + 0.5 * wx(q, r) + 0.25 * wy(q, r));
+  } } }
+  pf = roof_match(s, plane, 0.001);
+  assert(pf.rf_kind == ROOF_PLANE, "a plane is recognised as a plane");
+  assert(pf.rf_res < 0.000001, "with a residual of {pf.rf_res}");
+
+  // A field that is a cone comes back as a cone.
+  cone = heights_new(0, 0, W, H);
+  roof_cone(s, cone, wx(4, 4), wy(4, 4), 5.0, 1.0, 100.0);
+  cf = roof_match(s, cone, 0.001);
+  assert(cf.rf_kind == ROOF_CONE, "and a cone as a cone");
+
+  // `roof_eval` reads the ANALYTIC surface — close to the authored apex, and
+  // deliberately not identical to it: this is a fit, not a round trip.
+  z = roof_eval(cf, wx(4, 4), wy(4, 4));
+  assert(z > 4.999 && z < 5.001, "the recovered apex is {z}, next to the authored 5.0");
+}

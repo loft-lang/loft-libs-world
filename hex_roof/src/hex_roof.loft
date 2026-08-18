@@ -33,6 +33,17 @@ fn celly(q: integer, r: integer) -> float {
 // z = peak - slope*d about a point.  Clamping d at dmax is not a detail: it is what makes
 // an eave LEVEL on a quantised footprint, where the boundary cells sit at a spread of true
 // radii (rooftest measures the difference).
+//
+// AND THE CLAMP HAS ITS OWN COST, worth knowing before reaching for it: the cells it clamps
+// become a flat plateau, and an interior cell inside that plateau PONDS.  On a quantised
+// footprint the boundary and the interior overlap in radius, so there is no `dmax` that
+// levels the eave and still drains — measured below.  `roof_hip` has neither problem,
+// because it never measures a radius: the boundary is ring 0 by definition.
+//
+// `cx`/`cy` are WORLD coordinates, not cell indices.
+//
+// Example: @HXR-002
+// Example: @HXR-003
 pub fn roof_cone(s: HexSet, f: Heights, cx: float, cy: float,
                  peak: float, slope: float, dmax: float) {
   for r in hexset_r0(s)..hexset_r0(s) + hexset_h(s) {
@@ -50,6 +61,8 @@ pub fn roof_cone(s: HexSet, f: Heights, cx: float, cy: float,
 
 // The same profile about a ridge.  A full-length ridge gives a gable; shorten it and the
 // ends hip in, because track_distance clamps to the segment.
+//
+// Example: @HXR-001
 pub fn roof_ridge(s: HexSet, f: Heights, t: Track,
                   peak: float, slope: float, dmax: float) {
   for r in hexset_r0(s)..hexset_r0(s) + hexset_h(s) {
@@ -98,6 +111,8 @@ pub fn vault_arc(s: HexSet, f: Heights, t: Track, spring: float, radius: float) 
 //
 // Multi-source BFS inward from the boundary, on the pre-allocated array + index-write
 // idiom (appending while a head pointer walks the same vector is the broken shape).
+//
+// Example: @HXR-002
 pub fn roof_hip(s: HexSet, f: Heights, eave: float, per_ring: float) -> integer {
   cap = hexset_w(s) * hexset_h(s);
   bq: vector<integer> = [];
@@ -182,6 +197,8 @@ fn barrel_at(t: Track, x: float, y: float, spring: float, radius: float) -> floa
   spring + (sqrt(radius * radius - d * d) ?? 0.0)
 }
 
+//
+// Example: @HXR-004
 pub fn vault_groin(s: HexSet, f: Heights, t1: Track, t2: Track,
                    spring: float, radius: float) {
   for r in hexset_r0(s)..hexset_r0(s) + hexset_h(s) {
@@ -197,6 +214,8 @@ pub fn vault_groin(s: HexSet, f: Heights, t1: Track, t2: Track,
   }
 }
 
+//
+// Example: @HXR-004
 pub fn vault_cloister(s: HexSet, f: Heights, t1: Track, t2: Track,
                       spring: float, radius: float) {
   for r in hexset_r0(s)..hexset_r0(s) + hexset_h(s) {
@@ -221,6 +240,10 @@ pub fn clear_height(fl: Heights, so: Heights, q: integer, r: integer) -> float {
 // An INTERIOR cell (all six neighbours in the footprint) every one of whose neighbours is
 // strictly higher is a local minimum: water collects and never leaves. A roof that sheds
 // has none. Boundary cells are exempt — they drain off the eave, which is their job.
+//
+// A zero here is not "no local minima": a hollow on the BOUNDARY is not counted.
+//
+// Example: @HXR-005
 pub fn roof_ponds(s: HexSet, f: Heights) -> integer {
   n = 0;
   for r in hexset_r0(s)..hexset_r0(s) + hexset_h(s) {
@@ -243,6 +266,13 @@ pub fn roof_ponds(s: HexSet, f: Heights) -> integer {
 }
 
 // The spread of eave heights around a footprint's boundary — 0 for a level eave.
+//
+// THE INSTRUMENT FOR THE FAILURE NOTHING ELSE SEES: a roof built from the wrong distance
+// source still has an apex, still is not flat and still sheds water.  This is the number
+// that moves.
+//
+// Example: @HXR-002
+// Example: @HXR-003
 pub fn eave_spread(s: HexSet, f: Heights) -> float {
   lo = 1000000.0;
   hi = -1000000.0;
@@ -492,6 +522,8 @@ pub fn roof_dome_fit(s: HexSet, f: Heights) -> RoofFit {
 
 // Decide what the field IS.  A plane wins ties: it is the simpler statement, and a cone
 // fitted to a flat roof would put its apex somewhere arbitrary.
+//
+// Example: @HXR-006
 pub fn roof_match(s: HexSet, f: Heights, tol: float) -> RoofFit {
   p = roof_plane_fit(s, f);
   if p.rf_res <= tol { return p; }
@@ -507,6 +539,8 @@ pub fn roof_match(s: HexSet, f: Heights, tol: float) -> RoofFit {
 
 // The recovered ANALYTIC surface — what a renderer should draw, at any resolution, instead
 // of the cells it came from.
+//
+// Example: @HXR-006
 pub fn roof_eval(fit: RoofFit, x: float, y: float) -> float {
   if fit.rf_kind == ROOF_PLANE { return fit.rf_x * x + fit.rf_y * y + fit.rf_z; }
   if fit.rf_kind == ROOF_CONE {

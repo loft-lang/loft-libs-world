@@ -14,8 +14,8 @@
 # packages, ~478 public functions — and it is geometry, which is the tier where a
 # call site teaches most.  The first pass took the tier-1 package (`hex_grid`, the
 # convention every other one is expressed in) and `hex_world`; `hex_form` (Phase E row 1)
-# and `hex_place` (row 2) followed.  The ten rows below say what their examples would
-# teach, so the next pass starts from a list rather than from a re-read.
+# `hex_place` (row 2) and `hex_roof` (row 3) followed.  The nine rows below say what
+# their examples would teach, so the next pass starts from a list rather than a re-read.
 #
 # package	verdict	reason
 hex_body	deferred	A body is a RIG — bones and joint limits — never a pose, and the pose is COMPUTED from the current rig. That is the contract a caller gets wrong, and showing it needs a rig small enough to hand-compute a world frame for. Unblocked by picking that rig; 0.3.0 made the frame checkable (rig_world_seg3 was discarding it).
@@ -24,7 +24,6 @@ hex_edge	deferred	The example is already written as prose — the sweep_path res
 hex_field	deferred	The largest surface in the repo (82 public functions) and the one with a real oracle — it must reproduce the Python's golden JSON byte for byte, which is possible only because the whole representation is INTEGER. That exactness is what an example should teach. Unblocked by choosing which golden fixture is small enough to read in a test.
 hex_fit	deferred	A stencil description that carries linework, and a round trip that notices when it does not survive. The round trip is the contract; it is only readable once the canonical TEXT a stencil round-trips through is itself demonstrated, so this follows hex_form.
 hex_recover	deferred	Law F is injectivity, and its coverage is a MEASUREMENT over an admitted space — a census, which is a long-running test rather than a teaching one. Unblocked by deciding what a fast readable subset of that census looks like.
-hex_roof	deferred	One mechanism, several profiles: every roof form is the same function of a DISTANCE, and only the distance SOURCE changes. Which source a profile reads is the thing a caller gets wrong. Small surface (15 functions); nothing blocks it but a pass.
 hex_shape	deferred	From a run of slots marked ROUNDED, are the centre and radius recoverable EXACTLY or only as a fit? The file says the answer is split, and a split answer is precisely what a signature cannot carry. Nothing blocks it but a pass.
 hex_terrain	deferred	HXT is registered. The contract is the scale boundary — a coarse overland cell is hundreds of metres and is the terrain AUTHORITY, while the walked world is fine — so the trap is a coordinate crossing it. Unblocked by choosing a terrain fixture small enough to assert against.
 hex_way	deferred	A way is authored as ONE exact centreline and every other line is an OFFSET of it; that is what escapes the hex quantisation floor, which bottoms out around half a hex. The floor is the number a caller needs and no signature carries it. Nothing blocks it but a pass.

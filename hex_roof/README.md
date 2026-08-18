@@ -16,5 +16,9 @@ ponds is a roof that leaks, and it is the load-bearing property every profile is
 height field nobody authored. That is licensed; it is not an `ε` smuggled into an exact
 path.
 
+The six ways a caller picks the wrong distance source — each producing a roof that passes
+every cheap check and fails at the eave — are worked in `tests/02-worked-examples.loft`
+(`@HXR-001..006`), cited from the functions they belong to.
+
 Depends on `hex_way` for ridge lines. Split out of `crawler`/`hexbody` on 2026-07-24
 (`SPEC` **L11**).
