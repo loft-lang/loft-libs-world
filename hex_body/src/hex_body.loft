@@ -110,29 +110,97 @@ pub fn joint_residual(j: Joint, value: float) -> float {
 // problem `S5`–`S8` solved for forms; phase A's contract is the byte round trip, which topological
 // order plus a strict parser delivers.
 
+// ── THE THIRD DIMENSION (`G1b`) — an explicit axis, and an `oz` ──────────────
+//
+// A revolute joint in a PLANE needs no axis: there is only one, `+z`, and the
+// 2-D code leaves it implicit by ADDING joint angles.  In space it has to be
+// said, and `hex_part::Hinge` already says it with the same eight numbers —
+// `{ox, oy, oz, ax, ay, az, lo, hi}`, of which the planar rig's are the six
+// minus two.  So this extension unifies two libraries that already agree on
+// units (TURNS) and on convention, rather than inventing a third shape.
+//
+// ⚠ **THE AXIS IS STORED AS GIVEN AND IS NOT NORMALISED**, which is
+// `hex_part/hinge.loft`'s rule kept verbatim: *"the length of the axis carries
+// no meaning; a consumer that needs a unit vector normalises where it needs
+// one"*.  `rig_world_seg3` is that consumer and normalises at use.
+//
+// ⚠⚠ **A PLANAR RIG IS BIT-IDENTICAL, AND ONLY A SINGLE BONE IS** — measured
+// before this was written, because it is the claim the whole extension rests
+// on.  `rig_world_seg` composes by ADDING ANGLES (`th = pth + v`, then one
+// `cos`/`sin`); any 3-D form composes ROTATIONS, and `cos(a+b)` is not
+// `cos a cos b - sin a sin b` bit-for-bit in f64.  Over a five-bone planar
+// chain at awkward angles:
+//
+//     quaternion form   0 of 5 bones identical, worst 6.7e-16 m
+//     matrix form       the ROOT identical,     worst 2.2e-16 m
+//
+// so the matrix is what shipped.  ⚠ The quaternion's root fails for a reason
+// worth keeping: it stores `cos(theta/2)` and rebuilds the rotation through
+// double-angle arithmetic, where Rodrigues at `(0,0,1)` collapses to exactly
+// `[[c,-s,0],[s,c,0],[0,0,1]]` with `c` and `s` untouched.  ⚠ And the axis
+// `(0,0,1)` has length exactly 1.0, so normalising it divides by 1.0 and does
+// not disturb that — gated, not assumed.
+//
+// ⚠ `rig_world_seg` IS UNCHANGED.  Re-expressing it through the 3-D path would
+// have moved every existing consumer's numbers by an ulp to buy nothing.
+
 pub struct Rig {
   rg_parent: vector<integer>,   // parent bone index; -1 for the root
   rg_ox:     vector<float>,     // joint offset in the parent's frame (x)
   rg_oy:     vector<float>,     // joint offset in the parent's frame (y)
-  rg_len:    vector<float>,     // the bone's length from its joint
+  rg_oz:     vector<float>,     // joint offset in the parent's frame (z) — 0 in a planar rig
+  rg_len:    vector<float>,     // the bone's length from its joint, along its own +x
+  rg_ax:     vector<float>,     // the revolute axis, AS GIVEN — see above
+  rg_ay:     vector<float>,     //   "
+  rg_az:     vector<float>,     //   " — (0,0,1) in a planar rig: the implicit axis made explicit
   rg_lo:     vector<float>,     // the joint's limit low  (turns)
   rg_hi:     vector<float>,     // the joint's limit high (turns)
 }
 
 pub fn rig_new() -> Rig {
-  Rig { rg_parent: [], rg_ox: [], rg_oy: [], rg_len: [], rg_lo: [], rg_hi: [] }
+  Rig { rg_parent: [], rg_ox: [], rg_oy: [], rg_oz: [], rg_len: [],
+        rg_ax: [], rg_ay: [], rg_az: [], rg_lo: [], rg_hi: [] }
 }
 
-// Append one bone, growing the rig's parallel field vectors in place.
-pub fn rig_bone(r: Rig, parent: integer, ox: float, oy: float, len: float,
-                lo: float, hi: float) -> Rig {
+// Append one bone in SPACE, growing the rig's parallel field vectors in place.
+//
+// ⚠ Eleven parameters is the eight of `hex_part::Hinge` plus a parent, a length
+// and the rig — the family's own shape rather than a shorter one invented here.
+pub fn rig_bone3(r: Rig, parent: integer, ox: float, oy: float, oz: float, len: float,
+                 ax: float, ay: float, az: float, lo: float, hi: float) -> Rig {
   r.rg_parent += [parent];
-  r.rg_ox += [ox]; r.rg_oy += [oy]; r.rg_len += [len];
+  r.rg_ox += [ox]; r.rg_oy += [oy]; r.rg_oz += [oz]; r.rg_len += [len];
+  r.rg_ax += [ax]; r.rg_ay += [ay]; r.rg_az += [az];
   r.rg_lo += [lo]; r.rg_hi += [hi];
   r
 }
 
+// Append one bone in the PLANE — the special case, and its signature is
+// unchanged from 0.1.0.  A planar bone is one at `oz = 0` about `(0, 0, 1)`,
+// which is exactly the axis the 2-D code left implicit.
+pub fn rig_bone(r: Rig, parent: integer, ox: float, oy: float, len: float,
+                lo: float, hi: float) -> Rig {
+  rig_bone3(r, parent, ox, oy, 0.0, len, 0.0, 0.0, 1.0, lo, hi)
+}
+
 pub fn rig_count(r: Rig) -> integer { len(r.rg_parent) }
+
+// Does bone `i` lie in the plane the 2-D rig assumes?  ⚠ It is asked with `==`
+// and no tolerance, because it decides which RECORD the bone is written as and
+// a near-planar bone must not be written as a planar one.
+pub fn bone_planar(r: Rig, i: integer) -> boolean {
+  (r.rg_oz[i] ?? 0.0) == 0.0 && (r.rg_ax[i] ?? 0.0) == 0.0
+    && (r.rg_ay[i] ?? 0.0) == 0.0 && (r.rg_az[i] ?? 0.0) == 1.0
+}
+
+// Is the whole rig planar?  The question `rig_world_seg` implicitly asks of
+// every rig it is handed, made available to a caller that wants to know.
+pub fn rig_planar(r: Rig) -> boolean {
+  for i in 0..len(r.rg_parent) {
+    if !bone_planar(r, i) { return false; }
+  }
+  true
+}
 
 // The joint at bone `i`, as a `Joint` carrying its limits (value defaults to 0 — the neutral pose).
 pub fn rig_joint(r: Rig, i: integer) -> Joint {
@@ -153,16 +221,50 @@ pub fn rig_admissible(r: Rig) -> boolean {
       if p < 0 || p >= i { return false; }        // parent must be an EARLIER bone
     }
     if (r.rg_lo[i] ?? 0.0) > (r.rg_hi[i] ?? 0.0) { return false; }
+    // ⚠ AN AXIS OF ZERO LENGTH IS A JOINT WITH NOTHING TO TURN ABOUT —
+    // `hex_part::HG_AXIS`, and asked the same way `moros_sim::has_axis` asks
+    // it: one component non-zero, never a normalised length.  It is a
+    // validation the planar rig had no way to express, because there the axis
+    // was implicit and could not be got wrong.
+    if (r.rg_ax[i] ?? 0.0) == 0.0 && (r.rg_ay[i] ?? 0.0) == 0.0
+       && (r.rg_az[i] ?? 0.0) == 0.0 { return false; }
   }
   true
 }
 
+// ── THE FORMAT, AND WHY A SPATIAL BONE CHANGES ITS RECORD TAG ────────────────
+//
+// A planar bone writes exactly the bytes 0.1.0 wrote, so **a planar rig
+// round-trips byte-identically across the version** and every rig on disk today
+// still reads.
+//
+// ⚠⚠ A spatial bone writes `bone3` rather than a longer `bone` line, and that
+// is the whole compatibility decision — MEASURED against the shipped 0.1.0
+// reader rather than reasoned about:
+//
+//     extra words appended to a `bone` line  ->  0.1.0 reads 1 bone
+//     the same rig under the tag `bone3`     ->  0.1.0 reads 0 bones
+//
+// 0.1.0's parser checks the keywords it knows and never the word COUNT, so
+// appending fields makes an old reader silently return the bone's PLANAR
+// PROJECTION — a rig quietly flattened, which is exactly the failure this
+// library's *"a lenient reader would void the byte diff"* rule exists to stop.
+// A new tag makes the same reader refuse the whole rig, which `rig_admissible`
+// then rejects.  Loud beats tidy.
 pub fn rig_write(r: Rig, name: text) -> text {
   n = len(r.rg_parent);
   s = "rig {name} bones {n}";
   for bi in 0..n {
-    s = s + "\nbone {bi} parent {r.rg_parent[bi] ?? 0} at {r.rg_ox[bi] ?? 0.0} {r.rg_oy[bi] ?? 0.0}"
-        + " len {r.rg_len[bi] ?? 0.0} lim {r.rg_lo[bi] ?? 0.0} {r.rg_hi[bi] ?? 0.0}";
+    if bone_planar(r, bi) {
+      s = s + "\nbone {bi} parent {r.rg_parent[bi] ?? 0} at {r.rg_ox[bi] ?? 0.0} {r.rg_oy[bi] ?? 0.0}"
+          + " len {r.rg_len[bi] ?? 0.0} lim {r.rg_lo[bi] ?? 0.0} {r.rg_hi[bi] ?? 0.0}";
+    } else {
+      s = s + "\nbone3 {bi} parent {r.rg_parent[bi] ?? 0}"
+          + " at {r.rg_ox[bi] ?? 0.0} {r.rg_oy[bi] ?? 0.0} {r.rg_oz[bi] ?? 0.0}"
+          + " len {r.rg_len[bi] ?? 0.0}"
+          + " axis {r.rg_ax[bi] ?? 0.0} {r.rg_ay[bi] ?? 0.0} {r.rg_az[bi] ?? 0.0}"
+          + " lim {r.rg_lo[bi] ?? 0.0} {r.rg_hi[bi] ?? 0.0}";
+    }
   }
   s
 }
@@ -188,14 +290,28 @@ pub fn rig_read(t: text) -> Rig {
   out = rig_new();
   for ri in 1..nl {
     ln = lines[ri] ?? "";
-    if rig_word(ln, 0) != "bone" { return rig_new(); }
+    tag = rig_word(ln, 0);
     if rig_word_int(ln, 1) != ri - 1 { return rig_new(); }     // index order, like form C2
     if rig_word(ln, 2) != "parent" { return rig_new(); }
-    if rig_word(ln, 4) != "at" { return rig_new(); }
-    if rig_word(ln, 7) != "len" { return rig_new(); }
-    if rig_word(ln, 9) != "lim" { return rig_new(); }
-    out = rig_bone(out, rig_word_int(ln, 3), rig_word_float(ln, 5), rig_word_float(ln, 6),
-                   rig_word_float(ln, 8), rig_word_float(ln, 10), rig_word_float(ln, 11));
+    if tag == "bone" {
+      if rig_word(ln, 4) != "at" { return rig_new(); }
+      if rig_word(ln, 7) != "len" { return rig_new(); }
+      if rig_word(ln, 9) != "lim" { return rig_new(); }
+      out = rig_bone(out, rig_word_int(ln, 3), rig_word_float(ln, 5), rig_word_float(ln, 6),
+                     rig_word_float(ln, 8), rig_word_float(ln, 10), rig_word_float(ln, 11));
+    } else if tag == "bone3" {
+      if rig_word(ln, 4) != "at" { return rig_new(); }
+      if rig_word(ln, 8) != "len" { return rig_new(); }
+      if rig_word(ln, 10) != "axis" { return rig_new(); }
+      if rig_word(ln, 14) != "lim" { return rig_new(); }
+      out = rig_bone3(out, rig_word_int(ln, 3),
+                      rig_word_float(ln, 5), rig_word_float(ln, 6), rig_word_float(ln, 7),
+                      rig_word_float(ln, 9),
+                      rig_word_float(ln, 11), rig_word_float(ln, 12), rig_word_float(ln, 13),
+                      rig_word_float(ln, 15), rig_word_float(ln, 16));
+    } else {
+      return rig_new();                                        // an unknown record, refused
+    }
   }
   out
 }
@@ -208,7 +324,11 @@ pub fn rig_eq(a: Rig, b: Rig) -> boolean {
     if (a.rg_parent[ei] ?? 0) != (b.rg_parent[ei] ?? 0) { return false; }
     if (a.rg_ox[ei] ?? 0.0) != (b.rg_ox[ei] ?? 0.0) { return false; }
     if (a.rg_oy[ei] ?? 0.0) != (b.rg_oy[ei] ?? 0.0) { return false; }
+    if (a.rg_oz[ei] ?? 0.0) != (b.rg_oz[ei] ?? 0.0) { return false; }
     if (a.rg_len[ei] ?? 0.0) != (b.rg_len[ei] ?? 0.0) { return false; }
+    if (a.rg_ax[ei] ?? 0.0) != (b.rg_ax[ei] ?? 0.0) { return false; }
+    if (a.rg_ay[ei] ?? 0.0) != (b.rg_ay[ei] ?? 0.0) { return false; }
+    if (a.rg_az[ei] ?? 0.0) != (b.rg_az[ei] ?? 0.0) { return false; }
     if (a.rg_lo[ei] ?? 0.0) != (b.rg_lo[ei] ?? 0.0) { return false; }
     if (a.rg_hi[ei] ?? 0.0) != (b.rg_hi[ei] ?? 0.0) { return false; }
   }
@@ -252,6 +372,85 @@ pub fn rig_world_seg(r: Rig, values: vector<float>, i: integer) -> (float, float
   y0 = by[i] ?? 0.0;
   (ex, ey) = pose_of(th[i] ?? 0.0, r.rg_len[i] ?? 0.0, 0.0);           // tip = base + len along angle
   (x0, y0, x0 + ex, y0 + ey)
+}
+
+// ── FORWARD KINEMATICS IN SPACE (`G1b`) ──────────────────────────────────────
+//
+// The world segment of bone `i` IN THREE DIMENSIONS: `(x0,y0,z0)` its base,
+// `(x1,y1,z1)` its tip.  The 2-D sibling above is not replaced and not
+// re-expressed — see the header for what that would have cost.
+//
+// The composition is the same tree walk one dimension up: a bone's offset rides
+// its PARENT's rotation (not its own joint), and its length runs along its own
+// `+x` under its OWN rotation.  What changes is that a rotation can no longer
+// be carried as an angle, because two rotations about different axes do not add
+// — so a 3x3 basis is carried instead, and Rodrigues builds each joint's own.
+//
+// ⚠ Nine parallel float vectors is the honest cost of a rig with NO
+// DEPENDENCIES.  `mesh3d` owns a `Mat4` and is one `use` away, and taking it
+// would make the body model depend on a renderer's linear algebra — which the
+// manifest's own note refuses (*"the body is pure continuous-space kinematics
+// … with NO lattice dependency"*), and a matrix library is the same kind of
+// coupling one step further out.
+//
+// ⚠ A ZERO-LENGTH AXIS POSES AS THE IDENTITY — the joint simply does not turn,
+// which is the honest reading of *"nothing to turn about"*.  It is not repaired
+// to `+z`: that would invent an axis the author did not write, and
+// `rig_admissible` refuses the rig anyway.
+pub fn rig_world_seg3(r: Rig, values: vector<float>, i: integer)
+    -> (float, float, float, float, float, float) {
+  n = i + 1;
+  bx: vector<float> = []; by: vector<float> = []; bz: vector<float> = [];
+  m00: vector<float> = []; m01: vector<float> = []; m02: vector<float> = [];
+  m10: vector<float> = []; m11: vector<float> = []; m12: vector<float> = [];
+  m20: vector<float> = []; m21: vector<float> = []; m22: vector<float> = [];
+  for k in 0..n {
+    th = (values[k] ?? 0.0) * TAU;
+    c = cos(th);
+    s = sin(th);
+    // The axis is stored AS GIVEN, so it is normalised here — at use, by the
+    // one consumer that needs a unit vector.  ⚠ `(0,0,1)` has length exactly
+    // 1.0 and the divide is exact, which is what keeps a planar single bone
+    // bit-identical to `rig_world_seg`.
+    ax = r.rg_ax[k] ?? 0.0; ay = r.rg_ay[k] ?? 0.0; az = r.rg_az[k] ?? 0.0;
+    al = sqrt(ax * ax + ay * ay + az * az) ?? 0.0;
+    ux = 0.0; uy = 0.0; uz = 0.0;
+    if al > 0.0 { ux = ax / al ?? 0.0; uy = ay / al ?? 0.0; uz = az / al ?? 0.0; }
+    else { c = 1.0; s = 0.0; }                    // no axis: the identity, never a repair
+    omc = 1.0 - c;
+    l00 = c + omc * ux * ux;       l01 = omc * ux * uy - s * uz;  l02 = omc * ux * uz + s * uy;
+    l10 = omc * uy * ux + s * uz;  l11 = c + omc * uy * uy;       l12 = omc * uy * uz - s * ux;
+    l20 = omc * uz * ux - s * uy;  l21 = omc * uz * uy + s * ux;  l22 = c + omc * uz * uz;
+    p = r.rg_parent[k] ?? -1;
+    if p < 0 {
+      bx += [0.0]; by += [0.0]; bz += [0.0];
+      m00 += [l00]; m01 += [l01]; m02 += [l02];
+      m10 += [l10]; m11 += [l11]; m12 += [l12];
+      m20 += [l20]; m21 += [l21]; m22 += [l22];
+    } else {
+      p00 = m00[p] ?? 1.0; p01 = m01[p] ?? 0.0; p02 = m02[p] ?? 0.0;
+      p10 = m10[p] ?? 0.0; p11 = m11[p] ?? 1.0; p12 = m12[p] ?? 0.0;
+      p20 = m20[p] ?? 0.0; p21 = m21[p] ?? 0.0; p22 = m22[p] ?? 1.0;
+      gx = r.rg_ox[k] ?? 0.0; gy = r.rg_oy[k] ?? 0.0; gz = r.rg_oz[k] ?? 0.0;
+      bx += [(bx[p] ?? 0.0) + p00 * gx + p01 * gy + p02 * gz];
+      by += [(by[p] ?? 0.0) + p10 * gx + p11 * gy + p12 * gz];
+      bz += [(bz[p] ?? 0.0) + p20 * gx + p21 * gy + p22 * gz];
+      m00 += [p00 * l00 + p01 * l10 + p02 * l20];
+      m01 += [p00 * l01 + p01 * l11 + p02 * l21];
+      m02 += [p00 * l02 + p01 * l12 + p02 * l22];
+      m10 += [p10 * l00 + p11 * l10 + p12 * l20];
+      m11 += [p10 * l01 + p11 * l11 + p12 * l21];
+      m12 += [p10 * l02 + p11 * l12 + p12 * l22];
+      m20 += [p20 * l00 + p21 * l10 + p22 * l20];
+      m21 += [p20 * l01 + p21 * l11 + p22 * l21];
+      m22 += [p20 * l02 + p21 * l12 + p22 * l22];
+    }
+  }
+  // The tip runs along the bone's own +x, which is its rotation's first COLUMN.
+  bl = r.rg_len[i] ?? 0.0;
+  x0 = bx[i] ?? 0.0; y0 = by[i] ?? 0.0; z0 = bz[i] ?? 0.0;
+  (x0, y0, z0,
+   x0 + (m00[i] ?? 1.0) * bl, y0 + (m10[i] ?? 0.0) * bl, z0 + (m20[i] ?? 0.0) * bl)
 }
 
 // An oriented bounding box: centre, unit axis (along the bone), and half-extents.

@@ -1,8 +1,22 @@
 [package]
 name    = "hex_body"
-version = "0.1.0"
+version = "0.2.0"
 loft    = ">=0.8"
 
+# 0.2.0 adds the third dimension: `rig_bone3` with an explicit revolute axis and
+# an `oz`, plus `rig_world_seg3`.  BOTH pins stay at 0.1.0 and each for its own
+# reason, measured rather than assumed:
+#
+#   api  — every 0.1.0 signature is unchanged and `rig_bone` still means what it
+#          meant; it is now the planar special case of `rig_bone3`.
+#   data — 0.2.0 reads every rig 0.1.0 wrote, and a PLANAR rig written by 0.2.0
+#          is byte-identical to 0.1.0's (gated on a byte literal).
+#
+# ⚠ The other direction is deliberately loud rather than compatible: a SPATIAL
+# bone writes its own record tag `bone3`, so a 0.1.0 reader REFUSES the rig
+# instead of silently reading its planar projection.  Measured against the
+# shipped 0.1.0 reader — appending fields to the `bone` line reads back as 1
+# flattened bone, the new tag reads back as 0.
 api_compatible_with  = "0.1.0"   # oldest own release this is a drop-in for
 data_compatible_with = "0.1.0"   # oldest own release whose stored data this reads
 [library]

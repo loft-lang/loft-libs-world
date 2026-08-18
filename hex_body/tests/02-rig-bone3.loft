@@ -1,0 +1,233 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// body `G1b` — the third dimension: an explicit revolute AXIS and an `oz`.
+//
+// ── The one claim ────────────────────────────────────────────────────────────
+//
+// > **`rig_bone3` is a strict GENERALISATION: a planar rig behaves exactly as
+// > it did, and its bytes are exactly the bytes 0.1.0 wrote.**
+//
+// Everything below is that claim taken apart.  ⚠ The interesting half is where
+// the generalisation stops being exact and why — `rig_world_seg` composes by
+// ADDING ANGLES while any 3-D form composes ROTATIONS, so a CHAIN cannot be
+// bit-identical in f64 and a single bone can.  That boundary is measured here
+// rather than asserted, and it is the reason the implementation carries a
+// matrix and not a quaternion.
+use hex_body;
+
+fn fabs3(x: float) -> float { if x < 0.0 { 0.0 - x } else { x } }
+
+fn worse(a: float, b: float) -> float { if a > b { a } else { b } }
+
+// The 0.1.0 fixture, verbatim from `01-hex-body.loft`.
+fn planar_arm() -> Rig {
+  r = rig_new();
+  r = rig_bone(r, -1, 0.0, 0.0, 1.5, -0.5, 0.5);
+  r = rig_bone(r, 0, 0.8660254037844386, 0.25, 0.37, -0.125, 0.125);
+  r
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The format — the compatibility half
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ⚠⚠ THE COMPATIBILITY GATE, and it is a byte literal on purpose.  Every other
+// assertion in this file would still pass if the planar record grew a field;
+// only pinning the exact bytes 0.1.0 wrote can see that.
+fn test_a_planar_rig_writes_the_bytes_zero_one_wrote() {
+  want = "rig arm bones 2"
+       + "\nbone 0 parent -1 at 0 0 len 1.5 lim -0.5 0.5"
+       + "\nbone 1 parent 0 at 0.8660254037844386 0.25 len 0.37 lim -0.125 0.125";
+  got = rig_write(planar_arm(), "arm");
+  assert(got == want, "a planar rig's bytes are unchanged across the version.\nwant: {want}\ngot:  {got}");
+}
+
+// ⚠⚠ A SPATIAL BONE CHANGES ITS RECORD TAG, and the reason is a measurement of
+// the SHIPPED 0.1.0 reader: its parser checks the keywords it knows and never
+// the word COUNT, so a longer `bone` line is read as the bone's PLANAR
+// PROJECTION — a rig silently flattened.  Under `bone3` the same reader refuses
+// the whole rig instead.  Loud beats tidy.
+fn test_a_spatial_bone_changes_its_record_tag() {
+  r = rig_new();
+  r = rig_bone3(r, -1, 0.0, 0.0, 0.3, 1.5, 1.0, 0.0, 0.0, -0.5, 0.5);
+  want = "rig lid bones 1"
+       + "\nbone3 0 parent -1 at 0 0 0.3 len 1.5 axis 1 0 0 lim -0.5 0.5";
+  got = rig_write(r, "lid");
+  assert(got == want, "a spatial bone is its own record.\nwant: {want}\ngot:  {got}");
+
+  // the control: the SAME call with the planar defaults writes the 0.1.0 record
+  q = rig_new();
+  q = rig_bone3(q, -1, 0.0, 0.0, 0.0, 1.5, 0.0, 0.0, 1.0, -0.5, 0.5);
+  assert(rig_write(q, "lid") == "rig lid bones 1\nbone 0 parent -1 at 0 0 len 1.5 lim -0.5 0.5",
+         "and a bone3 built at the planar defaults is a planar bone: {rig_write(q, \"lid\")}");
+}
+
+fn test_a_spatial_rig_round_trips_as_canonical_text() {
+  r = rig_new();
+  r = rig_bone3(r, -1, 0.0, 0.0, 0.0, 1.5, 0.0, 0.0, 1.0, -0.5, 0.5);
+  r = rig_bone3(r, 0, 1.5, 0.0, 0.42, 0.6, 0.0, 1.0, 0.0, 0.0, 0.30);
+  t = rig_write(r, "hover");
+  back = rig_read(t);
+  assert(rig_eq(r, back), "write(read(R)) = R byte-for-byte, the axis included");
+  assert(rig_write(back, "hover") == t, "and the bytes match");
+  assert(rig_admissible(r), "a mixed planar/spatial rig is admissible");
+
+}
+
+// ⚠⚠ `rig_eq` has to SEE each new field SEPARATELY, or the round trip above is
+// vacuous — and this test was WRONG on its first writing in exactly the way
+// that matters.  It compared a rig with axis `(0,1,0)` against one with
+// `(1,0,0)`, which differ in TWO components: deleting the `rg_ax` comparison
+// left the `rg_ay` one to catch it, and the break passed.  A negative control
+// has to be MINIMAL — one field apart — or it tests the whole set at once and
+// can see none of them.
+fn test_rig_eq_sees_each_new_field_on_its_own() {
+  base = one_spatial_bone(0.42, 0.0, 1.0, 0.0);
+  assert(rig_eq(base, one_spatial_bone(0.42, 0.0, 1.0, 0.0)),
+         "the control: two identical rigs ARE equal, so the four below are not vacuous");
+  assert(!rig_eq(base, one_spatial_bone(0.43, 0.0, 1.0, 0.0)), "oz alone is seen");
+  assert(!rig_eq(base, one_spatial_bone(0.42, 0.5, 1.0, 0.0)), "ax alone is seen");
+  assert(!rig_eq(base, one_spatial_bone(0.42, 0.0, 1.5, 0.0)), "ay alone is seen");
+  assert(!rig_eq(base, one_spatial_bone(0.42, 0.0, 1.0, 0.5)), "az alone is seen");
+}
+
+// One root plus one child that differs only in the four fields under test.
+fn one_spatial_bone(oz: float, ax: float, ay: float, az: float) -> Rig {
+  r = rig_new();
+  r = rig_bone3(r, -1, 0.0, 0.0, 0.0, 1.5, 0.0, 0.0, 1.0, -0.5, 0.5);
+  r = rig_bone3(r, 0, 1.5, 0.0, oz, 0.6, ax, ay, az, 0.0, 0.30);
+  r
+}
+
+fn test_an_unknown_record_is_refused() {
+  bad = "rig arm bones 1\nbone9 0 parent -1 at 0 0 len 1.0 lim 0 0";
+  assert(rig_count(rig_read(bad)) == 0, "a record this reader does not know is refused");
+  ok = "rig arm bones 1\nbone 0 parent -1 at 0 0 len 1.0 lim 0 0";
+  assert(rig_count(rig_read(ok)) == 1, "the control: the record it does know is read");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The pose — where the generalisation is exact, and where it stops
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ⚠⚠ THE BOUNDARY, MEASURED.  A single planar bone poses IDENTICALLY through
+// both functions; a planar CHAIN cannot, because `rig_world_seg` adds angles
+// and `rig_world_seg3` composes rotations.  This pins both halves, so a future
+// change that quietly widens the gap fails here.
+fn test_the_planar_pose_survives_the_third_dimension() {
+  r = rig_new();
+  r = rig_bone(r, -1, 0.0, 0.0, 1.5, -1.0, 1.0);
+  r = rig_bone(r, 0, 1.3, 0.25, 0.37, -1.0, 1.0);
+  r = rig_bone(r, 1, 0.7, -0.6, 0.82, -1.0, 1.0);
+  vals = [0.13, -0.29, 0.41];
+
+  // the ROOT is exact — Rodrigues at (0,0,1) collapses to [[c,-s,0],[s,c,0],
+  // [0,0,1]] with c and s untouched, and normalising a unit axis divides by 1.0
+  (_, _, ax1, ay1) = rig_world_seg(r, vals, 0);
+  (_, _, _, bx1, by1, bz1) = rig_world_seg3(r, vals, 0);
+  assert(ax1 == bx1 && ay1 == by1,
+         "a single planar bone poses BIT-IDENTICALLY: ({ax1}, {ay1}) vs ({bx1}, {by1})");
+  assert(bz1 == 0.0, "and never leaves the plane");
+
+  // the CHAIN agrees to within an ulp of the coordinate, and no better
+  worst = 0.0;
+  for i in 0..3 {
+    (_, _, px, py) = rig_world_seg(r, vals, i);
+    (_, _, _, qx, qy, qz) = rig_world_seg3(r, vals, i);
+    worst = worse(worst, worse(fabs3(qx - px), fabs3(qy - py)));
+    assert(qz == 0.0, "bone {i} of a planar rig stays at z = 0");
+  }
+  assert(worst < 0.000000000000001,
+         "a planar chain agrees to within 1e-15 m, got {worst}");
+
+  // ⚠ THE CONTROL: can this comparison produce a non-trivial reading at all?
+  // The same instrument against a DIFFERENT pose must read metres.
+  (_, _, cx, cy) = rig_world_seg(r, vals, 2);
+  (_, _, _, dx, dy, _) = rig_world_seg3(r, [0.13, -0.29, 0.9], 2);
+  assert(fabs3(dx - cx) + fabs3(dy - cy) > 0.5,
+         "the control: a real difference reads in metres, not ulps");
+}
+
+// ⚠ The thing a planar rig CANNOT express, which is why this phase exists: a
+// bone hinged about an axis perpendicular to itself swings OUT of the plane.
+fn test_a_lateral_hinge_leaves_the_plane() {
+  r = rig_new();
+  r = rig_bone3(r, -1, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, -0.5, 0.5);
+  (_, _, _, x, y, z) = rig_world_seg3(r, [0.25], 0);
+  // a quarter turn about +y takes the bone's own +x to -z
+  assert(fabs3(x) < 0.000000000000001 && fabs3(y) < 0.000000000000001,
+         "a quarter turn about +y empties x and y: ({x}, {y})");
+  assert(fabs3(z + 1.0) < 0.000000000000001, "and puts the tip at z = -1, got {z}");
+
+  // the control: the SAME rig about the PLANAR axis never leaves z = 0
+  q = rig_new();
+  q = rig_bone3(q, -1, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, -0.5, 0.5);
+  (_, _, _, _, _, qz) = rig_world_seg3(q, [0.25], 0);
+  assert(qz == 0.0, "a planar hinge cannot express this at all, which is the point");
+}
+
+// ⚠ The other half of the third dimension, and it is a separate mechanism from
+// the axis: an OFFSET in z.  Without this the round trip proves `oz` is STORED
+// and nothing proves it is USED.
+fn test_an_offset_in_z_lifts_the_bone() {
+  r = rig_new();
+  r = rig_bone3(r, -1, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, -0.5, 0.5);
+  r = rig_bone3(r, 0, 0.0, 0.0, 0.42, 0.5, 0.0, 0.0, 1.0, -0.5, 0.5);
+  (bx, by, bz, tx, ty, tz) = rig_world_seg3(r, [0.0, 0.0], 1);
+  assert(bz == 0.42, "the child's base sits at its own oz, got {bz}");
+  assert(tz == 0.42, "and its tip stays there, since it turns about +z: {tz}");
+  assert(bx == 0.0 && by == 0.0, "with x and y untouched: ({bx}, {by})");
+  assert(tx == 0.5 && ty == 0.0, "and the length still runs along +x: ({tx}, {ty})");
+
+  // ⚠ The offset rides the PARENT's rotation, not its own — the same rule the
+  // 2-D code follows, and a z offset under a planar parent is unmoved by it.
+  (_, _, qz, _, _, _) = rig_world_seg3(r, [0.25, 0.0], 1);
+  assert(qz == 0.42, "turning the parent about +z leaves a z offset where it was: {qz}");
+}
+
+// ⚠ The axis is stored AS GIVEN and normalised only at use — `hex_part`'s rule,
+// and this is the one test that can tell the two apart.
+fn test_the_axis_is_stored_as_given_and_normalised_at_use() {
+  twice = rig_new();
+  twice = rig_bone3(twice, -1, 0.0, 0.0, 0.0, 1.0, 0.0, 2.0, 0.0, -0.5, 0.5);
+  assert(rig_write(twice, "a").contains("axis 0 2 0"),
+         "the number the author wrote is the number stored: {rig_write(twice, \"a\")}");
+
+  unit = rig_new();
+  unit = rig_bone3(unit, -1, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, -0.5, 0.5);
+  (_, _, _, ux, uy, uz) = rig_world_seg3(unit, [0.3], 0);
+  (_, _, _, tx, ty, tz) = rig_world_seg3(twice, [0.3], 0);
+  assert(ux == tx && uy == ty && uz == tz,
+         "and a longer axis poses identically, because it is normalised at use");
+}
+
+// ⚠ A validation the planar rig had no way to express: there, the axis was
+// implicit and could not be got wrong.
+fn test_an_axis_of_zero_length_is_refused() {
+  bad = rig_new();
+  bad = rig_bone3(bad, -1, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, -0.5, 0.5);
+  assert(!rig_admissible(bad), "a joint with nothing to turn about is not admissible");
+
+  // the control: one non-zero component is enough, exactly as `has_axis` asks
+  ok = rig_new();
+  ok = rig_bone3(ok, -1, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.000001, -0.5, 0.5);
+  assert(rig_admissible(ok), "and a small axis is still an axis");
+  assert(rig_admissible(planar_arm()), "and every 0.1.0 rig is still admissible");
+
+  // ⚠ It poses as the IDENTITY rather than being repaired to +z — the tip stays
+  // on the bone's own +x however far the joint is driven.
+  (_, _, _, bx, by, bz) = rig_world_seg3(bad, [0.25], 0);
+  assert(bx == 1.0 && by == 0.0 && bz == 0.0,
+         "an axis-less joint does not turn: ({bx}, {by}, {bz})");
+}
+
+// ⚠ `bone_planar` decides which RECORD a bone is written as, so it is asked
+// with `==` and no tolerance.  A near-planar bone is a spatial bone.
+fn test_a_nearly_planar_bone_is_a_spatial_bone() {
+  r = rig_new();
+  r = rig_bone3(r, -1, 0.0, 0.0, 0.0000000001, 1.0, 0.0, 0.0, 1.0, -0.5, 0.5);
+  assert(!bone_planar(r, 0), "a bone a tenth of a nanometre out of plane is not planar");
+  assert(rig_write(r, "a").contains("bone3"), "so it writes the spatial record");
+  assert(!rig_planar(r), "and the rig is not planar either");
+  assert(rig_planar(planar_arm()), "the control: the 0.1.0 fixture is planar");
+}

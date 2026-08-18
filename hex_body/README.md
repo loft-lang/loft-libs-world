@@ -20,6 +20,12 @@ that a generic animation rig does not carry.
 - `Rig` / `rig_write` / `rig_read` — a rig's canonical text; `write(read(R)) = R` byte-for-byte,
   floats included, a malformed text refused not repaired.
 - `pose_of` — forward kinematics for one joint; `rig_world_seg` composes the whole tree.
+- **`rig_bone3` / `rig_world_seg3`** — the same rig in SPACE: an explicit revolute **axis** and an
+  `oz`, the eight numbers `hex_part::Hinge` already carries. `rig_bone` is the planar special case
+  (`oz = 0` about `(0,0,1)`) and its signature is unchanged. ⚠ The axis is stored **as given, not
+  normalised**, and one of zero length is refused by `rig_admissible` — a joint with nothing to
+  turn about. ⚠ A planar rig's bytes are unchanged; a spatial bone writes its own record `bone3`,
+  so an older reader refuses it rather than silently reading its planar projection.
 - `wheel_value` / `wheel_angle` / `wheel_skid` — a wheel is a joint whose value is *derived from
   travel*, so it rolls without slip **by construction**.
 - `joint_fits` / `joint_offer` — the joint doorstep: an out-of-limit value is refused with the
