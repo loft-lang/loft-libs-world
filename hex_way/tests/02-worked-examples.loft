@@ -475,7 +475,11 @@ fn test_the_shortest_safe_tread_depends_on_the_heading() {
 // half written.  Both call `ang_wrap` now, which is why there is no second place
 // left for the pair to disagree.
 //
-// Example: @HXY-007
+// ⚠ THIS BLOCK DEFINES THE TAG, SO IT MUST NOT ALSO CITE ONE. The scanner's rule 4 is
+// that a citation line anywhere in a block cancels a tag named in its earlier prose —
+// and the first draft of this note said so IN WORDS THAT CONTAINED THE TOKEN, which
+// tripped the rule it was describing: three citations and no fn carrying the tag.
+// The citations live in `src/hex_way.loft`, on the two functions this is about.
 fn test_the_same_arc_authored_a_turn_lower_is_the_same_arc() {
   // Two spellings of ONE quarter turn: radius 4 about the origin, from due east
   // to due north.

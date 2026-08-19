@@ -110,3 +110,4 @@
 @HXY-004	hex_way/tests/02-worked-examples.loft:296	test_mark_every_part_then_cut_once	https://github.com/loft-lang/loft-libs-world/blob/main/hex_way/tests/02-worked-examples.loft#L296
 @HXY-005	hex_way/tests/02-worked-examples.loft:356	test_a_milepost_before_a_turn_reads_zero_not_a_full_lap	https://github.com/loft-lang/loft-libs-world/blob/main/hex_way/tests/02-worked-examples.loft#L356
 @HXY-006	hex_way/tests/02-worked-examples.loft:391	test_the_shortest_safe_tread_depends_on_the_heading	https://github.com/loft-lang/loft-libs-world/blob/main/hex_way/tests/02-worked-examples.loft#L391
+@HXY-007	hex_way/tests/02-worked-examples.loft:448	test_the_same_arc_authored_a_turn_lower_is_the_same_arc	https://github.com/loft-lang/loft-libs-world/blob/main/hex_way/tests/02-worked-examples.loft#L448
