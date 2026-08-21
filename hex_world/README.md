@@ -35,8 +35,14 @@ engine and the loft library ecosystem.
   — projector + phone clients share the same chunked binary surface.
 - Future hex_walls / hex_terrain / hex_items packages — they place
   features *within* the hex_world addressing space.
-- The lavition editor — authors hex maps using this as the canonical
-  in-memory model.
+
+⚠ **The lavition editor is NOT a consumer**, though this list used to say it
+was. It authors hex maps against a different lineage — moros's voxel column
+store, published as `hex_voxel` — which shares neither this package's cell model
+(one `Cell` per hex) nor its file format (`'WRLD'`, 4-byte cells, versus
+`'WTTH'`, 8-byte cells with per-layer CRC and sections). The two were briefly
+both called `hex_world`; that name stays here and the voxel store took
+`hex_voxel` (loft-lang/loft-libs-world#13, moros plan #19 `L4`).
 
 Renamed from `world` 2026-06-01 (see
 [LAVITION.md W.1](https://github.com/jjstwerff/loft/blob/main/doc/claude/LAVITION.md#next-library-work--execution-order))
