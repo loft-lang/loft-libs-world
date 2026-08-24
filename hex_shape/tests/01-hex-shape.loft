@@ -39,3 +39,224 @@ fn test_an_arcs_centre_recovers_exactly() {
   assert(ok, "the centre was recovered");
   assert(cq == 3 && cr == 2, "the centre comes back exactly, got ({cq}, {cr})");
 }
+
+// ── SNAP 3: THE AIM IDIOM ───────────────────────────────────────────────────
+//
+// ⚠ WHAT IS DELIBERATELY NOT ASSERTED HERE: that aiming and tracing agree. They
+// minimise different things on purpose (see `snap_run_from_heading`'s note), so
+// whether they coincide is a MEASUREMENT and not a contract — a test asserting it
+// would either be vacuous or would freeze an answer nobody has looked at yet. The
+// consumer measures it; these tests pin the properties the function must have for
+// that measurement to mean anything.
+
+fn test_aiming_at_a_directions_own_angle_returns_it() {
+  // The weakest of these, and it is here as a FIXTURE GUARD rather than as a finding:
+  // a table checked against the table cannot be surprised. It exists so that the three
+  // tests below, which can be surprised, are known to be running against a sane map.
+  for d in 0..24 {
+    got = wall_nearest_d24(wall_angle_actual(d));
+    assert(got == d, "aiming at d24 {d}'s own angle returns {got}");
+  }
+}
+
+fn test_the_direction_map_is_monotone_and_complete() {
+  // ⚠ THE PROPERTY AN AUTHOR ACTUALLY FEELS. Sweeping the facing must cross exactly 24
+  // boundaries, each advancing by one: if turning further could hand back an EARLIER
+  // direction, no amount of practice would let anyone steer to a target, and a live
+  // preview of "the direction you would get" would be a lie at the folds.
+  changes = 0;
+  back = 0;
+  jump = 0;
+  pd = wall_nearest_d24(0.0);
+  deg = 0.0;
+  while deg < 360.0 {
+    cur = wall_nearest_d24(deg);
+    if cur != pd {
+      changes = changes + 1;
+      step = ((cur - pd) % 24 + 24) % 24;
+      if step != 1 {
+        if step == 23 { back = back + 1; } else { jump = jump + 1; }
+      }
+      pd = cur;
+    }
+    deg = deg + 0.02;
+  }
+  assert(back == 0, "{back} boundaries handed back an earlier direction");
+  assert(jump == 0, "{jump} boundaries skipped a direction");
+  assert(changes == 24, "one full turn crosses 24 boundaries, counted {changes}");
+}
+
+fn test_nearest_actual_is_not_nearest_nominal() {
+  // ⚠ THE WHOLE REASON THIS FUNCTION EXISTS. Half of `D` sits 1.1021 degrees off its
+  // nominal 15-degree multiple (@HXS-002), so quantising against the NOMINAL grid picks a
+  // different direction on a band around every in-between. If this test ever goes green
+  // the other way, `wall_nearest_d24` is an expensive way to divide by 15.
+  diff = 0;
+  deg = 0.0;
+  while deg < 360.0 {
+    k = deg / 15.0 ?? 0.0;
+    ki = 0;
+    if k >= 0.0 { ki = (k + 0.5) as integer; } else { ki = (k - 0.5) as integer; }
+    nom = ((ki % 24) + 24) % 24;
+    if wall_nearest_d24(deg) != nom { diff = diff + 1; }
+    deg = deg + 0.05;
+  }
+  assert(diff > 0, "nearest-in-D never differs from the nominal 15-degree grid");
+}
+
+fn test_an_aimed_run_is_always_admissible() {
+  // ⚠ THE SAFETY PROPERTY, AND THE ONE A WRAPPER WOULD HAVE GOT FOR FREE WITHOUT MEANING
+  // IT. This function reaches `p` by dividing a length, not by searching endpoints, so
+  // nothing in its arithmetic knows about `wall_run_ok`'s one-in-three refusals — the
+  // guarantee comes from `wall_snap_p` and has to be checked rather than assumed.
+  (va, vb) = nearest_vertex(0.0, 0.0);
+  assert(tri_is_vertex(va, vb), "the fixture anchor is a vertex");
+  tried = 0;
+  legal = 0;
+  refused = 0;
+  for i in 0..72 {
+    ang = (i as float) * 5.0;
+    for j in 1..9 {
+      dist = (j as float) * 1.37;          // deliberately not a multiple of any period
+      (d, p) = snap_run_from_heading(va, vb, ang, dist);
+      tried = tried + 1;
+      if p == 0 { refused = refused + 1; continue; }
+      assert(d >= 0 && d < 24, "a returned direction is in D, got {d}");
+      assert(wall_run_ok(d, va, vb, p),
+             "aiming {ang} deg for {dist} gave d24 {d} p {p}, which is NOT admissible");
+      legal = legal + 1;
+    }
+  }
+  assert(tried == 576, "the sweep ran, {tried} aims");
+  assert(legal > 0, "at least one aim produced a run — {legal} did");
+}
+
+// The WIDEST gap between consecutive legal run lengths in one direction from one anchor,
+// in periods — the granularity an author aiming a length actually meets.
+//
+// ⚠ TWO WRONG MODELS DIED HERE, AND BOTH LOOKED RIGHT. First `wall_min_p`, which says
+// where the legal runs START and nothing about their spacing. Then "the first gap", which
+// assumed an arithmetic progression. Measured, the legal sets are:
+//
+//   18 of 24 directions   every p is legal                       gap 1
+//    6 of 24 directions   two p in three, e.g. {1,3,4,6,7,9,...}  gaps alternate 2,1
+//
+// So it is neither a start nor a period: it is the complement of a progression, and only
+// the MAXIMUM gap bounds the error. `project_p`'s own note is the explanation — the N = 1
+// classes "refuse one p in three".
+fn legal_gap_max(d: integer, a0: integer, b0: integer) -> integer {
+  prev = 0;
+  worst = 0;
+  for q in 1..16 {
+    if wall_run_ok(d, a0, b0, q) {
+      if prev > 0 && q - prev > worst { worst = q - prev; }
+      prev = q;
+    }
+  }
+  worst
+}
+
+fn second_legal_p(d: integer, a0: integer, b0: integer) -> integer {
+  seen = 0;
+  for q in 1..16 {
+    if wall_run_ok(d, a0, b0, q) {
+      seen = seen + 1;
+      if seen == 2 { return q; }
+    }
+  }
+  0
+}
+
+fn test_an_aimed_run_lands_near_the_length_asked_for() {
+  // ⚠ THE GRANULARITY IS NOT ONE PERIOD, AND THE FIRST VERSION OF THIS TEST ASSERTED THAT
+  // IT WAS. It went red on `aimed 5.48, got 4.0 — off by 1.48, more than one period 1.0 of
+  // d24 2`, which was the library telling the truth. An author aiming between two
+  // reachable lengths is moved to the SHORTER, because `wall_snap_p` breaks ties that way,
+  // so the miss can be a full gap rather than half of one.
+  (va, vb) = nearest_vertex(0.0, 0.0);
+  worst_ratio = 0.0;
+  widest = 0;
+  for i in 0..24 {
+    ang = wall_angle_actual(i);
+    gp = legal_gap_max(i, va, vb);
+    assert(gp > 0, "d24 {i} has at least two legal run lengths from this anchor");
+    if gp > widest { widest = gp; }
+    for j in 2..10 {
+      dist = (j as float) * 1.37;
+      (d, p) = snap_run_from_heading(va, vb, ang, dist);
+      if p == 0 { continue; }
+      err = wall_run_len(d, p) - dist;
+      if err < 0.0 { err = 0.0 - err; }
+      step = wall_run_len(d, 1) * (gp as float);
+      assert(err <= step + 0.000001,
+             "aimed {dist} in d24 {d}, got {wall_run_len(d, p)} — off by {err}, more "
+           + "than its {gp}-period granularity {step}");
+      r = err / step ?? 0.0;
+      if r > worst_ratio { worst_ratio = r; }
+    }
+  }
+  // ⚠ AND THE FIXTURE MUST BE ABLE TO MISS. Every distance is a multiple of 1.37, chosen
+  // not to be a multiple of any period — if the sweep only ever asked for lengths that
+  // were already legal, the bound above could not fail and this test would assert nothing.
+  assert(worst_ratio > 0.0, "no aim missed its length at all — the fixture asks only for "
+                          + "already-legal lengths, so the bound cannot fail");
+  // The two-in-three family is the finding, so it is pinned: if every direction became 1,
+  // the bound above would have quietly tightened by 2x and nothing would have said so.
+  assert(widest == 2, "some direction refuses one run in three, widest gap is {widest}");
+}
+
+fn test_an_exactly_legal_length_is_hit_exactly() {
+  // The other side of the test above: when the length asked for IS reachable, the aim must
+  // land on it with no error at all. Without this, a function that always returned the
+  // smallest legal run would satisfy the bound above.
+  (va, vb) = nearest_vertex(0.0, 0.0);
+  hit = 0;
+  for i in 0..24 {
+    want_p = second_legal_p(i, va, vb);
+    assert(want_p > 0, "d24 {i} has a second legal run from this anchor");
+    want_len = wall_run_len(i, want_p);
+    (d, p) = snap_run_from_heading(va, vb, wall_angle_actual(i), want_len);
+    assert(d == i, "aiming along d24 {i}'s own angle chose d24 {d}");
+    assert(p == want_p, "asking for exactly {want_len} in d24 {i} should give p {want_p}, "
+                      + "got {p}");
+    hit = hit + 1;
+  }
+  assert(hit == 24, "every direction was checked, {hit} of 24");
+}
+
+fn test_the_in_between_directions_are_four_times_coarser_in_length() {
+  // ⚠ FOUND WHILE FIXING THE BOUND ABOVE, AND IT IS THE LARGEST AUTHORING CONSEQUENCE IN
+  // THIS FILE. One period is NOT one size: the twelve exact directions have periods of
+  // 1.0 or 1.732 world units, while all twelve in-betweens have a period of 6.245. So an
+  // author aiming along an in-between can only make walls of 6.245, 12.49, 18.73 — the
+  // length axis is roughly FOUR TIMES coarser there, and no input precision changes it.
+  short = 1.0e30;
+  long = 0.0;
+  for i in 0..24 {
+    per = wall_run_len(i, 1);
+    if wall_is_exact(i) {
+      if per > long { long = per; }
+    } else {
+      if per < short { short = per; }
+    }
+  }
+  assert(long > 0.0 && short < 1.0e30, "both families were sampled");
+  assert(short > long * 3.0,
+         "the coarsest exact period is {long} and the finest in-between is {short} — "
+       + "they are no longer separated, so this test is no longer describing the lattice");
+}
+
+fn test_a_non_vertex_anchor_is_refused() {
+  // ⚠ A REFUSAL MUST BE A REFUSAL, NOT A ZERO-LENGTH RUN THAT LOOKS LEGAL. `p = 0` is the
+  // caller's signal, and a hex CENTRE is the anchor a caller most easily arrives at by
+  // mistake — `nearest_vertex` exists precisely because a raw point is usually not one.
+  assert(!tri_is_vertex(0, 0), "the origin is a centre, not a vertex");
+  (d, p) = snap_run_from_heading(0, 0, 30.0, 5.0);
+  assert(p == 0, "a centre anchor must refuse, got d24 {d} p {p}");
+}
+
+fn test_a_zero_length_aim_is_refused() {
+  (va, vb) = nearest_vertex(0.0, 0.0);
+  (d, p) = snap_run_from_heading(va, vb, 90.0, 0.0);
+  assert(p == 0, "aiming zero distance must refuse, got d24 {d} p {p}");
+}

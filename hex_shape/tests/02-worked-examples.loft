@@ -612,3 +612,88 @@ fn test_a_door_is_an_annotation_so_the_tower_is_still_one_arc() {
   assert(arc_wedge_has(0, 0, 1, 0, 2, 0, 1, 3), "the cell due east is in the wedge");
   assert(!arc_wedge_has(0, 0, -1, 0, 2, 0, 1, 3), "the one due west is not");
 }
+
+// @HXS-010 — A CONTROLLER HAS NO POINT AT ALL, AND AIMING A RUN IS NOT THE
+// SAME MAP AS DRAGGING ONE.
+//
+// `@HXS-008` walks the three snaps between a MOUSE CLICK and what gets stored.  A
+// controller does not have a click: it has a facing and a push — an angle and a
+// magnitude, with no point anywhere in it.  `snap_run_from_heading` is that entry
+// point, and the temptation is to implement it by building a target point from the
+// two and calling `snap_run_d24`/`snap_run_p`.
+//
+// ⚠ THAT WOULD BE A DIFFERENT ANSWER, NOT A TIDIER ROUTE TO THE SAME ONE, because
+// the two snaps minimise different quantities:
+//
+//   DRAG  `snap_run_d24` picks the direction whose best legal ENDPOINT lands nearest
+//         the target — ONE 2-D distance, in which a direction error and a length
+//         error trade freely against each other.
+//   AIM   `snap_run_from_heading` quantises the two axes SEPARATELY: the angle
+//         against `D`, the length against the legal runs in the chosen direction.
+//
+// An author who aims is making two statements, "this way" and "this far", and expects
+// the first to be honoured as a direction.  An author who drags is making one, "to
+// here".  Those are different intents and they produce different walls.
+//
+// THE CASE BELOW IS THE CLEANEST ONE: aim 9 degrees, push 3.93 world units.
+//
+//   aim   -> d24 1 (13.898 deg), length 6.245 — the ANGLE is honoured to 4.9 deg,
+//            and the wall comes out 59% LONGER than the push asked for
+//   drag  -> d24 0 (0 deg), length 3.464 — the POINT is honoured to 0.74 wu, and
+//            the direction is off by the whole 9 degrees
+//
+// and the two ends are 3.0 world units apart.  ⚠ THE CAUSE IS THE PERIOD, NOT THE
+// ANGLE: d24 1's smallest run is 6.245 wu while d24 0's is 1.732, so a SHORT run in an
+// in-between direction does not exist at all.  The drag notices and leaves the
+// direction; the aim cannot, and must round the length up instead.
+//
+// A consumer must therefore pick ONE idiom per gesture and show what it will produce.
+// Mixing them — start by aiming, finish by dragging — yields a wall neither would.
+fn test_aiming_a_run_is_not_the_same_map_as_dragging_one() {
+  (va, vb) = nearest_vertex(0.0, 0.0);
+  ax = tri_x(va, vb);
+  ay = tri_y(va, vb);
+  dist = 3.93;
+  rad = 9.0 * 0.017453292519943295;
+  tx = ax + cos(rad) * dist;
+  ty = ay + sin(rad) * dist;
+
+  // AIM: the angle is quantised against `D`'s ACTUAL angles, not the nominal
+  // 15-degree multiples — 9 degrees is nearer d24 1 (13.898) than d24 0.
+  (da, pa) = snap_run_from_heading(va, vb, 9.0, dist);
+  assert(da == 1, "aiming 9 degrees chooses d24 1, got {da}");
+  assert(pa == 1, "and one period of it, got {pa}");
+  assert(wall_run_ok(da, va, vb, pa), "which is an admissible run");
+  alen = wall_run_len(da, pa);
+  assert(alen > 6.2 && alen < 6.3,
+         "the aimed wall is {alen} wu long — the push asked for {dist}");
+
+  // DRAG: the same intent expressed as a point.
+  dt = snap_run_d24(va, vb, tx, ty);
+  pt = snap_run_p(dt, va, vb, tx, ty);
+  assert(dt == 0 && pt == 2, "dragging to the same point gives d24 {dt} p {pt}");
+  tlen = wall_run_len(dt, pt);
+  assert(tlen > 3.4 && tlen < 3.5, "a {tlen} wu wall, much nearer the {dist} asked");
+
+  // ⚠ EACH HONOURS WHAT ITS OWN AUTHOR SAID, AND NEITHER IS WRONG.
+  assert(run_end_dist(dt, va, vb, pt, tx, ty) < 0.8,
+         "the drag lands within 0.8 wu of the point");
+  assert(run_end_dist(da, va, vb, pa, tx, ty) > 2.3,
+         "the aim lands over 2.3 wu from it — because it kept the angle instead");
+
+  // The two walls are genuinely different objects.
+  ea_x = tri_x(wall_end_a(da, va, pa), wall_end_b(da, vb, pa));
+  ea_y = tri_y(wall_end_a(da, va, pa), wall_end_b(da, vb, pa));
+  et_x = tri_x(wall_end_a(dt, va, pt), wall_end_b(dt, vb, pt));
+  et_y = tri_y(wall_end_a(dt, va, pt), wall_end_b(dt, vb, pt));
+  gap = sqrt((ea_x - et_x) * (ea_x - et_x) + (ea_y - et_y) * (ea_y - et_y)) ?? 0.0;
+  assert(gap > 2.9 && gap < 3.1, "their far ends are {gap} wu apart");
+
+  // ⚠ AND THE REASON IS THE PERIOD. The twelve in-between directions have a period
+  // roughly 3.6x the exact ones, so they cannot make a short wall at all.
+  assert(!wall_is_exact(da), "d24 {da} is an in-between direction");
+  assert(wall_is_exact(dt), "d24 {dt} is an exact one");
+  assert(wall_run_len(da, 1) > wall_run_len(dt, 1) * 3.0,
+         "the in-between's period {wall_run_len(da, 1)} dwarfs the exact one's "
+       + "{wall_run_len(dt, 1)} — which is why the aim had to overshoot");
+}

@@ -788,6 +788,70 @@ pub fn snap_run_p(d24: integer, a0: integer, b0: integer, tx: float, ty: float) 
   bestp
 }
 
+// ── SNAP 3: THE AIM IDIOM — A HEADING AND A LENGTH, NOT A TARGET POINT ──────
+//
+// `snap_run_d24`/`snap_run_p` above take an ENDPOINT.  That is what a mouse drag has and
+// what a walked trace has, and for years it was the only shape an author's input came in.
+//
+// A CONTROLLER HAS NEITHER.  It has a facing and a push: an angle and a magnitude, with no
+// point anywhere in it.  Constructing a target point from those two and calling the pair
+// above is the obvious implementation and it is the wrong one, for a reason worth stating
+// because it is invisible from the call site:
+//
+// ⚠ THE TWO SNAPS MINIMISE DIFFERENT THINGS.  `snap_run_d24` picks the direction whose best
+// legal ENDPOINT lands nearest the target — a single 2-D distance, in which a direction
+// error and a length error are freely traded against each other.  An author who aims is
+// making two separate statements, "this way" and "this far", and expects the first to be
+// honoured as a direction.  Round-tripping through a point silently lets a length error buy
+// a direction change, which on the 1.1021-degree in-between classes (@HXS-002) is exactly
+// where it hurts.
+//
+// So this quantises the two AXES SEPARATELY: the angle against `D`, the length against the
+// period.  It is a peer of the endpoint snap, not a wrapper on it, and whether the two agree
+// is therefore a real question rather than a tautology.
+
+// The direction in `D` nearest a world angle in degrees.  The inverse of
+// `wall_angle_actual`, and it must be asked of the ACTUAL angles rather than of the nominal
+// 15-degree multiples: half of `D` sits 1.1021 degrees off its nominal (@HXS-002), so the
+// nearest-nominal answer and the nearest-actual answer differ on a band around every
+// in-between.  Monotone and complete over a full turn — 24 boundaries, each +1.
+//
+// Example: @HXS-010
+pub fn wall_nearest_d24(deg: float) -> integer {
+  bd = -1;
+  bb = 1.0e30;
+  for nd in 0..D24 {
+    x = deg - wall_angle_actual(nd);
+    while x > 180.0 { x = x - 360.0; }
+    while x < 0.0 - 180.0 { x = x + 360.0; }
+    if x < 0.0 { x = 0.0 - x; }
+    if x < bb { bb = x; bd = nd; }
+  }
+  bd
+}
+
+// The run an author reaches by AIMING: from vertex (a0,b0), facing `deg`, wanting `dist`
+// world units.  Returns `(d24, p)` — the same pair the endpoint snap returns, so both
+// idioms hand the rest of the library one shape of answer.
+//
+// `p = 0` is a REFUSAL and the caller must treat it as one: it means no legal run exists
+// from that anchor in that direction near that length, which happens when (a0,b0) is not a
+// vertex at all, or when `dist` is shorter than the smallest admissible run.
+//
+// Example: @HXS-010
+pub fn snap_run_from_heading(a0: integer, b0: integer, deg: float,
+                             dist: float) -> (integer, integer) {
+  hd = wall_nearest_d24(deg);
+  if hd < 0 { return (-1, 0); }
+  // One period's world length. Linear in `p`, so the wanted count is a division — and
+  // `wall_snap_p` is the library's own K-fit for turning a wanted count into a legal one,
+  // ties to the shorter run. Searching for it here would be a second rule.
+  per = wall_run_len(hd, 1);
+  if per <= 0.0 { return (hd, 0); }
+  hw = (round((dist / per) ?? 0.0)) as integer;
+  (hd, wall_snap_p(hd, a0, b0, hw))
+}
+
 // ── EVALUATING THE MARKS BACK TO THE MESH (crawler / moros' own rule) ───────
 //
 // This is the second half of the round trip, and it is NOT ours to invent: moros already
