@@ -1,6 +1,6 @@
 [package]
 name    = "hex_shape"
-version = "0.1.0"
+version = "0.1.1"
 loft    = ">=0.8"
 
 api_compatible_with  = "0.1.0"   # oldest own release this is a drop-in for
