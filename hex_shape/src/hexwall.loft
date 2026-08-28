@@ -376,45 +376,87 @@ pub fn wall_along_max(w: Wall, edges: EdgeSet, q0: integer, r0: integer,
   worst
 }
 
+// ── THE MARKING, KEYED BY ITS SHARED VERTICES ──────────────────────────────
+//
+// Every question below — how many ends, how many branches, and what ORDER the chain runs in
+// — is asked of the same two tables: the marked edges in the window's own scan order, and
+// their endpoints as exact triangle-lattice integers, two per mark.  They are built once
+// here so the three answers cannot disagree about which vertex is which.
+
+// The marked edges of the window, in scan order: the cell that owns each and its direction.
+fn chain_marks(edges: EdgeSet, q0: integer, r0: integer, wq: integer, hq: integer)
+    -> (vector<integer>, vector<integer>, vector<integer>) {
+  mq: vector<integer> = [];
+  mr: vector<integer> = [];
+  md: vector<integer> = [];
+  for wr in r0..r0 + hq {
+    for wqq in q0..q0 + wq {
+      for wd in 0..3 {
+        (nq, nr) = hex_neighbor(wqq, wr, wd);
+        if edge_mat(edges, wqq, wr, nq, nr) == 0 { continue; }
+        mq += [wqq];
+        mr += [wr];
+        md += [wd];
+      }
+    }
+  }
+  (mq, mr, md)
+}
+
+// …and their endpoints, two per mark and in the same order, so endpoint `j` belongs to
+// mark `j / 2` and its partner is `j ^ 1`.
+fn chain_verts(mq: vector<integer>, mr: vector<integer>, md: vector<integer>)
+    -> (vector<integer>, vector<integer>) {
+  va: vector<integer> = [];
+  vb: vector<integer> = [];
+  for i in 0..len(mq) {
+    (e1, e2) = hex_edge_corners(md[i] ?? 0);
+    va += [hex_corner_tri_a(mq[i] ?? 0, mr[i] ?? 0, e1)];
+    vb += [hex_corner_tri_b(mq[i] ?? 0, mr[i] ?? 0, e1)];
+    va += [hex_corner_tri_a(mq[i] ?? 0, mr[i] ?? 0, e2)];
+    vb += [hex_corner_tri_b(mq[i] ?? 0, mr[i] ?? 0, e2)];
+  }
+  (va, vb)
+}
+
+// How many marks meet at this vertex.
+fn vert_degree(va: vector<integer>, vb: vector<integer>, ka: integer,
+               kb: integer) -> integer {
+  deg = 0;
+  for j in 0..len(va) {
+    if (va[j] ?? 0) == ka && (vb[j] ?? 0) == kb { deg = deg + 1; }
+  }
+  deg
+}
+
+// Is endpoint `i` this vertex's first occurrence?  Counting degrees at every occurrence
+// would multiply each vertex by its own degree.
+fn vert_first(va: vector<integer>, vb: vector<integer>, i: integer) -> boolean {
+  for k in 0..i {
+    if (va[k] ?? 0) == (va[i] ?? 0) && (vb[k] ?? 0) == (vb[i] ?? 0) { return false; }
+  }
+  true
+}
+
 // ONE CHAIN.  The marked edges form a connected path iff, keyed by their shared hex vertices
 // (exact triangle-lattice integers), exactly two vertices have degree 1 (the ends) and none has
 // degree > 2.  A picket comb of k disjoint edges has 2k degree-1 vertices — so this separates a
 // chain from a comb with no tolerance.  Returns the number of degree-1 vertices (2 for a single
 // chain, 0 for empty, 4 after a break, 2k for a comb).
 //
+// ⚠ TWO WALLS MEETING AT A CORNER USUALLY DO NOT FUSE, so this is 4 and not 2 for an L — each
+// wall keeps its own two ends.  That is a fact about the marking and not a defect: a consumer
+// reading it as *the marking is broken* will refuse a shape somebody drew on purpose.
+//
 // Example: @HXS-004
 pub fn wall_chain_ends(edges: EdgeSet, q0: integer, r0: integer,
                        wq: integer, hq: integer) -> integer {
-  va: vector<integer> = [];
-  vb: vector<integer> = [];
-  for wr in r0..r0 + hq {
-    for wqq in q0..q0 + wq {
-      for wd in 0..3 {
-        (nq, nr) = hex_neighbor(wqq, wr, wd);
-        if edge_mat(edges, wqq, wr, nq, nr) != 0 {
-          (e1, e2) = hex_edge_corners(wd);
-          va += [hex_corner_tri_a(wqq, wr, e1)];
-          vb += [hex_corner_tri_b(wqq, wr, e1)];
-          va += [hex_corner_tri_a(wqq, wr, e2)];
-          vb += [hex_corner_tri_b(wqq, wr, e2)];
-        }
-      }
-    }
-  }
+  (mq, mr, md) = chain_marks(edges, q0, r0, wq, hq);
+  (va, vb) = chain_verts(mq, mr, md);
   ends = 0;
   for i in 0..len(va) {
-    // count this vertex only at its first occurrence
-    first = true;
-    for k in 0..i {
-      if (va[k] ?? 0) == (va[i] ?? 0) && (vb[k] ?? 0) == (vb[i] ?? 0) { first = false; }
-    }
-    if first {
-      deg = 0;
-      for j in 0..len(va) {
-        if (va[j] ?? 0) == (va[i] ?? 0) && (vb[j] ?? 0) == (vb[i] ?? 0) { deg = deg + 1; }
-      }
-      if deg == 1 { ends = ends + 1; }
-    }
+    if !vert_first(va, vb, i) { continue; }
+    if vert_degree(va, vb, va[i] ?? 0, vb[i] ?? 0) == 1 { ends = ends + 1; }
   }
   ends
 }
@@ -425,37 +467,170 @@ pub fn wall_chain_ends(edges: EdgeSet, q0: integer, r0: integer,
 // Example: @HXS-004
 pub fn wall_chain_branches(edges: EdgeSet, q0: integer, r0: integer,
                            wq: integer, hq: integer) -> integer {
-  va: vector<integer> = [];
-  vb: vector<integer> = [];
-  for wr in r0..r0 + hq {
-    for wqq in q0..q0 + wq {
-      for wd in 0..3 {
-        (nq, nr) = hex_neighbor(wqq, wr, wd);
-        if edge_mat(edges, wqq, wr, nq, nr) != 0 {
-          (e1, e2) = hex_edge_corners(wd);
-          va += [hex_corner_tri_a(wqq, wr, e1)];
-          vb += [hex_corner_tri_b(wqq, wr, e1)];
-          va += [hex_corner_tri_a(wqq, wr, e2)];
-          vb += [hex_corner_tri_b(wqq, wr, e2)];
-        }
-      }
-    }
-  }
+  (mq, mr, md) = chain_marks(edges, q0, r0, wq, hq);
+  (va, vb) = chain_verts(mq, mr, md);
   branches = 0;
   for i in 0..len(va) {
-    first = true;
-    for k in 0..i {
-      if (va[k] ?? 0) == (va[i] ?? 0) && (vb[k] ?? 0) == (vb[i] ?? 0) { first = false; }
-    }
-    if first {
-      deg = 0;
-      for j in 0..len(va) {
-        if (va[j] ?? 0) == (va[i] ?? 0) && (vb[j] ?? 0) == (vb[i] ?? 0) { deg = deg + 1; }
-      }
-      if deg > 2 { branches = branches + 1; }
-    }
+    if !vert_first(va, vb, i) { continue; }
+    if vert_degree(va, vb, va[i] ?? 0, vb[i] ?? 0) > 2 { branches = branches + 1; }
   }
   branches
+}
+
+// ── THE CHAIN IN READING ORDER ─────────────────────────────────────────────
+//
+// The two counters above answer *how many ends* and *how many branches* and throw the walk
+// itself away, so a consumer holding a marking has the numbers and not the chain.  This
+// returns it: an unordered set of marked edges in, the vertices in the order a walk meets
+// them out — which is what `wall_read_run` and `surface_of` already consume, and what a scan
+// of the store can never give, because a scan has no order at all.
+//
+// A CONSUMER WANTS THIS TO CUT A MARKING INTO RUNS.  `wall_read_run` reads a chain's two
+// ends and answers for one run; a marking with a CORNER in it has no such pair, and a closed
+// room has no free end at all.  With the chain ordered, the question becomes *where along it
+// does one run stop and the next begin*, which is a decision about spans rather than a search
+// over the plane.
+//
+// ⚠ ONE CALL IS ONE CHAIN, AND A MARKING IS OFTEN SEVERAL.  Two walls meeting at a corner do
+// not necessarily fuse — an L has FOUR degree-1 vertices, so each wall keeps its own two ends
+// and the marking is two chains.  `wc_n` is how many there are and `nth` picks one; a consumer
+// that walks one and stops describes half an L and calls the rest a residual.
+//
+// ⚠ A CLOSED LOOP HAS NO CANONICAL START.  With no degree-1 vertex the seed is the first
+// endpoint in scan order, which lands wherever the scan lands — so a room of four walls comes
+// back as one chain that begins and ends in the middle of the same wall.  `wc_loop` says so;
+// what to do about it belongs to the consumer, because only the consumer knows whether the
+// first and last spans it cut are one run.
+//
+// ⚠ AND AT A BRANCH THE ORDER IS ONE OF SEVERAL.  Where three or more marks meet, the walk
+// continues along the first unused one in scan order — deterministic, and *a* traversal rather
+// than *the* traversal.  `wc_branch` counts the vertices this chain passes through where that
+// choice was made, so a consumer needing a simple path can refuse rather than believe.
+pub struct WallChain {
+  wc_ok:     boolean,          // there is an `nth` chain
+  wc_n:      integer,          // how many chains the marking falls into
+  wc_branch: integer,          // vertices on this chain where three or more marks met
+  wc_loop:   boolean,          // the walk came back to the vertex it started from
+  wc_va:     vector<integer>,  // vertex `i`, in exact triangle-lattice coordinates
+  wc_vb:     vector<integer>,
+  wc_x:      vector<float>,    // …and in world units, from `tri_x` / `tri_y`
+  wc_y:      vector<float>,
+  wc_q:      vector<integer>,  // the mark walked between vertex `i` and `i + 1`: its cell
+  wc_r:      vector<integer>,
+  wc_d:      vector<integer>,  // …and the direction out of that cell
+}
+
+// How many marks meet at this vertex, counting only marks the walk has not taken yet.  A
+// vertex in mid-chain has one left — the way ahead — however many it started with, which is
+// why the branch count below is asked of the FULL degree instead.
+fn deg_left(va: vector<integer>, vb: vector<integer>, used: vector<boolean>,
+            ka: integer, kb: integer) -> integer {
+  deg = 0;
+  for j in 0..len(va) {
+    if used[(j / 2) ?? 0] ?? false { continue; }
+    if (va[j] ?? 0) == ka && (vb[j] ?? 0) == kb { deg = deg + 1; }
+  }
+  deg
+}
+
+// The `nth` chain of this marking, in the order a walk meets its vertices.  `nth = 0` is the
+// first; `wc_n` is how many there are, and is filled in whether or not `nth` names one.
+pub fn wall_chain_walk(edges: EdgeSet, q0: integer, r0: integer, wq: integer,
+                       hq: integer, nth: integer) -> WallChain {
+  (mq, mr, md) = chain_marks(edges, q0, r0, wq, hq);
+  (va, vb) = chain_verts(mq, mr, md);
+  used: vector<boolean> = [];
+  for _i in 0..len(mq) { used += [false]; }
+  ok = false;
+  closed = false;
+  branch = 0;
+  pv_a: vector<integer> = [];
+  pv_b: vector<integer> = [];
+  pw_x: vector<float> = [];
+  pw_y: vector<float> = [];
+  pm_q: vector<integer> = [];
+  pm_r: vector<integer> = [];
+  pm_d: vector<integer> = [];
+  found = 0;
+  for _pass in 0..len(mq) + 1 {
+    // ⚠ A FREE END FIRST, so a chain that HAS one is walked from it and comes back whole;
+    // seeding a path in its middle would return two half-chains.
+    sa = 0;
+    sb = 0;
+    have = false;
+    for j in 0..len(va) {
+      if used[(j / 2) ?? 0] ?? false { continue; }
+      if deg_left(va, vb, used, va[j] ?? 0, vb[j] ?? 0) != 1 { continue; }
+      sa = va[j] ?? 0;
+      sb = vb[j] ?? 0;
+      have = true;
+      break;
+    }
+    if !have {
+      for j in 0..len(va) {
+        if used[(j / 2) ?? 0] ?? false { continue; }
+        sa = va[j] ?? 0;
+        sb = vb[j] ?? 0;
+        have = true;
+        break;
+      }
+    }
+    if !have { break; }
+    ca = sa;
+    cb = sb;
+    cv_a: vector<integer> = [sa];
+    cv_b: vector<integer> = [sb];
+    cm_q: vector<integer> = [];
+    cm_r: vector<integer> = [];
+    cm_d: vector<integer> = [];
+    cbr = 0;
+    for _step in 0..len(mq) {
+      if vert_degree(va, vb, ca, cb) > 2 { cbr = cbr + 1; }
+      pick = 0 - 1;
+      na = 0;
+      nb = 0;
+      for j in 0..len(va) {
+        e = (j / 2) ?? 0;
+        if used[e] ?? false { continue; }
+        if (va[j] ?? 0) != ca || (vb[j] ?? 0) != cb { continue; }
+        pick = e;
+        o = if ((j % 2) ?? 0) == 0 { j + 1 } else { j - 1 };
+        na = va[o] ?? 0;
+        nb = vb[o] ?? 0;
+        break;
+      }
+      if pick < 0 { break; }
+      used[pick] = true;
+      cm_q += [mq[pick] ?? 0];
+      cm_r += [mr[pick] ?? 0];
+      cm_d += [md[pick] ?? 0];
+      cv_a += [na];
+      cv_b += [nb];
+      ca = na;
+      cb = nb;
+    }
+    if found == nth {
+      ok = true;
+      branch = cbr;
+      closed = ca == sa && cb == sb && len(cm_q) > 0;
+      pv_a = cv_a;
+      pv_b = cv_b;
+      pm_q = cm_q;
+      pm_r = cm_r;
+      pm_d = cm_d;
+      // ⚠ THE WORLD POINT COMES FROM THE KEY, NEVER FROM THE CELL AND CORNER IT WAS FOUND
+      // AT.  One vertex is reached from two different cells, and reading its position off
+      // whichever cell the scan happened to be in would make the same point two points.
+      for v in 0..len(cv_a) {
+        pw_x += [tri_x(cv_a[v] ?? 0, cv_b[v] ?? 0)];
+        pw_y += [tri_y(cv_a[v] ?? 0, cv_b[v] ?? 0)];
+      }
+    }
+    found = found + 1;
+  }
+  WallChain { wc_ok: ok, wc_n: found, wc_branch: branch, wc_loop: closed,
+              wc_va: pv_a, wc_vb: pv_b, wc_x: pw_x, wc_y: pw_y,
+              wc_q: pm_q, wc_r: pm_r, wc_d: pm_d }
 }
 
 // ── THE TRIANGLE LATTICE, AND WHY WIDTH CANNOT COME FROM IT ────────────────
