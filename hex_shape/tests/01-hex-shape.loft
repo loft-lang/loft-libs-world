@@ -341,6 +341,21 @@ fn test_a_walked_wall_comes_back_in_order() {
       assert(fwd || bwd,
              "d={d}: mark {i} does not join vertex {i} to vertex {i + 1} — the walk is "
            + "not in reading order");
+      // ⛔ AND THE WORLD POINT IS TIED TO THE CELL AND CORNER IT CAME FROM. `wc_x` is
+      // computed from the KEY, so asserting it equals `tri_x` of that key would be a
+      // table checked against itself; this asks the other side — one of this mark's two
+      // hex corners must be standing exactly where the chain says its vertex is.
+      hx = if fwd { hex_corner_x(ch.wc_q[i] ?? 0, ch.wc_r[i] ?? 0, f1) }
+           else { hex_corner_x(ch.wc_q[i] ?? 0, ch.wc_r[i] ?? 0, f2) };
+      hy = if fwd { hex_corner_y(ch.wc_q[i] ?? 0, ch.wc_r[i] ?? 0, f1) }
+           else { hex_corner_y(ch.wc_q[i] ?? 0, ch.wc_r[i] ?? 0, f2) };
+      ex = (ch.wc_x[i] ?? 0.0) - hx;
+      ey = (ch.wc_y[i] ?? 0.0) - hy;
+      if ex < 0.0 { ex = -ex; }
+      if ey < 0.0 { ey = -ey; }
+      assert(ex < 0.000000001 && ey < 0.000000001,
+             "d={d}: vertex {i} is at ({ch.wc_x[i]},{ch.wc_y[i]}) and its own corner is "
+           + "at ({hx},{hy})");
     }
   }
   assert(tried >= 12, "only {tried} directions were exercised");
