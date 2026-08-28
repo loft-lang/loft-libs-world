@@ -18,6 +18,15 @@ centre recovers exactly and whose radius quantises to a realisable shell `3k²+m
 
 - **fill an arc and read its shell back** — `arc_fill · arc_recover_centre · arc_shells_upto`
 - **know which orbit a box angle is in** — `box_orbit — 60° is a lattice symmetry, 30° is not`
+- **get a marking back in walk order** — `wall_chain_walk`, where `wall_chain_ends` and
+  `wall_chain_branches` only count. A scan of stored edges has **no order at all**, and
+  `wall_read_run` needs a chain's two ends; a marking with a **corner** in it has no such
+  pair and a closed room has no free end. Three things to know before you call it:
+  **one call is one chain** and a marking is often several (`wc_n` says how many, `nth`
+  picks one — an L is *two*, because two walls meeting do not fuse); a **closed loop**
+  seeds wherever the scan lands, so its first and last span may be one run (`wc_loop`
+  says so, and what to do about it is yours); and at a **branch** the order is one of
+  several (`wc_branch` counts the vertices where the walk had to choose).
 
 ## The worked examples, in the tests
 

@@ -260,3 +260,189 @@ fn test_a_zero_length_aim_is_refused() {
   (d, p) = snap_run_from_heading(va, vb, 90.0, 0.0);
   assert(p == 0, "aiming zero distance must refuse, got d24 {d} p {p}");
 }
+
+// ── THE CHAIN IN READING ORDER ──────────────────────────────────────────────
+//
+// `wall_chain_ends` and `wall_chain_branches` have always answered *how many* and thrown
+// the walk away. `wall_chain_walk` returns it, and what these pin is the one property a
+// scan of the store can never have: the vertices come back in the order a walk meets them.
+
+const CQ0 = -14;
+const CR0 = -14;
+const CW  = 29;
+const CH  = 29;
+
+// How many edges this marking holds — the number every "nothing was dropped" claim below
+// is measured against.
+fn marked_edges(e: EdgeSet) -> integer {
+  n = 0;
+  for r in CR0..CR0 + CH {
+    for q in CQ0..CQ0 + CW {
+      for d in 0..3 {
+        (nq, nr) = hex_neighbor(q, r, d);
+        if edge_mat(e, q, r, nq, nr) != 0 { n = n + 1; }
+      }
+    }
+  }
+  n
+}
+
+// The marks the walk actually took, over every chain of this marking.
+fn walked_marks(e: EdgeSet) -> integer {
+  n = 0;
+  first = wall_chain_walk(e, CQ0, CR0, CW, CH, 0);
+  for i in 0..first.wc_n {
+    n = n + len(wall_chain_walk(e, CQ0, CR0, CW, CH, i).wc_q);
+  }
+  n
+}
+
+// The six edges around one hex — a closed loop with no free end, built directly rather
+// than stamped, because what it has to BE is a cycle and not a wall.
+fn ring_at(e: EdgeSet, q: integer, r: integer) {
+  for d in 0..6 {
+    (nq, nr) = hex_neighbor(q, r, d);
+    edge_set_mat(e, q, r, nq, nr, 1);
+  }
+}
+
+fn test_a_walked_wall_comes_back_in_order() {
+  // ⚠ THE CONSECUTIVE TEST IS THE WHOLE POINT, and it is what separates this from the two
+  // counters: mark `i` must join vertex `i` to vertex `i + 1`. A walk seeded at the first
+  // edge in SCAN order satisfies every count above and fails this on the first bend, because
+  // it heads off at that edge's arbitrary second vertex.
+  a0 = hex_corner_tri_a(0, 0, 0);
+  b0 = hex_corner_tri_b(0, 0, 0);
+  tried = 0;
+  for d in 0..24 {
+    p = wall_snap_p(d, a0, b0, 3);
+    if p <= 0 { continue; }
+    tried = tried + 1;
+    w = wall_from_run(d, a0, b0, p, 7);
+    e = edgeset_new(CQ0, CR0, CW, CH);
+    n = wall_write(w, e, CQ0, CR0, CW, CH);
+    ch = wall_chain_walk(e, CQ0, CR0, CW, CH, 0);
+    assert(ch.wc_ok && ch.wc_n == 1, "d={d}: one wall is {ch.wc_n} chains");
+    assert(!ch.wc_loop, "d={d}: a wall with two free ends is not a loop");
+    assert(ch.wc_branch == 0, "d={d}: a wall has no branch");
+    assert(len(ch.wc_q) == n, "d={d}: the walk took {len(ch.wc_q)} of {n} marks");
+    assert(len(ch.wc_va) == n + 1,
+           "d={d}: {n} marks need {n + 1} vertices, got {len(ch.wc_va)}");
+    for i in 0..len(ch.wc_q) {
+      (f1, f2) = hex_edge_corners(ch.wc_d[i] ?? 0);
+      xa = hex_corner_tri_a(ch.wc_q[i] ?? 0, ch.wc_r[i] ?? 0, f1);
+      xb = hex_corner_tri_b(ch.wc_q[i] ?? 0, ch.wc_r[i] ?? 0, f1);
+      ya = hex_corner_tri_a(ch.wc_q[i] ?? 0, ch.wc_r[i] ?? 0, f2);
+      yb = hex_corner_tri_b(ch.wc_q[i] ?? 0, ch.wc_r[i] ?? 0, f2);
+      ua = ch.wc_va[i] ?? 0;      ub = ch.wc_vb[i] ?? 0;
+      va = ch.wc_va[i + 1] ?? 0;  vb = ch.wc_vb[i + 1] ?? 0;
+      fwd = xa == ua && xb == ub && ya == va && yb == vb;
+      bwd = ya == ua && yb == ub && xa == va && xb == vb;
+      assert(fwd || bwd,
+             "d={d}: mark {i} does not join vertex {i} to vertex {i + 1} — the walk is "
+           + "not in reading order");
+    }
+  }
+  assert(tried >= 12, "only {tried} directions were exercised");
+}
+
+fn test_the_walk_reaches_a_second_chain() {
+  // ⛔ TWO WALLS ARE TWO CHAINS AND A CONSUMER MUST BE ABLE TO REACH BOTH. A walk that
+  // ordered one chain and stopped would pass every assertion above and describe half the
+  // marking.
+  a0 = hex_corner_tri_a(0, 0, 0);
+  b0 = hex_corner_tri_b(0, 0, 0);
+  c0 = hex_corner_tri_a(0, 8, 0);
+  d0 = hex_corner_tri_b(0, 8, 0);
+  e = edgeset_new(CQ0, CR0, CW, CH);
+  n1 = wall_write(wall_from_run(0, a0, b0, 3, 7), e, CQ0, CR0, CW, CH);
+  n2 = wall_write(wall_from_run(0, c0, d0, 2, 7), e, CQ0, CR0, CW, CH);
+  assert(n1 > 0 && n2 > 0, "the fixture wrote {n1} and {n2} marks");
+  assert(wall_chain_ends(e, CQ0, CR0, CW, CH) == 4, "two separate walls have four ends");
+  first = wall_chain_walk(e, CQ0, CR0, CW, CH, 0);
+  assert(first.wc_n == 2, "two walls are {first.wc_n} chains");
+  second = wall_chain_walk(e, CQ0, CR0, CW, CH, 1);
+  assert(second.wc_ok, "the second chain was not returned");
+  assert(len(first.wc_q) + len(second.wc_q) == marked_edges(e),
+         "the two chains hold {len(first.wc_q)} + {len(second.wc_q)} of "
+       + "{marked_edges(e)} marks");
+  // ⚠ AND A THIRD IS REFUSED WITHOUT LYING ABOUT THE COUNT, so a caller looping on `wc_n`
+  // cannot walk off the end and cannot be told there is nothing there.
+  past = wall_chain_walk(e, CQ0, CR0, CW, CH, 2);
+  assert(!past.wc_ok, "a third chain was offered");
+  assert(past.wc_n == 2, "the refusal reports {past.wc_n} chains, not 2");
+  assert(len(past.wc_q) == 0, "the refusal carries marks");
+}
+
+fn test_a_closed_ring_is_one_chain_that_says_so() {
+  // ⛔ A LOOP HAS NO FREE END, which is exactly the case `wall_read_run` cannot answer for
+  // and `wall_chain_ends` reports as zero. The walk must still return it, and must say that
+  // where it stopped is where it started — a consumer cutting the chain into runs needs to
+  // know its first and last span may be one run.
+  e = edgeset_new(CQ0, CR0, CW, CH);
+  ring_at(e, 0, 0);
+  assert(marked_edges(e) == 6, "a hex ring is 6 marks, got {marked_edges(e)}");
+  assert(wall_chain_ends(e, CQ0, CR0, CW, CH) == 0, "a ring has no free end");
+  assert(wall_chain_branches(e, CQ0, CR0, CW, CH) == 0, "and no branch");
+  ch = wall_chain_walk(e, CQ0, CR0, CW, CH, 0);
+  assert(ch.wc_ok && ch.wc_n == 1, "a ring is {ch.wc_n} chains");
+  assert(ch.wc_loop, "a ring is not reported as a loop");
+  assert(len(ch.wc_q) == 6, "the walk took {len(ch.wc_q)} of the ring's 6 marks");
+  assert(len(ch.wc_va) == 7, "6 marks round a loop need 7 vertices");
+  assert((ch.wc_va[0] ?? 0) == (ch.wc_va[6] ?? 1)
+      && (ch.wc_vb[0] ?? 0) == (ch.wc_vb[6] ?? 1),
+         "the loop does not close on the vertex it started from");
+}
+
+fn test_a_branch_is_reported_and_nothing_is_dropped() {
+  // ⚠ WHERE THREE MARKS MEET THE ORDER IS ONE OF SEVERAL, so the walk says how often it
+  // had to choose. What it must NOT do is lose the marks it did not take first.
+  e = edgeset_new(CQ0, CR0, CW, CH);
+  ring_at(e, 0, 0);
+  (e1, e2) = hex_edge_corners(0);
+  ka = hex_corner_tri_a(0, 0, e1);
+  kb = hex_corner_tri_b(0, 0, e1);
+  (n0q, n0r) = hex_neighbor(0, 0, 0);
+  put = false;
+  for d in 0..6 {
+    (mq, mr) = hex_neighbor(n0q, n0r, d);
+    if mq == 0 && mr == 0 { continue; }
+    (f1, f2) = hex_edge_corners(d);
+    hit = (hex_corner_tri_a(n0q, n0r, f1) == ka && hex_corner_tri_b(n0q, n0r, f1) == kb)
+       || (hex_corner_tri_a(n0q, n0r, f2) == ka && hex_corner_tri_b(n0q, n0r, f2) == kb);
+    if hit && !put { edge_set_mat(e, n0q, n0r, mq, mr, 1); put = true; }
+  }
+  assert(put, "no edge of the neighbour shares the ring vertex — the fixture is not a T");
+  assert(marked_edges(e) == 7, "the ring plus a stub is 7 marks, got {marked_edges(e)}");
+  assert(wall_chain_branches(e, CQ0, CR0, CW, CH) == 1,
+         "the fixture has {wall_chain_branches(e, CQ0, CR0, CW, CH)} branches, not one");
+  assert(walked_marks(e) == 7,
+         "the walk took {walked_marks(e)} of 7 marks — a branch is losing what it did "
+       + "not take first");
+  seen = 0;
+  first = wall_chain_walk(e, CQ0, CR0, CW, CH, 0);
+  for i in 0..first.wc_n {
+    seen = seen + wall_chain_walk(e, CQ0, CR0, CW, CH, i).wc_branch;
+  }
+  assert(seen > 0, "the walk passed a degree-3 vertex and reported no branch");
+}
+
+fn test_a_vertexs_world_point_is_its_keys() {
+  // ⛔ ONE VERTEX IS REACHED FROM TWO CELLS. Reading its position off whichever cell the
+  // scan was in would make one point two, and a run between them would be a run between
+  // two places. `wc_x` comes from the KEY; this is the bridge that makes that legal.
+  for r in -3..4 {
+    for q in -3..4 {
+      for c in 0..6 {
+        ta = hex_corner_tri_a(q, r, c);
+        tb = hex_corner_tri_b(q, r, c);
+        dx = tri_x(ta, tb) - hex_corner_x(q, r, c);
+        dy = tri_y(ta, tb) - hex_corner_y(q, r, c);
+        if dx < 0.0 { dx = -dx; }
+        if dy < 0.0 { dy = -dy; }
+        assert(dx < 0.000000001 && dy < 0.000000001,
+               "corner {c} of ({q},{r}) is ({dx},{dy}) away from its own key's point");
+      }
+    }
+  }
+}
