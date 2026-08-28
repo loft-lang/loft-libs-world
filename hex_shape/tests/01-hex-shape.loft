@@ -461,3 +461,23 @@ fn test_a_vertexs_world_point_is_its_keys() {
     }
   }
 }
+
+// ⚠ **WHAT THE SABOTAGE SWEEP ASKED FOR, AND WHAT IT FOUND MISSING.** Six sabotages of
+// `wall_chain_walk`, each with the package asserted to still BUILD before its row was read,
+// and two controls — a comment beside the subject and a renamed local — which must stay
+// green, because that is what separates *these tests detect THIS* from *they detect any
+// change at all*:
+//
+//   seed anywhere, not at a free end   ⛔ one wall is 2 chains
+//   no used-mark guard when stepping   ⛔ one wall is 7 chains, a ring is 7
+//   world point from the swapped key   ⛔ vertex 0 is at (0.866,0.5), its corner at (0,1)
+//   the chain count is always one      ⛔ two walls are 1 chains
+//   a loop is never reported as one    ⛔ a ring is not reported as a loop
+//   a branch is never counted          ⛔ passed a degree-3 vertex and reported none
+//   CONTROL a comment beside it        ✅ 27 passed
+//   CONTROL a local renamed            ✅ 27 passed
+//
+// ⛔ **AND ROW 3 WAS INVISIBLE UNTIL THE WORLD-POINT ASSERTION WAS WRITTEN.** Measured, not
+// assumed: the same sabotage against the suite as it stood one commit earlier gives **27
+// passed**. Nothing else here reads `wc_x` or `wc_y`, so a chain whose vertices were in the
+// right order at the wrong places was a green suite.
