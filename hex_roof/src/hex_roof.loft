@@ -524,6 +524,27 @@ pub fn roof_dome_fit(s: HexSet, f: Heights) -> RoofFit {
 // fitted to a flat roof would put its apex somewhere arbitrary.
 //
 // Example: @HXR-006
+// ⛔ **AND WHEN NOTHING FITS, IT SAYS SO — `ROOF_UNKNOWN`.**  This returned the least-bad of
+// the three with `rf_kind` naming a shape the field is NOT, and the residual was the only
+// signal that it was a fallback rather than a recovery.  Measured on fields THIS PACKAGE
+// DRAWS: a `roof_ridge` gable comes back `ROOF_CONE` at residual **1.209**, with an apex of
+// 6.318 where the truth is 6.0 and a slope of 0.409 where it is 0.5; a `roof_hip` comes back
+// `ROOF_CONE` at **0.615**.  `roof_eval` then evaluates that cone into a surface that is not
+// the roof.
+//
+// ⚠ **THE BEST CANDIDATE'S PARAMETERS ARE KEPT**, because *which* shape came closest and by
+// how much is what a caller diagnoses with.  What changes is that `rf_kind` no longer CLAIMS
+// one — `roof_eval` draws nothing for `ROOF_UNKNOWN` — so a fallback can no longer be
+// mistaken for a recovery by a caller that reads the kind and trusts it.
+//
+// ⚠ **NO EXISTING RECOVERY CHANGES.**  A candidate within `tol` returns exactly as before;
+// only the path where all three were already wrong is affected, which is precisely the
+// population that was being told the wrong thing.
+//
+// ⚠ **AND THE MISSING KIND IS NAMED RATHER THAN GUESSED AT**: this package DRAWS a ridge, a
+// hip and three vaults, and fits a plane, a cone and a dome.  A ridge is the cone's own
+// profile about a SEGMENT instead of a point, so `roof_ridge_fit` is a well-specified
+// addition — until it exists, a gable is honestly unknown rather than dishonestly a cone.
 pub fn roof_match(s: HexSet, f: Heights, tol: float) -> RoofFit {
   p = roof_plane_fit(s, f);
   if p.rf_res <= tol { return p; }
@@ -534,7 +555,8 @@ pub fn roof_match(s: HexSet, f: Heights, tol: float) -> RoofFit {
   best = p;
   if c.rf_res < best.rf_res { best = c; }
   if d.rf_res < best.rf_res { best = d; }
-  best
+  RoofFit { rf_kind: ROOF_UNKNOWN, rf_x: best.rf_x, rf_y: best.rf_y, rf_z: best.rf_z,
+            rf_slope: best.rf_slope, rf_res: best.rf_res }
 }
 
 // The recovered ANALYTIC surface — what a renderer should draw, at any resolution, instead

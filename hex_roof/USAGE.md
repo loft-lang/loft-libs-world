@@ -35,6 +35,30 @@ still sheds water — so the conformance checks pass and the damage shows at the
 Each `fn test_*` in [`tests/01-hex-roof.loft`](tests/01-hex-roof.loft) is a small, complete program. Run them:
 `loft --interpret --tests tests` from `hex_roof/`.
 
+## ⛔ A fallback is not a recovery — `roof_match` can answer `ROOF_UNKNOWN`
+
+This package **draws** a ridge, a hip and three vaults, and **fits** a plane, a cone and a
+dome. Until 0.1.2 `roof_match` returned the least-bad of the three with `rf_kind` naming a
+shape the field is not, and the residual was the only signal.
+
+Measured on fields this package itself draws:
+
+| the field | 0.1.1 said | residual | the truth |
+|---|---|---|---|
+| `roof_ridge` gable | `ROOF_CONE` | 1.209 | apex 6.318 where it is 6.0, slope 0.409 where it is 0.5 |
+| `roof_hip` | `ROOF_CONE` | 0.615 | — |
+
+`roof_match` returns **`ROOF_UNKNOWN`** now when no candidate is within `tol`, keeping the
+best candidate's parameters and residual for diagnosis. `roof_eval` draws nothing for an
+unknown kind, so a fallback can no longer be evaluated into a surface that is not the roof.
+
+⚠ **No existing recovery changes** — a candidate within `tol` returns exactly as before; only
+the path where all three were already wrong is affected.
+
+⚠ **THE MISSING KIND IS NAMED, NOT GUESSED AT.** A ridge is the cone's own profile about a
+**segment** instead of a point, so `roof_ridge_fit` is a well-specified addition. Until it
+exists, a gable is honestly unknown rather than dishonestly a cone.
+
 ## The rules that bite
 
 - **Discover the API from source or `loft api hex_roof`** — not from memory.

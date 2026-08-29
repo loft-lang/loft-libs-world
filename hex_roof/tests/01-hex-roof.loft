@@ -74,3 +74,62 @@ fn test_a_flat_field_does_pond_which_keeps_the_pond_check_honest() {
   p = roof_ponds(s, f);
   assert(p > 0, "a dead-flat field must pond, but roof_ponds returned {p}");
 }
+
+// ── ⛔ A FALLBACK IS NOT A RECOVERY ────────────────────────────────────────
+//
+// `roof_match` returned the least-bad of plane/cone/dome with `rf_kind` naming a shape the
+// field is NOT, and the residual was the only signal. It says `ROOF_UNKNOWN` now.
+//
+// ⚠ THE FIXTURES ARE FIELDS THIS PACKAGE ITSELF DRAWS, which is what makes the gap a fact
+// about the package rather than about a fixture somebody invented: it draws a ridge, a hip
+// and three vaults, and fits a plane, a cone and a dome.
+fn test_a_ridge_is_unknown_rather_than_a_wrong_cone() {
+  s = disc();
+  f = heights_new(0, 0, W, H);
+  t = track_new();
+  track_straight(t, 1.0, 3.0, 6.0, 3.0);
+  roof_ridge(s, f, t, 6.0, 0.5, 100.0);
+  m = roof_match(s, f, 0.001);
+  assert(m.rf_kind == ROOF_UNKNOWN,
+         "a ridge is not one of the three kinds, got kind {m.rf_kind}");
+  assert(m.rf_res > 0.001, "…and it says so because nothing fit: residual {m.rf_res}");
+  // ⚠ THE BEST CANDIDATE'S NUMBERS SURVIVE — they are what a caller diagnoses with.
+  assert(m.rf_res < 1000000.0, "the closest candidate's residual is still reported");
+  // …and a kind nothing recovered draws nothing, rather than a surface that is not the roof.
+  assert(roof_eval(m, 0.0, 0.0) == 0.0, "an unknown roof evaluates to nothing");
+}
+
+fn test_a_hip_is_unknown_too() {
+  s = disc();
+  f = heights_new(0, 0, W, H);
+  roof_hip(s, f, 2.0, 0.5);
+  m = roof_match(s, f, 0.001);
+  assert(m.rf_kind == ROOF_UNKNOWN, "a hip is not one of the three either, got {m.rf_kind}");
+}
+
+fn test_the_three_kinds_it_does_know_are_unaffected() {
+  // ⚠ THE CONTROL, AND IT IS HALF THE POINT: a doorstep that answered UNKNOWN to everything
+  // would pass both rows above. A cone this package drew must still come back a CONE, exactly.
+  s = disc();
+  fc = heights_new(0, 0, W, H);
+  roof_cone(s, fc, 3.0, 1.5, 6.0, 0.5, 1000.0);
+  mc = roof_match(s, fc, 0.001);
+  assert(mc.rf_kind == ROOF_CONE, "a cone still recovers as a cone, got {mc.rf_kind}");
+  assert(mc.rf_res <= 0.001, "…within tolerance: {mc.rf_res}");
+
+  // ⛔ **IN WORLD UNITS, NOT CELL INDICES** — the same trap this file already warns about at
+  // `test_a_cone_rises_to_a_single_peak`, and I walked into it one function later: on a
+  // pointy-top odd-r lattice `q` is not the world x, so `2 + 0.25q` is a STAIRCASE and the
+  // plane fit correctly refuses it. `cellx` is `lattice_k * √3/2`, which is what a plane is
+  // linear in.
+  fp = heights_new(0, 0, W, H);
+  for r in 0..H { for q in 0..W {
+    if hexset_get(s, q, r) {
+      wx = (lattice_k(q, r) as float) * 0.8660254037844386;
+      wy = (lattice_m(q, r) as float) * 0.5;
+      height_set(fp, q, r, 2.0 + 0.25 * wx + 0.125 * wy);
+    }
+  } }
+  mp = roof_match(s, fp, 0.001);
+  assert(mp.rf_kind == ROOF_PLANE, "and a plane as a plane, got {mp.rf_kind}");
+}
