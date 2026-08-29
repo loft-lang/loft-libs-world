@@ -444,17 +444,91 @@ fn ridge_at(s: HexSet, f: Heights, ax: float, ay: float, bx: float, by: float)
   (apex, 0.0 - grad, res)
 }
 
-// ⚠ **SEEDED FROM THE CONE, BECAUSE A CONE IS A RIDGE WHOSE SEGMENT HAS ZERO LENGTH.**  That
-// gives a centre already on the ridge line (the maximum is attained along the whole segment),
-// so the search only has to grow the two ends outward — and it can never do worse than the
-// cone it started from, which is what makes the extra kind safe to try.
+// ⛔ **FOUR SEEDS, AND ONLY ONE OF THEM IS ANY GOOD — THE OTHERS ARE KEPT AS CHEAP INSURANCE.**  0.1.2
+// started both ends at `roof_cone_fit`'s centre, reasoning that a cone is a ridge whose segment
+// has zero length.  It is — but the cone fit RUNS AWAY on ridge-like data: fitting a cone to a
+// gable puts its apex far outside the footprint (the same degeneracy that sends it to x = 9744
+// on a plane), and a local search started there never walks back.  Measured on a real roof — a
+// 27-cell gable, constant across the ridge — it returned a DEGENERATE segment 8 world units
+// clear of the roof with slope 0 and residual 1.185.
+//
+// ✅ **So the climb is run from all three and the best is kept**: both ends at the highest cell,
+// both at the cone's centre, and one at each.  Each is cheap, and *take the better of two
+// starts* is not a threshold — it is the same answer either way when both converge.
+//
+// ⚠ **A LOCAL SEARCH THAT HAS TO GROW A SEGMENT OUT OF A POINT IS THE FRAGILE PART**, not the
+// seed: from a degenerate start the residual can be flat in every direction the first step
+// tries.  Two starts that fail differently are what makes that visible.
+//
+// ⚠ **THE LIBRARY'S OWN FIXTURE DID NOT CATCH THIS** — a ridge drawn on a disc happened to give
+// a usable cone centre.  The consumer's roof did.  That is `probe/adopt`'s lesson in a library:
+// a suite written by the author cannot ask the questions the author does not have.
 //
 // ⚠ **EACH END IS CLIMBED IN THE EIGHT DIRECTIONS `roof_cone_fit` USES, ON THE SAME STEP
 // SCHEDULE.**  A second search rule here would be a second opinion about how this family
 // searches.
 pub fn roof_ridge_fit(s: HexSet, f: Heights) -> RoofFit {
+  // the two candidate anchors: the highest cell, which lies ON the ridge, and the cone fit's
+  // centre, which is where a cone lands when asked to be a ridge
+  hi = 0.0 - 1000000.0;
+  hx = 0.0; hy = 0.0;
+  for r in hexset_r0(s)..hexset_r0(s) + hexset_h(s) {
+    for q in hexset_q0(s)..hexset_q0(s) + hexset_w(s) {
+      if hexset_get(s, q, r) {
+        z = height_get(f, q, r);
+        if z > hi { hi = z; hx = cellx(q, r); hy = celly(q, r); }
+      }
+    }
+  }
+  // ⛔ **AND THE DIRECTION COMES FROM THE DATA, WHICH IS THE ONLY SEED THAT WORKS.** A climb
+  // grown out of a POINT can reduce its residual by running the segment ACROSS the ridge: a
+  // long segment through the middle makes every distance similar, the least-squares slope goes
+  // to zero and the fit becomes "flat at the mean" — measured at residual 1.20 on a five-row
+  // gable, with the segment perpendicular to the true ridge and eleven units long.
+  //
+  // ✅ **THE RIDGE IS THE LOCUS OF THE MAXIMUM**, so the cells attaining it ARE the ridge, and
+  // the two furthest apart are its extent.  No threshold: `d = 0` on the segment gives exactly
+  // `peak`, so this is an equality, and where only one cell attains it the pair collapses to a
+  // point and the other seeds answer.
+  ex1 = hx; ey1 = hy; ex2 = hx; ey2 = hy;
+  far = 0.0 - 1.0;
+  for r in hexset_r0(s)..hexset_r0(s) + hexset_h(s) {
+    for q in hexset_q0(s)..hexset_q0(s) + hexset_w(s) {
+      if hexset_get(s, q, r) && height_get(f, q, r) == hi {
+        for r2 in hexset_r0(s)..hexset_r0(s) + hexset_h(s) {
+          for q2 in hexset_q0(s)..hexset_q0(s) + hexset_w(s) {
+            if hexset_get(s, q2, r2) && height_get(f, q2, r2) == hi {
+              ddx = cellx(q2, r2) - cellx(q, r);
+              ddy = celly(q2, r2) - celly(q, r);
+              dd = ddx * ddx + ddy * ddy;
+              if dd > far {
+                far = dd;
+                ex1 = cellx(q, r); ey1 = celly(q, r);
+                ex2 = cellx(q2, r2); ey2 = celly(q2, r2);
+              }
+            }
+          }
+        }
+      }
+    }
+  }
   c = roof_cone_fit(s, f);
-  ax = c.rf_x; ay = c.rf_y; bx = c.rf_x; by = c.rf_y;
+  best = ridge_climb(s, f, ex1, ey1, ex2, ey2);
+  t1 = ridge_climb(s, f, hx, hy, hx, hy);
+  if t1.rf_res < best.rf_res { best = t1; }
+  t2 = ridge_climb(s, f, c.rf_x, c.rf_y, c.rf_x, c.rf_y);
+  if t2.rf_res < best.rf_res { best = t2; }
+  t3 = ridge_climb(s, f, hx, hy, c.rf_x, c.rf_y);
+  if t3.rf_res < best.rf_res { best = t3; }
+  best
+}
+
+// The climb itself, from a given pair of ends.  Each end moves in the eight directions
+// `roof_cone_fit` uses, on the same step schedule — a second search rule here would be a second
+// opinion about how this family searches.
+fn ridge_climb(s: HexSet, f: Heights, sax: float, say: float, sbx: float, sby: float)
+    -> RoofFit {
+  ax = sax; ay = say; bx = sbx; by = sby;
   (ba, bs, br) = ridge_at(s, f, ax, ay, bx, by);
   step = 0.4;
   for _ in 0..5 {

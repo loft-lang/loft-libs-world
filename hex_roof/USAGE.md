@@ -55,6 +55,15 @@ unknown kind, so a fallback can no longer be evaluated into a surface that is no
 ⚠ **No existing recovery changes** — a candidate within `tol` returns exactly as before; only
 the path where all three were already wrong is affected.
 
+⛔ **AND 0.1.2's RIDGE FIT WAS WRONG ON A REAL ROOF — fixed in 0.1.3.** It seeded the search at
+the cone fit's centre, which RUNS AWAY on ridge-like data, and a climb grown out of a point can
+lower its residual by running the segment **across** the ridge: every distance becomes similar,
+the least-squares slope goes to zero, and the fit becomes *flat at the mean*. Measured on a
+consumer's 27-cell gable — residual **1.185**, segment eight world units clear of the roof,
+slope **0**. ✅ **The ridge is the locus of the maximum**, so the cells attaining it ARE the
+ridge and the two furthest apart are its extent — an equality, not a threshold. Three weaker
+seeds are kept as cheap insurance.
+
 ✅ **AND THE MISSING KIND IS BUILT — `ROOF_RIDGE` / `roof_ridge_fit`.** A ridge is the cone's
 own profile about a **segment** instead of a point, so the fit is `cone_at` with the radius
 replaced by `track_distance` — the same primitive `roof_ridge` draws with, rather than a second

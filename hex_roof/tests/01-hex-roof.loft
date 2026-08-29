@@ -150,3 +150,46 @@ fn test_the_three_kinds_it_does_know_are_unaffected() {
   // `roof_match` asks the ridge last.
   assert(mc.rf_kind != ROOF_RIDGE, "a cone is not answered as a degenerate ridge");
 }
+
+// ── ⛔ THE SHAPE A REAL EDITOR DRAWS — a gable over a rectangle ─────────────
+//
+// ⛔ **THE DISC FIXTURE ABOVE IS NOT ENOUGH, AND A CONSUMER FOUND THAT.** moros's `roof_over`
+// writes a 27-cell gable — five rows across, CONSTANT along the ridge — and 0.1.2 returned a
+// degenerate segment eight world units clear of it with slope 0 and residual 1.185, while the
+// disc fixture passed. A suite written by the author cannot ask the questions the author does
+// not have; this is that question, in the library.
+//
+// The field is exact: `7.75 - (2/3)|y - 6|`, which is what a 0.25-unit store holds for that
+// gable — 5.75 / 6.75 / 7.75 / 6.75 / 5.75 on rows at y = 3, 4.5, 6, 7.5, 9.
+fn gable_rows() -> HexSet {
+  s = hexset_chunk(0, 0, W, H);
+  for r in 2..7 { for q in 1..6 { hexset_set(s, q, r, true); } }
+  s
+}
+
+fn test_a_gable_over_a_rectangle_recovers() {
+  s = gable_rows();
+  f = heights_new(0, 0, W, H);
+  for r in 0..H { for q in 0..W {
+    if hexset_get(s, q, r) {
+      wy = (lattice_m(q, r) as float) * 0.5;
+      d = wy - 6.0;
+      if d < 0.0 { d = 0.0 - d; }
+      height_set(f, q, r, 7.75 - 0.6666666666666666 * d);
+    }
+  } }
+  g = roof_ridge_fit(s, f);
+  assert(g.rf_res < 0.01,
+         "the gable does not recover: residual {g.rf_res}, segment {g.rf_x},{g.rf_y} to {g.rf_x2},{g.rf_y2}, slope {g.rf_slope}");
+  assert(abs(g.rf_slope - 0.6666666666666666) < 0.01, "the slope comes back, got {g.rf_slope}");
+  assert(abs(g.rf_z - 7.75) < 0.02, "and the peak, got {g.rf_z}");
+  // ⚠ **AND THE RIDGE RUNS ALONG THE ROWS, NOT ACROSS THEM** — a segment of near-zero length
+  // is a cone wearing a ridge's name, and it fits this field badly.
+  dx = g.rf_x2 - g.rf_x; dy = g.rf_y2 - g.rf_y;
+  // ⚠ `??` BINDS LOOSEST, so the parentheses are load-bearing: `sqrt(..) ?? 0.0 > 1.0` parses
+  // as `sqrt(..) ?? (0.0 > 1.0)` and is a type error, not a comparison.
+  seglen = sqrt(dx * dx + dy * dy) ?? 0.0;
+  assert(seglen > 1.0, "the recovered ridge has length, got {seglen}");
+  m = roof_match(s, f, 0.01);
+  assert(m.rf_kind == ROOF_RIDGE, "and `roof_match` names it a ridge, got kind {m.rf_kind}");
+}
