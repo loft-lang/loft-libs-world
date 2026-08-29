@@ -55,9 +55,23 @@ unknown kind, so a fallback can no longer be evaluated into a surface that is no
 ⚠ **No existing recovery changes** — a candidate within `tol` returns exactly as before; only
 the path where all three were already wrong is affected.
 
-⚠ **THE MISSING KIND IS NAMED, NOT GUESSED AT.** A ridge is the cone's own profile about a
-**segment** instead of a point, so `roof_ridge_fit` is a well-specified addition. Until it
-exists, a gable is honestly unknown rather than dishonestly a cone.
+✅ **AND THE MISSING KIND IS BUILT — `ROOF_RIDGE` / `roof_ridge_fit`.** A ridge is the cone's
+own profile about a **segment** instead of a point, so the fit is `cone_at` with the radius
+replaced by `track_distance` — the same primitive `roof_ridge` draws with, rather than a second
+opinion about what distance-to-a-segment means. `RoofFit` gained `rf_x2` / `rf_y2` for the
+segment's other end, zero for every other kind.
+
+| the field | 0.1.1 | 0.1.2 |
+|---|---|---|
+| `roof_ridge` gable | ⛔ `ROOF_CONE`, residual 1.209 | ✅ `ROOF_RIDGE`, residual ≤ 0.001, peak and slope exact |
+| `roof_hip` | ⛔ `ROOF_CONE`, residual 0.615 | ⚠ `ROOF_UNKNOWN` — still not one of the four, and saying so |
+
+⚠ **THE RIDGE IS ASKED LAST**, after plane, cone and dome. A cone *is* a ridge whose segment
+has zero length, so a fitter tried earlier would answer the less specific shape for both — the
+same reason a plane wins ties. **No existing verdict moves.**
+
+⚠ **AND THE HIP STILL ANSWERS UNKNOWN, WHICH IS DELIBERATE**: it keeps the refusal path
+reachable. An unreachable refusal is one nobody would notice breaking.
 
 ## The rules that bite
 

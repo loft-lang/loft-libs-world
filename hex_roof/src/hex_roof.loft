@@ -309,14 +309,19 @@ pub const ROOF_UNKNOWN = 0;
 pub const ROOF_PLANE   = 1;
 pub const ROOF_CONE    = 2;
 pub const ROOF_DOME    = 3;   // rf_z = base, rf_slope = sphere radius
+pub const ROOF_RIDGE   = 4;   // rf_x,rf_y = one end; rf_x2,rf_y2 = the other
 
 pub struct RoofFit {
   rf_kind:  integer,
   rf_x:     float,     // plane: a       cone: centre x
   rf_y:     float,     // plane: b       cone: centre y
   rf_z:     float,     // plane: c       cone: apex z
-  rf_slope: float,     // cone only
+  rf_slope: float,     // cone and ridge: dz per unit of distance
   rf_res:   float,     // worst residual over the footprint
+  // ⚠ **THE RIDGE'S SECOND END — a segment needs four numbers where a point needs two.**
+  // Zero for every other kind, which is what the existing literals give them.
+  rf_x2:    float = 0.0,
+  rf_y2:    float = 0.0,
 }
 
 // Least squares z = a*x + b*y + c.  Covers flat and every shed/mono-pitch.
@@ -399,6 +404,91 @@ fn cone_at(s: HexSet, f: Heights, cx: float, cy: float) -> (float, float, float)
 // A cone: seed the centre at the highest cell, then refine.  The apex cell is only within
 // one circumradius of the true apex, so the seed alone is not good enough — the refinement
 // is what makes the recovery exact rather than approximately right.
+// ── ⛔ A RIDGE — the cone's own profile about a SEGMENT ────────────────────
+//
+// `roof_ridge` draws `peak - slope * d` where `d` is the distance to a LINE SEGMENT, exactly
+// as `roof_cone` draws it about a point.  So the fit is `cone_at` with the radius replaced by
+// `track_distance` — the same primitive the generator uses, rather than a second opinion about
+// what distance-to-a-segment means.
+fn ridge_at(s: HexSet, f: Heights, ax: float, ay: float, bx: float, by: float)
+    -> (float, float, float) {
+  t = track_new();
+  track_straight(t, ax, ay, bx, by);
+  sd = 0.0; szz = 0.0; sdd = 0.0; sdz = 0.0; sn = 0.0;
+  for r in hexset_r0(s)..hexset_r0(s) + hexset_h(s) {
+    for q in hexset_q0(s)..hexset_q0(s) + hexset_w(s) {
+      if hexset_get(s, q, r) {
+        d = track_distance(t, cellx(q, r), celly(q, r));
+        z = height_get(f, q, r);
+        sd = sd + d; szz = szz + z; sdd = sdd + d * d; sdz = sdz + d * z;
+        sn = sn + 1.0;
+      }
+    }
+  }
+  den = sn * sdd - sd * sd;
+  ad = den; if ad < 0.0 { ad = 0.0 - ad; }
+  if ad < 0.000000001 { return (0.0, 0.0, 1000000.0); }
+  grad = (sn * sdz - sd * szz) / den ?? 0.0;
+  apex = (szz - grad * sd) / sn ?? 0.0;
+  res = 0.0;
+  for r in hexset_r0(s)..hexset_r0(s) + hexset_h(s) {
+    for q in hexset_q0(s)..hexset_q0(s) + hexset_w(s) {
+      if hexset_get(s, q, r) {
+        d = track_distance(t, cellx(q, r), celly(q, r));
+        e = apex + grad * d - height_get(f, q, r);
+        if e < 0.0 { e = 0.0 - e; }
+        if e > res { res = e; }
+      }
+    }
+  }
+  (apex, 0.0 - grad, res)
+}
+
+// ⚠ **SEEDED FROM THE CONE, BECAUSE A CONE IS A RIDGE WHOSE SEGMENT HAS ZERO LENGTH.**  That
+// gives a centre already on the ridge line (the maximum is attained along the whole segment),
+// so the search only has to grow the two ends outward — and it can never do worse than the
+// cone it started from, which is what makes the extra kind safe to try.
+//
+// ⚠ **EACH END IS CLIMBED IN THE EIGHT DIRECTIONS `roof_cone_fit` USES, ON THE SAME STEP
+// SCHEDULE.**  A second search rule here would be a second opinion about how this family
+// searches.
+pub fn roof_ridge_fit(s: HexSet, f: Heights) -> RoofFit {
+  c = roof_cone_fit(s, f);
+  ax = c.rf_x; ay = c.rf_y; bx = c.rf_x; by = c.rf_y;
+  (ba, bs, br) = ridge_at(s, f, ax, ay, bx, by);
+  step = 0.4;
+  for _ in 0..5 {
+    moved = true;
+    while moved {
+      moved = false;
+      for i in 0..16 {
+        ox = 0.0; oy = 0.0;
+        k = i % 8 ?? 0;
+        if k == 0 { ox = step; }
+        if k == 1 { ox = 0.0 - step; }
+        if k == 2 { oy = step; }
+        if k == 3 { oy = 0.0 - step; }
+        if k == 4 { ox = step; oy = step; }
+        if k == 5 { ox = step; oy = 0.0 - step; }
+        if k == 6 { ox = 0.0 - step; oy = step; }
+        if k == 7 { ox = 0.0 - step; oy = 0.0 - step; }
+        nax = ax; nay = ay; nbx = bx; nby = by;
+        if i < 8 { nax = ax + ox; nay = ay + oy; }
+        else { nbx = bx + ox; nby = by + oy; }
+        (ca, cs, cr) = ridge_at(s, f, nax, nay, nbx, nby);
+        if cr < br - 0.0000000001 {
+          br = cr; ba = ca; bs = cs;
+          ax = nax; ay = nay; bx = nbx; by = nby;
+          moved = true;
+        }
+      }
+    }
+    step = step * 0.25;
+  }
+  RoofFit { rf_kind: ROOF_RIDGE, rf_x: ax, rf_y: ay, rf_z: ba, rf_slope: bs, rf_res: br,
+            rf_x2: bx, rf_y2: by }
+}
+
 pub fn roof_cone_fit(s: HexSet, f: Heights) -> RoofFit {
   hi = -1000000.0;
   bx = 0.0; by = 0.0;
@@ -552,9 +642,15 @@ pub fn roof_match(s: HexSet, f: Heights, tol: float) -> RoofFit {
   if c.rf_res <= tol { return c; }
   d = roof_dome_fit(s, f);
   if d.rf_res <= tol { return d; }
+  // ⚠ **LAST, SO NO EXISTING VERDICT MOVES.** A cone is a ridge whose segment has zero
+  // length, so trying the ridge first would answer `ROOF_RIDGE` for a true cone — the less
+  // specific statement, which is the same reason a plane wins ties above.
+  g = roof_ridge_fit(s, f);
+  if g.rf_res <= tol { return g; }
   best = p;
   if c.rf_res < best.rf_res { best = c; }
   if d.rf_res < best.rf_res { best = d; }
+  if g.rf_res < best.rf_res { best = g; }
   RoofFit { rf_kind: ROOF_UNKNOWN, rf_x: best.rf_x, rf_y: best.rf_y, rf_z: best.rf_z,
             rf_slope: best.rf_slope, rf_res: best.rf_res }
 }
@@ -568,6 +664,11 @@ pub fn roof_eval(fit: RoofFit, x: float, y: float) -> float {
   if fit.rf_kind == ROOF_CONE {
     dx = x - fit.rf_x; dy = y - fit.rf_y;
     return fit.rf_z - fit.rf_slope * (sqrt(dx * dx + dy * dy) ?? 0.0);
+  }
+  if fit.rf_kind == ROOF_RIDGE {
+    rt = track_new();
+    track_straight(rt, fit.rf_x, fit.rf_y, fit.rf_x2, fit.rf_y2);
+    return fit.rf_z - fit.rf_slope * track_distance(rt, x, y);
   }
   if fit.rf_kind == ROOF_DOME {
     dx = x - fit.rf_x; dy = y - fit.rf_y;

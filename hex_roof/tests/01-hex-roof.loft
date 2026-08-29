@@ -83,28 +83,41 @@ fn test_a_flat_field_does_pond_which_keeps_the_pond_check_honest() {
 // ⚠ THE FIXTURES ARE FIELDS THIS PACKAGE ITSELF DRAWS, which is what makes the gap a fact
 // about the package rather than about a fixture somebody invented: it draws a ridge, a hip
 // and three vaults, and fits a plane, a cone and a dome.
-fn test_a_ridge_is_unknown_rather_than_a_wrong_cone() {
+fn test_a_ridge_recovers_as_a_ridge() {
+  // ⛔ **WHAT `roof_match` USED TO ANSWER HERE WAS `ROOF_CONE` AT RESIDUAL 1.209**, with an
+  // apex of 6.318 where the truth is 6.0 and a slope of 0.409 where it is 0.5 — a shape the
+  // field is not, named with confidence. `roof_ridge_fit` is the cone's own profile about a
+  // SEGMENT, so the answer is exact.
   s = disc();
   f = heights_new(0, 0, W, H);
   t = track_new();
   track_straight(t, 1.0, 3.0, 6.0, 3.0);
   roof_ridge(s, f, t, 6.0, 0.5, 100.0);
   m = roof_match(s, f, 0.001);
-  assert(m.rf_kind == ROOF_UNKNOWN,
-         "a ridge is not one of the three kinds, got kind {m.rf_kind}");
-  assert(m.rf_res > 0.001, "…and it says so because nothing fit: residual {m.rf_res}");
-  // ⚠ THE BEST CANDIDATE'S NUMBERS SURVIVE — they are what a caller diagnoses with.
-  assert(m.rf_res < 1000000.0, "the closest candidate's residual is still reported");
-  // …and a kind nothing recovered draws nothing, rather than a surface that is not the roof.
-  assert(roof_eval(m, 0.0, 0.0) == 0.0, "an unknown roof evaluates to nothing");
+  assert(m.rf_kind == ROOF_RIDGE, "a ridge recovers as a ridge, got kind {m.rf_kind}");
+  assert(m.rf_res <= 0.001, "…exactly: residual {m.rf_res}");
+  // ⚠ **THE PARAMETERS, NOT JUST THE LABEL** — a kind that is right about nothing else is a
+  // label, and `roof_eval` draws from these.
+  assert(abs(m.rf_z - 6.0) < 0.01, "the peak comes back 6.0, got {m.rf_z}");
+  assert(abs(m.rf_slope - 0.5) < 0.01, "and the slope 0.5, got {m.rf_slope}");
+  // …and the recovered surface agrees with the field it was recovered from, at a cell centre.
+  wx = (lattice_k(4, 4) as float) * 0.8660254037844386;
+  wy = (lattice_m(4, 4) as float) * 0.5;
+  assert(abs(roof_eval(m, wx, wy) - height_get(f, 4, 4)) < 0.01,
+         "the recovered ridge evaluates to the field: {roof_eval(m, wx, wy)} against {height_get(f, 4, 4)}");
 }
 
-fn test_a_hip_is_unknown_too() {
+fn test_a_hip_is_still_unknown_and_that_keeps_the_refusal_honest() {
+  // ⚠ **THE REFUSAL PATH MUST STAY REACHABLE.** With the ridge added, three of the shapes this
+  // package draws now recover; a hip does not, and saying so is what stops `ROOF_UNKNOWN`
+  // becoming a branch nothing takes — an unreachable refusal is one nobody would notice
+  // breaking.
   s = disc();
   f = heights_new(0, 0, W, H);
   roof_hip(s, f, 2.0, 0.5);
   m = roof_match(s, f, 0.001);
-  assert(m.rf_kind == ROOF_UNKNOWN, "a hip is not one of the three either, got {m.rf_kind}");
+  assert(m.rf_kind == ROOF_UNKNOWN, "a hip is none of the four, got {m.rf_kind}");
+  assert(roof_eval(m, 0.0, 0.0) == 0.0, "and an unknown roof draws nothing");
 }
 
 fn test_the_three_kinds_it_does_know_are_unaffected() {
@@ -132,4 +145,8 @@ fn test_the_three_kinds_it_does_know_are_unaffected() {
   } }
   mp = roof_match(s, fp, 0.001);
   assert(mp.rf_kind == ROOF_PLANE, "and a plane as a plane, got {mp.rf_kind}");
+  // ⛔ **AND A CONE MUST NOT BECOME A RIDGE.** A cone IS a ridge whose segment has zero length,
+  // so a fitter tried too early would answer the less specific shape for both — which is why
+  // `roof_match` asks the ridge last.
+  assert(mc.rf_kind != ROOF_RIDGE, "a cone is not answered as a degenerate ridge");
 }
