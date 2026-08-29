@@ -1,6 +1,6 @@
 [package]
 name    = "hex_roof"
-version = "0.1.3"
+version = "0.1.4"
 loft    = ">=0.8"
 
 # 0.1.1 is a WARNING-ONLY fix and changes no behaviour: `roof_hip`'s fill loop

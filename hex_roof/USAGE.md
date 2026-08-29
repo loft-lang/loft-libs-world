@@ -55,7 +55,18 @@ unknown kind, so a fallback can no longer be evaluated into a surface that is no
 ⚠ **No existing recovery changes** — a candidate within `tol` returns exactly as before; only
 the path where all three were already wrong is affected.
 
-⛔ **AND 0.1.2's RIDGE FIT WAS WRONG ON A REAL ROOF — fixed in 0.1.3.** It seeded the search at
+⛔ **THE RIDGE FIT TOOK THREE GOES, AND EVERY BUG WAS FOUND BY POINTING IT AT REAL DATA.**
+0.1.2 seeded from the cone fit, which runs away on ridge-like data. 0.1.3 seeded from the locus
+of the maximum using float EQUALITY — which holds for a field read out of an integer store and
+fails for one this package DREW, because `track_distance` returns zero on the segment only up to
+rounding. 0.1.4 makes the band the field's own span and **extends the seed to the footprint**,
+because a climb that has to GROW a segment converges tilted and short while one that shortens
+converges cleanly.
+
+✅ **The fixture that would have caught all three is `roof_ridge_fit(roof_ridge(...))`** — hand
+a fitter the generator's own output. It is `test_the_package_recovers_what_it_draws` now.
+
+⛔ **AND 0.1.2's RIDGE FIT WAS WRONG ON A REAL ROOF — fixed across 0.1.3 and 0.1.4.** It seeded the search at
 the cone fit's centre, which RUNS AWAY on ridge-like data, and a climb grown out of a point can
 lower its residual by running the segment **across** the ridge: every distance becomes similar,
 the least-squares slope goes to zero, and the fit becomes *flat at the mean*. Measured on a

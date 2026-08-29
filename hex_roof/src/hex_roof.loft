@@ -471,15 +471,27 @@ pub fn roof_ridge_fit(s: HexSet, f: Heights) -> RoofFit {
   // the two candidate anchors: the highest cell, which lies ON the ridge, and the cone fit's
   // centre, which is where a cone lands when asked to be a ridge
   hi = 0.0 - 1000000.0;
+  lo = 1000000.0;
   hx = 0.0; hy = 0.0;
   for r in hexset_r0(s)..hexset_r0(s) + hexset_h(s) {
     for q in hexset_q0(s)..hexset_q0(s) + hexset_w(s) {
       if hexset_get(s, q, r) {
         z = height_get(f, q, r);
         if z > hi { hi = z; hx = cellx(q, r); hy = celly(q, r); }
+        if z < lo { lo = z; }
       }
     }
   }
+  // ⛔ **THE MAXIMUM IS ATTAINED TO WITHIN ROUNDING, NOT EXACTLY — measured on this package's
+  // OWN output.** 0.1.3 collected the locus with `z == hi`, which holds for a field read out of
+  // an integer store and FAILS for one `roof_ridge` drew: `track_distance` returns zero on the
+  // segment only up to rounding, so one cell wins the equality, the pair collapses to a point
+  // and the fit degenerates — residual 1.132 on a field this package had just produced.
+  //
+  // ⚠ **THE BAND IS THE FIELD'S OWN SPAN, NOT A TUNED EPSILON**: a millionth of `hi - lo` is
+  // float equality made scale-aware, and it carries no units of its own.
+  band = (hi - lo) * 0.000001;
+  if band < 0.0 { band = 0.0 - band; }
   // ⛔ **AND THE DIRECTION COMES FROM THE DATA, WHICH IS THE ONLY SEED THAT WORKS.** A climb
   // grown out of a POINT can reduce its residual by running the segment ACROSS the ridge: a
   // long segment through the middle makes every distance similar, the least-squares slope goes
@@ -487,17 +499,15 @@ pub fn roof_ridge_fit(s: HexSet, f: Heights) -> RoofFit {
   // gable, with the segment perpendicular to the true ridge and eleven units long.
   //
   // ✅ **THE RIDGE IS THE LOCUS OF THE MAXIMUM**, so the cells attaining it ARE the ridge, and
-  // the two furthest apart are its extent.  No threshold: `d = 0` on the segment gives exactly
-  // `peak`, so this is an equality, and where only one cell attains it the pair collapses to a
-  // point and the other seeds answer.
+  // the two furthest apart are its extent.
   ex1 = hx; ey1 = hy; ex2 = hx; ey2 = hy;
   far = 0.0 - 1.0;
   for r in hexset_r0(s)..hexset_r0(s) + hexset_h(s) {
     for q in hexset_q0(s)..hexset_q0(s) + hexset_w(s) {
-      if hexset_get(s, q, r) && height_get(f, q, r) == hi {
+      if hexset_get(s, q, r) && height_get(f, q, r) >= hi - band {
         for r2 in hexset_r0(s)..hexset_r0(s) + hexset_h(s) {
           for q2 in hexset_q0(s)..hexset_q0(s) + hexset_w(s) {
-            if hexset_get(s, q2, r2) && height_get(f, q2, r2) == hi {
+            if hexset_get(s, q2, r2) && height_get(f, q2, r2) >= hi - band {
               ddx = cellx(q2, r2) - cellx(q, r);
               ddy = celly(q2, r2) - celly(q, r);
               dd = ddx * ddx + ddy * ddy;
@@ -511,6 +521,33 @@ pub fn roof_ridge_fit(s: HexSet, f: Heights) -> RoofFit {
         }
       }
     }
+  }
+  // ⛔ **AND THE SEED IS EXTENDED TO SPAN THE FOOTPRINT, BECAUSE GROWING IS WHAT FAILS.** The
+  // locus gives the right DIRECTION and too short a segment: every cell whose nearest point is
+  // past an end gets a clamped distance, so the fit is wrong there and the climb has to grow
+  // the ends outward — which it does badly, converging tilted and short at residual 0.128 on a
+  // ridge this package drew.  A gable's ridge runs the length of its roof, so the seed is the
+  // locus direction projected over every cell; a genuinely HIPPED roof is the case the climb
+  // then SHORTENS, and shortening is the direction it handles well.
+  pdx = ex2 - ex1;
+  pdy = ey2 - ey1;
+  plen = sqrt(pdx * pdx + pdy * pdy) ?? 0.0;
+  if plen > 0.000001 {
+    ux = pdx / plen ?? 0.0;
+    uy = pdy / plen ?? 0.0;
+    tmin = 1000000.0;
+    tmax = 0.0 - 1000000.0;
+    for r in hexset_r0(s)..hexset_r0(s) + hexset_h(s) {
+      for q in hexset_q0(s)..hexset_q0(s) + hexset_w(s) {
+        if hexset_get(s, q, r) {
+          tp = (cellx(q, r) - ex1) * ux + (celly(q, r) - ey1) * uy;
+          if tp < tmin { tmin = tp; }
+          if tp > tmax { tmax = tp; }
+        }
+      }
+    }
+    ex2 = ex1 + ux * tmax; ey2 = ey1 + uy * tmax;
+    ex1 = ex1 + ux * tmin; ey1 = ey1 + uy * tmin;
   }
   c = roof_cone_fit(s, f);
   best = ridge_climb(s, f, ex1, ey1, ex2, ey2);
