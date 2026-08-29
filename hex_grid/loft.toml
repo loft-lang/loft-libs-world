@@ -5,5 +5,6 @@ loft    = ">=0.8"
 
 api_compatible_with  = "0.1.0"   # oldest own release this is a drop-in for
 data_compatible_with = "0.1.0"   # oldest own release whose stored data this reads
+description = "Hex-grid geometry — pointy-top, ODD-R OFFSET coordinates: coordinate/pixel conversion, neighbours, distance, corners and canonical edges, plus a square local basis for right-angled structures placed on the hex world."
 [library]
 entry = "src/hex_grid.loft"
