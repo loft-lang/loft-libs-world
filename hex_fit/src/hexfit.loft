@@ -35,6 +35,7 @@ pub const FIT_BAD_SPAN   = 9;    // a feature covering zero edges, or more than 
 pub const FIT_BAD_SHELL  = 10;   // an arc radius that is not a realisable shell (3k^2 + m^2)
 pub const FIT_BAD_HEIGHT = 11;   // a height off the voxel's integer grid — it would truncate
 pub const FIT_BAD_MAT    = 12;   // a material id the slot cannot hold (see MAT_MAX)
+pub const FIT_BAD_SCALE  = 13;   // a height quantum that is not positive — there is no grid
 
 // One reason table for the whole doorstep — `hexdraft`'s codes and these.
 pub fn fit_reason(code: integer) -> text {
@@ -47,7 +48,11 @@ pub fn fit_reason(code: integer) -> text {
     return "that radius is not a realisable shell; the disk would be the next shell down";
   }
   if code == FIT_BAD_HEIGHT {
-    return "the voxel stores height as a whole unit of 0.25 wu; that value would truncate";
+    // ⚠ THE QUANTUM IS THE CALLER'S, so this cannot name a number — see `seat_fits_at`.
+    return "the voxel stores height as a whole number of units; that value would truncate";
+  }
+  if code == FIT_BAD_SCALE {
+    return "a height quantum must be positive; there is no grid to test a value against";
   }
   if code == FIT_BAD_MAT {
     return "that material id is outside the wall slot's range and would erase the wall";
@@ -230,29 +235,68 @@ pub fn mat_fits(m: integer) -> integer {
 // a one-line change with a gate behind it.
 pub const HEIGHT_SCALE = 0.25;
 
-// The voxel's own value for a height: what `h_height` would hold.
-pub fn height_units(z: float) -> integer {
-  k = z / HEIGHT_SCALE ?? 0.0;
+// ── ⛔ AND THE QUANTUM IS THE CALLER'S, NOT THIS PACKAGE'S ──────────────────
+//
+// **THE CONSTANT ABOVE CANNOT SERVE A DOORSTEP, AND THAT WAS MEASURED IN A CONSUMER.** A world
+// carries its own height unit — moros's `VoxelWorld.w_unit` — and its editor says so in bold:
+// *"`w.w_unit` IS THE HEIGHT SCALE AND IT IS THE RIGHT ONE."*  Measured over that tree: **176
+// worlds at 0.25, 2 at 0.125 and 6 at 1.0**, and `seat_fits` gives the WRONG VERDICT on 40 of 81
+// sampled heights at 0.125 and 30 of 81 at 1.0 (moros `probe/b7`).
+//
+// ⚠ **A DOORSTEP THAT IS WRONG ABOUT THE GRID IS WORSE THAN NONE** — `X66`'s own sentence, and
+// this is the case it did not cover: not *refusing more than the field distinguishes*, but
+// testing against a grid the field does not have.  `X67` closed the FORK (the integer slot
+// binds); what stayed open is that the STEP is a property of the world.
+//
+// ⚠ **THE TIER NOTE ABOVE ANTICIPATED A CHANGE OF THE VALUE** — *"a change to it is a one-line
+// change with a gate behind it"* — and the measurement says the value is not the shape of the
+// problem.  `HEIGHT_SCALE` stays as moros's default, so every existing caller is unaffected;
+// the `_at` forms are what a world carrying its own unit must use.
+
+// The voxel's own value for a height, at a given quantum: what `h_height` would hold.
+pub fn height_units_at(z: float, scale: float) -> integer {
+  if scale <= 0.0 { return 0; }
+  k = z / scale ?? 0.0;
   if k < 0.0 { return (k - 0.5) as integer; }
   (k + 0.5) as integer
 }
 
-pub fn height_from_units(u: integer) -> float { (u as float) * HEIGHT_SCALE }
+pub fn height_from_units_at(u: integer, scale: float) -> float { (u as float) * scale }
 
-// THE DOORSTEP.  A height must land exactly on the voxel's grid; off it, the store truncates and
-// `X59`'s returned residual would be wrong by the truncation — which is the one thing `SPEC` **G5**
-// says must never happen silently.
+// THE DOORSTEP, at the caller's quantum.  A height must land exactly on the voxel's grid; off
+// it, the store truncates and `X59`'s returned residual would be wrong by the truncation —
+// which is the one thing `SPEC` **G5** says must never happen silently.
 //
-// Example: @HXI-008
-pub fn seat_fits(z: float) -> integer {
-  if height_from_units(height_units(z)) == z { return FIT_OK; }
+// ⚠ **A NON-POSITIVE QUANTUM IS REFUSED BY NAME RATHER THAN DIVIDED BY.** loft's division by
+// zero yields null and keeps running, so an unchecked `z / scale` would discharge to `0.0` and
+// this would answer *on the grid* for `z = 0` and *off it* for everything else — a wrong verdict
+// dressed as a real one, which is exactly what a doorstep exists not to produce.
+pub fn seat_fits_at(z: float, scale: float) -> integer {
+  if scale <= 0.0 { return FIT_BAD_SCALE; }
+  if height_from_units_at(height_units_at(z, scale), scale) == z { return FIT_OK; }
   FIT_BAD_HEIGHT
 }
 
 // The offer, and the residual the editor must show — in world units.
-pub fn seat_fit_z(z: float) -> float { height_from_units(height_units(z)) }
+pub fn seat_fit_z_at(z: float, scale: float) -> float {
+  if scale <= 0.0 { return z; }
+  height_from_units_at(height_units_at(z, scale), scale)
+}
 
-pub fn seat_fit_residual(z: float) -> float { abs(seat_fit_z(z) - z) }
+pub fn seat_fit_residual_at(z: float, scale: float) -> float { abs(seat_fit_z_at(z, scale) - z) }
+
+// ── the same five at moros's own quantum, unchanged for every existing caller ─
+
+pub fn height_units(z: float) -> integer { height_units_at(z, HEIGHT_SCALE) }
+
+pub fn height_from_units(u: integer) -> float { height_from_units_at(u, HEIGHT_SCALE) }
+
+// Example: @HXI-008
+pub fn seat_fits(z: float) -> integer { seat_fits_at(z, HEIGHT_SCALE) }
+
+pub fn seat_fit_z(z: float) -> float { seat_fit_z_at(z, HEIGHT_SCALE) }
+
+pub fn seat_fit_residual(z: float) -> float { seat_fit_residual_at(z, HEIGHT_SCALE) }
 
 // Kept from before the fork closed, now meaning exactly "on the voxel's grid".
 pub fn seat_is_integral(z: float) -> boolean { seat_fits(z) == FIT_OK }

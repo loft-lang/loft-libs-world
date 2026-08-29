@@ -43,3 +43,39 @@ fn test_the_height_slot_is_an_integer_grid() {
   u = height_units(height_from_units(3));
   assert(u == 3, "an on-grid height round-trips through the voxel, got {u}");
 }
+
+fn test_the_height_quantum_is_the_callers() {
+  // ⛔ THE CONSTANT CANNOT SERVE A DOORSTEP. A world carries its own height unit, and a
+  // consumer measured this package giving the WRONG VERDICT on 40 of 81 sampled heights at
+  // 0.125 and 30 of 81 at 1.0 (moros probe/b7). X66 says a doorstep wrong about the grid is
+  // worse than none -- the case it did not cover is testing against a grid the field lacks.
+  //
+  // A HALF-UNIT AT ONE QUANTUM IS A WHOLE UNIT AT ANOTHER, which is the whole of it.
+  assert(seat_fits_at(0.125, 0.25) == FIT_BAD_HEIGHT, "0.125 is half a unit at 0.25");
+  assert(seat_fits_at(0.125, 0.125) == FIT_OK, "...and a whole one at 0.125");
+  assert(seat_fits_at(0.5, 1.0) == FIT_BAD_HEIGHT, "0.5 is half a unit at 1.0");
+  assert(seat_fits_at(2.0, 1.0) == FIT_OK, "...and 2.0 is two whole ones");
+
+  // The offer and the residual follow the quantum they were given.
+  assert(seat_fit_z_at(0.3, 0.125) == 0.25, "the offer at 0.125 is 0.25, got {seat_fit_z_at(0.3, 0.125)}");
+  assert(seat_fit_z_at(0.3, 1.0) == 0.0, "...and at 1.0 it is 0.0, got {seat_fit_z_at(0.3, 1.0)}");
+  assert(abs(seat_fit_residual_at(0.3, 1.0) - 0.3) < 1e-12, "with the residual to match");
+
+  // The default is unchanged for every existing caller -- the wrappers ARE the old behaviour.
+  assert(seat_fits(0.3) == seat_fits_at(0.3, HEIGHT_SCALE), "the wrapper is the _at form at 0.25");
+  assert(seat_fit_z(0.3) == seat_fit_z_at(0.3, HEIGHT_SCALE), "and so is the offer");
+  assert(height_units(0.75) == height_units_at(0.75, HEIGHT_SCALE), "and the unit count");
+}
+
+fn test_a_quantum_that_is_not_a_grid_is_refused_by_name() {
+  // ⚠ loft's division by zero yields null and keeps running, so an unchecked `z / scale`
+  // discharges to 0.0 -- and the doorstep would answer "on the grid" for 0 and "off it" for
+  // everything else. A wrong verdict dressed as a real one is what a doorstep exists not to
+  // produce, so a non-positive quantum has its own code.
+  assert(seat_fits_at(1.0, 0.0) == FIT_BAD_SCALE, "a zero quantum is not a grid");
+  assert(seat_fits_at(0.0, 0.0) == FIT_BAD_SCALE, "...and zero height does not excuse it");
+  assert(seat_fits_at(1.0, 0.0 - 0.25) == FIT_BAD_SCALE, "nor does a negative one");
+  assert(fit_reason(FIT_BAD_SCALE) != "", "and the refusal carries a reason");
+  assert(fit_reason(FIT_BAD_SCALE) != fit_reason(FIT_BAD_HEIGHT),
+         "...which is not the height reason wearing a different code");
+}

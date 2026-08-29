@@ -45,6 +45,33 @@ Each `fn test_*` in [`tests/01-hex-fit.loft`](tests/01-hex-fit.loft) is a small,
 
 Run them yourself: `loft --interpret --tests tests` from the `hex_fit/` directory.
 
+## ⛔ The height quantum is the CALLER'S — use the `_at` forms
+
+`HEIGHT_SCALE = 0.25` is **moros's default**, not a property of every world. A world carries its
+own height unit, so the doorstep takes it:
+
+```loft
+// A world whose unit is 0.125 — half a quarter-unit is a WHOLE unit there.
+if seat_fits_at(z, w_unit) != FIT_OK {
+  say(fit_reason(seat_fits_at(z, w_unit)));      // the reason
+  offer = seat_fit_z_at(z, w_unit);              // …the nearest height it CAN store
+  cost  = seat_fit_residual_at(z, w_unit);       // …and what would have been thrown away
+}
+```
+
+`seat_fits` / `seat_fit_z` / `seat_fit_residual` / `height_units` / `height_from_units` are the
+same five at `HEIGHT_SCALE`, unchanged for every existing caller.
+
+⚠ **WHY IT IS A PARAMETER, MEASURED IN A CONSUMER RATHER THAN ARGUED HERE.** moros builds worlds
+at **0.25 (176), 0.125 (2) and 1.0 (6)**, and the constant form gives the **wrong verdict** on 40
+of 81 sampled heights at 0.125 and 30 of 81 at 1.0 (`probe/b7`). `X66` says a doorstep that
+refuses more than the field distinguishes is worse than none; this is the case it did not
+cover — testing against a grid the field does not have.
+
+⚠ **A NON-POSITIVE QUANTUM IS `FIT_BAD_SCALE`, NOT A DIVISION.** loft's `÷0` yields null and keeps
+running, so an unchecked `z / scale` discharges to `0.0` and the doorstep would answer *on the
+grid* for `z = 0` and *off it* for everything else — a wrong verdict dressed as a real one.
+
 ## The rules that bite
 
 - **Discover the API from source or `loft api hex_fit` once published** — not from memory. Even the
