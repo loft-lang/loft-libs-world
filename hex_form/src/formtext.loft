@@ -200,6 +200,8 @@ pub fn form_read(t: text) -> Form {
   form_new(h0, lens, turns)
 }
 
+// Are two forms the same shape?  Compares the model rather than the text, which is what
+// makes `form_eq(f, form_read(form_write(f)))` a round-trip check and not a tautology.
 pub fn form_eq(a: Form, b: Form) -> boolean {
   if a.fm_h0 != b.fm_h0 { return false; }
   if len(a.fm_len) != len(b.fm_len) { return false; }

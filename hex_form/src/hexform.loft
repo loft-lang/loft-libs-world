@@ -17,6 +17,32 @@
 // odd headings the six vertex directions.  Their world lengths differ by exactly sqrt(3),
 // which this file exposes as an INTEGER: 4 * len^2 = 3k^2 + m^2, giving 12 for an edge step
 // and 36 for a vertex one.  Never compare these as floats — the ratio is exact.
+// ── Using it ─────────────────────────────────────────────────────────────────
+//
+// A FORM is a shape written as a walk: a start heading, then a length and a turn per
+// side.  That is the whole model, and everything here either builds one, measures one,
+// or puts one somewhere.
+//
+//   f = form_new(0, [1, 1, 1], [4, 4, 4]);   // the unit equilateral triangle
+//   n = form_sides(f);                       // 3
+//   t = form_write(f, "tri");                // -> canonical text, byte-exact
+//   g = form_read(t);                        // <- and back; form_eq(f, g) holds
+//
+// The text is a fixed layout on purpose (see `formtext.loft`): one model has exactly
+// one spelling, so a project file diffs and an undo history is exact.
+//
+// A PLAN puts a form in the world — a centre cell, a size, a rotation and a mirror —
+// and converts between the plan's local frame and world coordinates:
+//
+//   p  = plan_new(0, 0, 4, 3, 0, false);
+//   xy = plan_to_world(p, 0.5, 0.5);         // local -> world
+//   uv = plan_to_local(p, x, y);             // world -> local
+//
+// The rotations are the six exact lattice ones, so `plan_to_local(plan_to_world(..))`
+// returns what it was given rather than something a trig round-off left behind.
+//
+// Worked examples: `tests/02-worked-examples.loft` (@HXF-001 …).
+
 use hex_field;
 use hex_grid;
 
@@ -74,10 +100,14 @@ pub fn head_is_edge(h: integer) -> boolean { head_norm(h) % 2 == 0 }
 // is `r & 1` and m = 3r has the same parity.  On the heading table this acts as h -> h + 2,
 // which is what makes the six rotations of O a subgroup of the twelve headings.
 pub fn rot60_k(k: integer, m: integer) -> integer { (k - m) / 2 }
+// The `m` of the same 60-degree rotation `rot60_k` gives the `k` of.  Rotate a step by
+// walking both, and the result is still exactly on the lattice.
 pub fn rot60_m(k: integer, m: integer) -> integer { (3 * k + m) / 2 }
 
 // The exact reflection (constraint X2).  On the heading table this acts as h -> 6 - h.
 pub fn refl_k(k: integer) -> integer { -k }
+// The `m` of the reflection — unchanged, since the mirror is about the m axis.  Present so
+// a caller reflects by walking the same pair it rotates by, rather than special-casing one.
 pub fn refl_m(m: integer) -> integer { m }
 
 // The heading whose step is (dk, dm), or -1 if no heading has that step.  Used by the gate
@@ -116,10 +146,14 @@ pub struct Form {
 // One full revolution, in twelfths.
 pub const TURN_FULL = 12;
 
+// Build a form: the heading its first side runs in, then a length and a turn per side.
+// This is the only constructor — every other routine here reads one or places one.
 pub fn form_new(h0: integer, lens: vector<integer>, turns: vector<integer>) -> Form {
   Form { fm_h0: head_norm(h0), fm_len: lens, fm_turn: turns }
 }
 
+// How many sides the form has.  The bound for any walk over it, and 0 for the refusal
+// form, which is why a caller can treat "no sides" as "nothing to draw".
 pub fn form_sides(f: Form) -> integer { len(f.fm_len) }
 
 // The heading side `i` runs in: the start heading plus every turn taken before it.
@@ -130,6 +164,8 @@ pub fn form_heading(f: Form, i: integer) -> integer {
   head_norm(h)
 }
 
+// The turns added up.  A closed form's total is a full circle, so this is the cheap test
+// for whether the walk comes back — checkable without generating a single coordinate.
 pub fn form_turn_sum(f: Form) -> integer {
   turns = f.fm_turn;
   total = 0;
@@ -181,6 +217,8 @@ pub fn form_closes(f: Form) -> boolean {
 // That is why `housedraw`'s Plan is a CONTINUOUS rectangle rasterised centre-in-region, and
 // why it — not a turtle cycle — is domain A's shape primitive.  See DESIGN.md §10.4.
 pub fn perp_k(_k: integer, m: integer) -> integer { -m }
+// The `m` of the perpendicular `perp_k` gives the `k` of: the step turned a quarter turn,
+// which is how an outward normal is taken without leaving the integers.
 pub fn perp_m(k: integer, _m: integer) -> integer { 3 * k }
 
 // 4 * the squared world length of an arbitrary doubled-coordinate vector.
@@ -256,6 +294,8 @@ pub fn form_poly_k(f: Form) -> vector<integer> {
   outk
 }
 
+// The `m` coordinates of the form's corners, in walk order — the companion of
+// `form_poly_k`.  Zip the two to get the polygon a renderer or an area check wants.
 pub fn form_poly_m(f: Form) -> vector<integer> {
   lens = f.fm_len;
   turns = f.fm_turn;
@@ -377,7 +417,11 @@ pub fn set_shoelace2(cells: HexSet) -> integer {
 //   rhombus a x b     a box in the centre basis, (a+1)(b+1)
 //   hexagon side n    the hex region of radius n, 3n^2 + 3n + 1
 pub fn tri_cells(n: integer) -> integer { ((n + 1) * (n + 2) / 2) ?? 0 }
+// How many cells an a-by-b rhombus covers, without building it.  Size a buffer, or reject
+// a request as too large, before paying for the cells.
 pub fn rhombus_cells(a: integer, b: integer) -> integer { (a + 1) * (b + 1) }
+// How many cells a hexagon of radius n covers — the same question as `rhombus_cells` for
+// the other common shape, and the same reason to ask it first.
 pub fn hexagon_cells(n: integer) -> integer { 3 * n * n + 3 * n + 1 }
 
 // ── S4 — THE BOUNDARY OF A FILLED REGION, AND WHETHER ITS CORNERS ARE PRECISE ─
@@ -589,8 +633,12 @@ pub fn form_admissible(f: Form) -> boolean {
 // the shared table — and it is `X26`'s class of defect, found by a move rather than by a gate.
 const SQ3_2 = 0.8660254037844386;         // sqrt(3)/2 — half a hex step; also metres per wu
 const EPS = 0.000000001;                  // a float sign-test guard, not a P4 tolerance
+// A cell centre's world x.  The one place the exact lattice becomes a float, and it is
+// deliberately at the EDGE of the library: everything upstream stays integer.
 pub fn cell_x(q: integer, r: integer) -> float { (lattice_k(q, r) as float) * SQ3_2 }
+// A cell centre's world y — the other half of `cell_x`.
 pub fn cell_y(q: integer, r: integer) -> float { (lattice_m(q, r) as float) * 0.5 }
+// Absolute value for floats, used by the world-space helpers below.
 pub fn fabs(v: float) -> float { if v < 0.0 { -v } else { v } }
 
 // The 6 rotations are exact on the lattice, so use the exact table rather than trig:
@@ -627,11 +675,16 @@ pub fn plan_flip(p: Plan) -> Plan {
          pl_rot: p.pl_rot, pl_mir: !p.pl_mir }
 }
 
+// Half the plan's width in world units — the extent a caller needs for a bound or a hit
+// test, without reconstructing the frame.
 pub fn plan_hw(p: Plan) -> float { (p.pl_wid as float) * HEX_LEN * 0.5 }
+// Half the plan's depth in world units, the companion of `plan_hw`.
 pub fn plan_hd(p: Plan) -> float { (p.pl_dep as float) * HEX_LEN * 0.5 }
 
 fn frame_s(p: Plan) -> float { if p.pl_mir { -1.0 } else { 1.0 } }
 
+// A point in the plan's own frame, expressed in the world.  The rotations are the six
+// exact lattice ones, so this and `plan_to_local` invert each other rather than drifting.
 pub fn plan_to_world(p: Plan, lu: float, lv: float) -> (float, float) {
   co = rot_cos(p.pl_rot);
   si = rot_sin(p.pl_rot);
@@ -640,6 +693,8 @@ pub fn plan_to_world(p: Plan, lu: float, lv: float) -> (float, float) {
     cell_y(p.pl_cq, p.pl_cr) + lu * s * si + lv * co )
 }
 
+// A world point expressed in the plan's frame — the inverse of `plan_to_world`, and how a
+// click or a probe is asked "where is this ON the plan?".
 pub fn plan_to_local(p: Plan, px: float, py: float) -> (float, float) {
   co = rot_cos(p.pl_rot);
   si = rot_sin(p.pl_rot);
@@ -680,6 +735,8 @@ fn side_v(p: Plan, side: integer, which: integer) -> float {
   else { -hd }
 }
 
+// A point a fraction `t` along one side of the plan, in world coordinates.  Use it to
+// place a door, a label or a joint without computing the side's endpoints yourself.
 pub fn plan_side_point(p: Plan, side: integer, t: float) -> (float, float) {
   au = side_u(p, side, 0);
   av = side_v(p, side, 0);
@@ -711,6 +768,7 @@ pub struct SideRun {
   sr_t:  vector<float>,     // 0..1 along the side, A -> B, as read from OUTSIDE
 }
 
+// How many entries the run holds — the bound for walking one side's collected points.
 pub fn side_run_len(sr: SideRun) -> integer { len(sr.sr_t) }
 
 // Which side an edge lies on, and where along it.  An edge's midpoint is the midpoint
