@@ -52,6 +52,25 @@
 // thing; the surface tells you its exact normal.  This keeps the design's standing rule —
 // never derive a smooth thing from cells — and it needs no mesh, so it works for a large
 // area and for small blockers (a tree, a bush) that a mesh would describe badly.
+// ── Using it ─────────────────────────────────────────────────────────────────
+//
+// A wall belongs BETWEEN two hexes, not inside one, so this package puts what a wall is
+// made of on the EDGE and answers questions from there.
+//
+//   m = materials_new();                          // 1. the palette
+//   stone = material_add(m, true, 2.0, 1.0, 40.0, 0.0, 0.2);
+//
+//   // 2. mark edges with it (an EdgeSet comes from hex_field)
+//   // 3. then ask:
+//   if edge_blocked(e, qa, ra, qb, rb) { … }      // can a mover cross here?
+//   h = mat_height(m, stone);                     // how tall, how loud, how opaque …
+//
+// Material id 0 is "nothing there": every `mat_*` reader answers a neutral value for it and
+// for any id past the end, so a caller may ask about an unmarked edge without guarding.
+//
+// `Junctions` and `Features` hang extra detail off the same edges — a corner post, a door,
+// a window — for consumers that draw or simulate rather than just collide.
+
 use hex_field;
 
 // The surfaces a collision can reference.  Small and flat on purpose: a normal must be
@@ -140,6 +159,8 @@ pub struct Materials {
   mt_n:      integer,
 }
 
+// An empty palette.  Id 0 is reserved for "nothing there", so the first `material_add`
+// returns 1 and an unmarked edge never looks like a real material.
 pub fn materials_new() -> Materials {
   so: vector<boolean> = []; he: vector<float> = []; op: vector<float> = [];
   sd: vector<float> = []; pe: vector<float> = []; bo: vector<float> = [];
@@ -173,22 +194,29 @@ pub fn mat_solid(m: Materials, id: integer) -> boolean {
   if id <= 0 || id >= m.mt_n { return false; }
   m.mt_solid[id] ?? false
 }
+// How tall this material stands.  0.0 for id 0 or an unknown id, so an unmarked edge
+// answers "nothing there" rather than faulting.
 pub fn mat_height(m: Materials, id: integer) -> float {
   if id <= 0 || id >= m.mt_n { return 0.0; }
   m.mt_height[id] ?? 0.0
 }
+// How much it blocks sight, 0.0 when there is nothing there.
 pub fn mat_opacity(m: Materials, id: integer) -> float {
   if id <= 0 || id >= m.mt_n { return 0.0; }
   m.mt_opacity[id] ?? 0.0
 }
+// How much it deadens sound, in dB, 0.0 when there is nothing there.
 pub fn mat_sound(m: Materials, id: integer) -> float {
   if id <= 0 || id >= m.mt_n { return 0.0; }
   m.mt_sound[id] ?? 0.0
 }
+// How freely air or fluid passes.  Note the neutral value is 1.0, not 0.0: nothing there
+// means fully permeable, where nothing there means zero height.
 pub fn mat_perm(m: Materials, id: integer) -> float {
   if id <= 0 || id >= m.mt_n { return 1.0; }
   m.mt_perm[id] ?? 1.0
 }
+// How much it rebounds, 0.0 when there is nothing there.
 pub fn mat_bounce(m: Materials, id: integer) -> float {
   if id <= 0 || id >= m.mt_n { return 0.0; }
   m.mt_bounce[id] ?? 0.0
@@ -223,6 +251,8 @@ pub fn edge_k(qa: integer, ra: integer, qb: integer, rb: integer) -> integer {
   lattice_k(qa, ra) + lattice_k(qb, rb)
 }
 
+// The edge's `m` key — the companion of `edge_k`.  The pair names the edge between two
+// cells the same way from either side, which is what stops one wall becoming two.
 pub fn edge_m(qa: integer, ra: integer, qb: integer, rb: integer) -> integer {
   lattice_m(qa, ra) + lattice_m(qb, rb)
 }
@@ -293,6 +323,8 @@ pub struct Junctions {
   jn_n:    integer,
 }
 
+// An empty set of junctions: where walls meet, for consumers that draw a corner post or
+// need to know a wall's ends rather than just its middle.
 pub fn junctions_new() -> Junctions {
   a: vector<integer> = []; b: vector<integer> = []; k: vector<integer> = [];
   x: vector<float> = []; y: vector<float> = [];
@@ -362,6 +394,8 @@ pub struct Features {
   fe_n:    integer,
 }
 
+// An empty set of features: doors, windows and openings placed ALONG a surface rather
+// than replacing it, so the wall stays one wall with holes in it.
 pub fn features_new() -> Features {
   a: vector<integer> = []; b: vector<float> = []; c: vector<float> = [];
   d: vector<float> = []; e: vector<float> = []; k: vector<integer> = [];
@@ -446,6 +480,8 @@ pub fn edge_block(e: EdgeSet, qa: integer, ra: integer, qb: integer, rb: integer
   edge_block_surf(e, qa, ra, qb, rb, SURF_NONE);
 }
 
+// Can a mover cross this edge?  THE collision question, and the reason the edge layer
+// exists — asked from either side with the same answer.
 pub fn edge_blocked(e: EdgeSet, qa: integer, ra: integer, qb: integer, rb: integer) -> boolean {
   edge_surf(e, qa, ra, qb, rb) != 0
 }

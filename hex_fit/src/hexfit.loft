@@ -23,6 +23,21 @@
 // distinguishes is worse than none — it makes legal models unauthorable.  Levels and terrain are
 // measured to have nothing to refuse, and `level_fits` / `seat_fits` say that in code rather than
 // inventing a restriction to look thorough.
+// ── Using it ─────────────────────────────────────────────────────────────────
+//
+// Everything here answers one shape of question: DOES THIS MEASUREMENT LAND ON THE GRID,
+// and if not, what is the nearest one that does?  Each quantity has the same three:
+//
+//   u = height_units(z);          // to the grid's own units
+//   z2 = seat_fit_z(z);           // the nearest seating height
+//   d = seat_fit_residual(z);     // how far off it was — 0.0 means it already fitted
+//
+// Ask the residual when you want to WARN rather than move the value: a builder that snaps
+// silently loses the author's intent, and one that refuses cannot place anything.
+//
+// The `*_at` twins take the scale explicitly, for a consumer working at a scale other than
+// the default; the short names are those twins at `HEIGHT_SCALE`.
+
 use hex_field;
 use hex_draw;
 use hex_shape;
@@ -125,6 +140,8 @@ pub fn arc_is_shell(n24: integer) -> boolean {
   false
 }
 
+// Does this arc land on the grid?  Answers a FIT_ code rather than a boolean, so a caller
+// can tell the reader WHY it did not — see `draft_fit_reason`.
 pub fn arc_fits(n24: integer) -> integer {
   if arc_is_shell(n24) { return FIT_OK; }
   FIT_BAD_SHELL
@@ -152,6 +169,8 @@ pub fn arc_fit_n(n24: integer) -> integer {
   best
 }
 
+// How far the arc is from the nearest fitting one.  0 means it already fits; anything else
+// is what a warning would quote.
 pub fn arc_fit_residual(n24: integer) -> integer {
   d = arc_fit_n(n24) - n24;
   if d < 0 { return 0 - d; }
@@ -174,6 +193,7 @@ pub fn arc_snap_n(n24: integer) -> integer {
   best
 }
 
+// How far snapping WOULD move it — signed, so a caller can see which way.
 pub fn arc_snap_residual(n24: integer) -> integer { n24 - arc_snap_n(n24) }
 
 // ── LEVELS — MEASURED TO HAVE NOTHING TO REFUSE ─────────────────────────────
@@ -261,6 +281,7 @@ pub fn height_units_at(z: float, scale: float) -> integer {
   (k + 0.5) as integer
 }
 
+// Grid units back to a world height at a given scale — the inverse of `height_units_at`.
 pub fn height_from_units_at(u: integer, scale: float) -> float { (u as float) * scale }
 
 // THE DOORSTEP, at the caller's quantum.  A height must land exactly on the voxel's grid; off
@@ -283,19 +304,25 @@ pub fn seat_fit_z_at(z: float, scale: float) -> float {
   height_from_units_at(height_units_at(z, scale), scale)
 }
 
+// How far a height is from the nearest seating level at a given scale.  Warn on this
+// rather than snapping, when the author's exact value matters.
 pub fn seat_fit_residual_at(z: float, scale: float) -> float { abs(seat_fit_z_at(z, scale) - z) }
 
 // ── the same five at moros's own quantum, unchanged for every existing caller ─
 
+// A world height in grid units at the default scale.
 pub fn height_units(z: float) -> integer { height_units_at(z, HEIGHT_SCALE) }
 
+// Grid units back to a world height at the default scale.
 pub fn height_from_units(u: integer) -> float { height_from_units_at(u, HEIGHT_SCALE) }
 
 // Example: @HXI-008
 pub fn seat_fits(z: float) -> integer { seat_fits_at(z, HEIGHT_SCALE) }
 
+// The nearest seating height at the default scale.
 pub fn seat_fit_z(z: float) -> float { seat_fit_z_at(z, HEIGHT_SCALE) }
 
+// How far off that seating height the value was; 0.0 means it already fitted.
 pub fn seat_fit_residual(z: float) -> float { seat_fit_residual_at(z, HEIGHT_SCALE) }
 
 // Kept from before the fork closed, now meaning exactly "on the voxel's grid".

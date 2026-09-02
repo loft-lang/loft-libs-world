@@ -51,10 +51,15 @@ pub struct Draft {
   df_p:    integer,     // periods
 }
 
+// A stencil description: the form, plus the linework run it carries.  The run is the half
+// that used to be dropped in a rebuild without anything noticing, which is why it is part
+// of the value rather than something a caller keeps beside it.
 pub fn draft_new(f: Form, d: integer, a: integer, b: integer, p: integer) -> Draft {
   Draft { df_form: f, df_d: d, df_a: a, df_b: b, df_p: p }
 }
 
+// Does this draft carry a linework run?  Check before reading the run's fields, which are
+// only meaningful when it does.
 pub fn draft_has_run(s: Draft) -> boolean { s.df_d >= 0 }
 
 fn nth_word(line: text, i: integer) -> text {
@@ -281,6 +286,8 @@ pub const FIT_NO_VERTEX = 4;   // the anchor is a hex CENTRE, not a vertex
 pub const FIT_NOT_LEGAL = 5;   // whole periods, but the endpoint is not a vertex
 pub const FIT_OUTSIDE   = 6;   // the run leaves the footprint
 
+// The FIT_ code as a sentence, for showing a person why a draft did not fit.  Keep the
+// code for logic and use this only at the edge, so the reason never becomes the test.
 pub fn draft_fit_reason(code: integer) -> text {
   if code == FIT_OK { return "ok"; }
   if code == FIT_NO_FORM { return "the form is not admissible (closed, simple, convex)"; }
