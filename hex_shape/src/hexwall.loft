@@ -106,6 +106,8 @@ fn between_m(i: integer) -> integer {
   s * mm
 }
 
+// The `k` of one step along wall direction `d24`.  The wall runs on a finer set of
+// directions than the cells do, which is why it has its own step table.
 pub fn wall_step_k(d24: integer) -> integer {
   n = ((d24 % D24) + D24) % D24;
   h = n / 2;
@@ -114,6 +116,7 @@ pub fn wall_step_k(d24: integer) -> integer {
   between_k((n - 1) / 2)
 }
 
+// The `m` of that same step — walk both to move along a wall.
 pub fn wall_step_m(d24: integer) -> integer {
   n = ((d24 % D24) + D24) % D24;
   h = n / 2;
@@ -208,6 +211,8 @@ fn wall_along(w: Wall, px: float, py: float) -> float {
 // an algebraic distance away, orders of magnitude above `1e-9`.
 const WALL_EPS = 0.000000001;   // a float SIGN-test guard, not a P4 tolerance
 
+// Does this wall lie BETWEEN two points?  The question a mover asks before stepping: if
+// the wall separates where you are from where you are going, the step is blocked.
 pub fn wall_separates(w: Wall, cx: float, cy: float, nx: float, ny: float) -> boolean {
   oc = wall_offset_signed(w, cx, cy);
   on = wall_offset_signed(w, nx, ny);
@@ -249,6 +254,7 @@ pub fn hex_corner_x(q: integer, r: integer, c: integer) -> float {
   cx + ox
 }
 
+// Corner c of cell (q,r) in world y — the companion of `hex_corner_x`.
 pub fn hex_corner_y(q: integer, r: integer, c: integer) -> float {
   (cx, cy) = hex_to_px(q, r);
   (ox, oy) = hex_corner_offset(((c % 6) + 6) % 6);
@@ -262,6 +268,8 @@ pub fn cell_x_w(q: integer, r: integer) -> float {
   (lattice_k(q, r) as float) * 0.8660254037844386
 }
 
+// A cell centre's world y in WALL units, which are half the cell units: the wall lattice
+// is finer, and mixing the two is the mistake this separate name exists to prevent.
 pub fn cell_y_w(q: integer, r: integer) -> float { (lattice_m(q, r) as float) * 0.5 }
 
 // THE CHECK THAT WOULD HAVE CAUGHT IT: how far the midpoint of edge `dir` sits from the
@@ -295,10 +303,13 @@ fn corner_db(ci: integer) -> integer {
   else if c == 3 { -3 } else if c == 4 { -3 } else { 0 }
 }
 
+// A hex corner's position on the triangular wall lattice, `a` axis.  Corners are shared
+// between cells, so naming one exactly is what lets two cells agree about their join.
 pub fn hex_corner_tri_a(q: integer, r: integer, ci: integer) -> integer {
   3 * lattice_k(q, r) + corner_da(ci)
 }
 
+// The same corner's `b` axis — the pair is the corner's exact triangular-lattice address.
 pub fn hex_corner_tri_b(q: integer, r: integer, ci: integer) -> integer {
   ((3 * (lattice_m(q, r) - lattice_k(q, r)) / 2) ?? 0) + corner_db(ci)
 }
@@ -670,6 +681,8 @@ pub fn tri_a(d24: integer) -> integer {
   (ta / g) ?? 0
 }
 
+// The `b` component of a unit step in wall direction `d24`, for walking the triangular
+// lattice the way `wall_step_k`/`_m` walk the doubled one.
 pub fn tri_b(d24: integer) -> integer {
   k = wall_step_k(d24);
   m = wall_step_m(d24);
@@ -690,6 +703,8 @@ pub fn tri_n2(d24: integer) -> integer {
   a * a + a * b + b * b
 }
 
+// Is n a perfect square?  Integer-only, so a length test stays exact where a sqrt would
+// introduce the first float in an otherwise exact chain.
 pub fn is_square(n: integer) -> boolean {
   if n < 0 { return false; }
   r = 0;
@@ -739,10 +754,14 @@ fn imod3(v: integer) -> integer {
 // Only meaningful once `tri_on_hex_scale` holds.
 pub fn tri_class(a: integer, b: integer) -> integer { imod3(((a - b) / 3) ?? 0) }
 
+// Does this triangular-lattice point fall on the coarser HEX scale?  The wall lattice is
+// three times finer, so this is the test for "is this also a cell-level position".
 pub fn tri_on_hex_scale(a: integer, b: integer) -> boolean {
   imod3(a) == 0 && imod3(b) == 0
 }
 
+// Is this point a hex CORNER rather than a cell centre?  Both sit on the hex scale, and
+// only the class tells them apart — which is what a wall needs to know before it turns.
 pub fn tri_is_vertex(a: integer, b: integer) -> boolean {
   tri_on_hex_scale(a, b) && tri_class(a, b) != 0
 }
@@ -753,6 +772,8 @@ pub fn wall_end_a(d24: integer, a0: integer, p: integer) -> integer {
   a0 + 3 * p * tri_a(d24)
 }
 
+// Where a wall run of `p` steps from `b0` ends, on the `b` axis.  Compute the end without
+// walking the run, so a length or a bound costs nothing.
 pub fn wall_end_b(d24: integer, b0: integer, p: integer) -> integer {
   b0 + 3 * p * tri_b(d24)
 }
@@ -790,6 +811,8 @@ pub fn wall_snap_p(d24: integer, a0: integer, b0: integer, want: integer) -> int
 
 // World position of a triangle-lattice point, in world units.
 pub fn tri_x(a: integer, _b: integer) -> float { (a as float) * 0.28867513459481287 }
+// A triangular-lattice point in world y.  The last step before rendering, and the only
+// place these exact coordinates become floats.
 pub fn tri_y(a: integer, b: integer) -> float {
   (a as float) / 6.0 + (b as float) / 3.0
 }
