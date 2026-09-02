@@ -29,6 +29,8 @@ pub struct Pose {
   ps_ty: float,
 }
 
+// A placement: a rotation given as cos/sin and a translation.  Storing the pair rather than
+// an angle keeps `pose_fwd` and `pose_inv` exact inverses with no trig at use time.
 pub fn pose_new(cs: float, sn: float, tx: float, ty: float) -> Pose {
   Pose { ps_cs: cs, ps_sn: sn, ps_tx: tx, ps_ty: ty }
 }
@@ -38,6 +40,7 @@ pub fn pose_new(cs: float, sn: float, tx: float, ty: float) -> Pose {
 pub fn pose_inv_x(p: Pose, wx: float, wy: float) -> float {
   p.ps_cs * (wx - p.ps_tx) + p.ps_sn * (wy - p.ps_ty)
 }
+// A world point's y in the pose's frame — the companion of `pose_inv_x`.
 pub fn pose_inv_y(p: Pose, wx: float, wy: float) -> float {
   0.0 - p.ps_sn * (wx - p.ps_tx) + p.ps_cs * (wy - p.ps_ty)
 }
@@ -46,6 +49,8 @@ pub fn pose_inv_y(p: Pose, wx: float, wy: float) -> float {
 pub fn pose_fwd_x(p: Pose, lx: float, ly: float) -> float {
   p.ps_cs * lx - p.ps_sn * ly + p.ps_tx
 }
+// A local point's y in the world — the companion of `pose_fwd_x`, and the inverse of
+// `pose_inv_y`.
 pub fn pose_fwd_y(p: Pose, lx: float, ly: float) -> float {
   p.ps_sn * lx + p.ps_cs * ly + p.ps_ty
 }

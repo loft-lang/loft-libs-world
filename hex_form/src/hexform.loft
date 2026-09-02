@@ -662,6 +662,9 @@ pub struct Plan {
   pl_mir: boolean,    // the 12th orientation: (rot, mir) is the D6 the lattice has
 }
 
+// Place a form in the world: which cell it is centred on, how wide and deep, which of the
+// six exact rotations, and whether it is mirrored.  The Plan is the frame and the Form is
+// the shape — keeping them apart is what lets one shape be placed many times.
 pub fn plan_new(cq: integer, cr: integer, wid: integer, dep: integer,
                 rot: integer, mir: boolean) -> Plan {
   Plan { pl_cq: cq, pl_cr: cr, pl_wid: wid, pl_dep: dep,

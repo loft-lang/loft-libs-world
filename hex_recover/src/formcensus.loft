@@ -50,6 +50,8 @@ pub fn orient_k(k: integer, m: integer, o: integer) -> integer {
   ok2
 }
 
+// The `m` of a step under orientation `o` — the companion of `orient_k`.  Walking both is
+// how a shape is compared against all 12 orientations without rebuilding it.
 pub fn orient_m(k: integer, m: integer, o: integer) -> integer {
   ok3 = k;
   om3 = m;
@@ -137,12 +139,16 @@ pub fn field_digest(cells: HexSet) -> vector<integer> {
   best
 }
 
+// Are two digests the same?  Compares the shape rather than its spelling, which is what
+// makes a digest usable as an identity.
 pub fn digest_eq(a: vector<integer>, b: vector<integer>) -> boolean {
   if len(a) != len(b) { return false; }
   for ei in 0..len(a) { if (a[ei] ?? 0) != (b[ei] ?? 0) { return false; } }
   true
 }
 
+// A digest as text, for a key, a log line or a diff.  The rendering is stable, so two runs
+// that found the same shape write the same string.
 pub fn digest_text(d: vector<integer>) -> text {
   s = "";
   for ti in 0..len(d) {
@@ -228,6 +234,8 @@ pub fn field_exact(cells: HexSet) -> vector<integer> {
   sort_keys(raw)
 }
 
+// The cell set's EXACT digest as text: this shape at this position and orientation.
+// Use it when position matters — two placements of one shape differ here.
 pub fn field_exact_text(cells: HexSet) -> text { digest_text(field_exact(cells)) }
 
 // The TRANSLATION-normalised, orientation-SENSITIVE digest — orientation 0 only.
@@ -242,6 +250,8 @@ pub fn field_exact_text(cells: HexSet) -> text { digest_text(field_exact(cells))
 // Example: @HXV-001
 pub fn field_norm(cells: HexSet) -> vector<integer> { oriented_keys(cells, 0) }
 
+// The cell set's NORMALISED digest as text: the same shape wherever it sits and however it
+// is turned.  Use it to recognise a shape you have seen before.
 pub fn field_norm_text(cells: HexSet) -> text { digest_text(field_norm(cells)) }
 
 // ── THE LEVEL LADDER — the enumeration, parameterised ──────────────────────
@@ -335,6 +345,8 @@ fn ipow(b: integer, e: integer) -> integer {
   r
 }
 
+// Every form with this many sides up to this side length — the candidate set a recovery
+// searches.  Generated rather than stored, so a bigger search is a bigger argument.
 pub fn forms_sides(sides: integer, maxlen: integer) -> vector<Form> {
   out: vector<Form> = [];
   texts: vector<text> = [];

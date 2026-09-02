@@ -181,6 +181,8 @@ pub fn rebuild_text_with(cand: vector<Form>, cells: HexSet, name: text) -> text 
   form_write(r.rb_form, name)
 }
 
+// Recover a form from cells and write it as canonical text, or "" when the cells are not a
+// single clean form.  The empty answer is the refusal — check it before using the text.
 pub fn rebuild_text(cells: HexSet, name: text) -> text {
   r = rebuild(cells);
   if r.rb_regime != REGIME_R1 { return ""; }
@@ -254,6 +256,8 @@ pub fn rebuild_indexed(idx: RecoveryIndex, cand: vector<Form>, cells: HexSet) ->
   rebuild_with(cand, cells)
 }
 
+// The same, searching a prepared index and candidate set instead of enumerating: the shape
+// to use when many cells sets are recovered against one library.
 pub fn rebuild_indexed_text(idx: RecoveryIndex, cand: vector<Form>,
                             cells: HexSet, name: text) -> text {
   r = rebuild_indexed(idx, cand, cells);
@@ -378,6 +382,8 @@ pub fn side_heading(dk: integer, dm: integer) -> integer {
   -1
 }
 
+// How many steps of heading `h` the offset (dk, dm) covers.  The measurement a rebuild
+// makes at every corner to turn geometry back into a side length.
 pub fn side_len(dk: integer, dm: integer, h: integer) -> integer {
   st = head_step(h);
   if st.0 != 0 { return (dk / st.0) ?? 0; }
@@ -435,6 +441,8 @@ pub fn rebuild_construct(cells: HexSet) -> Rebuilt {
   Rebuilt { rb_regime: REGIME_R2, rb_form: cf, rb_rho: d2, rb_matches: 0 }
 }
 
+// Recover by CONSTRUCTION rather than by search, as text.  Answers "" on refusal like its
+// siblings, so all three recovery routes are read the same way.
 pub fn rebuild_construct_text(cells: HexSet, name: text) -> text {
   r = rebuild_construct(cells);
   if r.rb_regime != REGIME_R1 { return ""; }

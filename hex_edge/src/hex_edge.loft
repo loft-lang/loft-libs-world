@@ -170,6 +170,8 @@ pub fn materials_new() -> Materials {
               mt_perm: pe, mt_bounce: bo, mt_n: 1 }
 }
 
+// Add a material and get its id.  One call fixes everything the simulation asks later —
+// whether it blocks, how tall, how opaque, how loud, how permeable, how bouncy.
 pub fn material_add(m: Materials, solid: boolean, height: float, opacity: float,
                     sound_db: float, perm: float, bounce: float) -> integer {
   m.mt_solid += [solid]; m.mt_height += [height]; m.mt_opacity += [opacity];
@@ -331,6 +333,7 @@ pub fn junctions_new() -> Junctions {
   Junctions { jn_a: a, jn_b: b, jn_kind: k, jn_x: x, jn_y: y, jn_n: 0 }
 }
 
+// Record that two surfaces meet here, of this kind, at this world point.
 pub fn junction_add(j: Junctions, sa: integer, sb: integer, kind: integer,
                     x: float, y: float) {
   j.jn_a += [sa]; j.jn_b += [sb]; j.jn_kind += [kind];
@@ -404,6 +407,8 @@ pub fn features_new() -> Features {
              fe_kind: k, fe_mat: m, fe_n: 0 }
 }
 
+// Place a feature on a surface, between two positions along it and two heights up it, so a
+// door or a window is a hole IN a wall rather than a break in it.
 pub fn feature_add(f: Features, surf: integer, s0: float, s1: float,
                    z0: float, z1: float, kind: integer, mat: integer) -> integer {
   f.fe_surf += [surf]; f.fe_s0 += [s0]; f.fe_s1 += [s1];

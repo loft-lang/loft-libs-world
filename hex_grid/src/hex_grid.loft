@@ -238,6 +238,8 @@ pub fn cell_corner_offset(i: integer) -> (float, float) {
   (-0.5, 0.5)
 }
 
+// One corner of a cell in pixels.  The last step before drawing: everything above it is
+// exact, and this is where a renderer's coordinates begin.
 pub fn cell_corner_px(q: integer, r: integer, i: integer) -> (float, float) {
   (cox, coy) = cell_corner_offset(i);
   (q as float + cox * GRID_SIZE, r as float + coy * GRID_SIZE)

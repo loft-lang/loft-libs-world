@@ -106,6 +106,8 @@ pub fn surface_heading(w: WallSurface) -> integer {
   -1
 }
 
+// Does this surface run along one of the exact headings?  An inexact one is still drawable
+// but cannot be reasoned about on the lattice, so ask before treating it as integer.
 pub fn surface_is_exact(w: WallSurface) -> boolean { surface_heading(w) >= 0 }
 
 // World position of the mean, and the unit perpendicular to the mean direction.
@@ -113,6 +115,8 @@ pub fn surface_mean_x(w: WallSurface) -> float {
   (((w.ws_num_k as float) / (w.ws_den as float)) ?? 0.0) * 0.8660254037844386
 }
 
+// The surface's mean point in world y — the companion of `surface_mean_x`, and where a
+// label or a normal is anchored.
 pub fn surface_mean_y(w: WallSurface) -> float {
   (((w.ws_num_m as float) / (w.ws_den as float)) ?? 0.0) * 0.5
 }

@@ -32,12 +32,15 @@ pub struct Track {
   tk_n:    integer,
 }
 
+// An empty track.  Append straights and arcs in order; the track IS the sequence, and
+// segment index is the only identity a caller needs.
 pub fn track_new() -> Track {
   k: vector<integer> = [];
   p: vector<float> = [];
   Track { tk_kind: k, tk_p: p, tk_n: 0 }
 }
 
+// Append a straight from one point to another.
 pub fn track_straight(t: Track, x0: float, y0: float, x1: float, y1: float) {
   t.tk_kind += [WAY_STRAIGHT];
   t.tk_p += [x0]; t.tk_p += [y0]; t.tk_p += [x1]; t.tk_p += [y1];
@@ -45,6 +48,8 @@ pub fn track_straight(t: Track, x0: float, y0: float, x1: float, y1: float) {
   t.tk_n = t.tk_n + 1;
 }
 
+// Append an arc: centre, radius and the angles it runs between.  Arcs and straights are
+// measured and sampled through the same routines, so a mixed track needs no special case.
 pub fn track_arc(t: Track, cx: float, cy: float, r: float, a0: float, a1: float) {
   t.tk_kind += [WAY_ARC];
   t.tk_p += [cx]; t.tk_p += [cy]; t.tk_p += [r]; t.tk_p += [a0];
@@ -71,6 +76,8 @@ fn ang_wrap(d: float) -> float {
   v
 }
 
+// One segment's length.  The unit `track_len` sums and the unit a position along the track
+// is measured in.
 pub fn seg_len(t: Track, i: integer) -> float {
   if (t.tk_kind[i] ?? 0) == WAY_STRAIGHT {
     dx = pv(t, i, 2) - pv(t, i, 0);
@@ -82,6 +89,7 @@ pub fn seg_len(t: Track, i: integer) -> float {
   d * pv(t, i, 2)
 }
 
+// The whole track's length, for pacing a mover or normalising a position to 0..1.
 pub fn track_len(t: Track) -> float {
   s = 0.0;
   for i in 0..t.tk_n { s = s + seg_len(t, i); }
@@ -106,6 +114,8 @@ pub fn seg_point(t: Track, i: integer, s: float) -> (float, float) {
   (pv(t, i, 0) + r * cos(a), pv(t, i, 1) + r * sin(a))
 }
 
+// The direction of travel a distance `s` into segment `i` — what a mover faces, and what a
+// carriage or a camera is aligned to.
 pub fn seg_tangent(t: Track, i: integer, s: float) -> (float, float) {
   if (t.tk_kind[i] ?? 0) == WAY_STRAIGHT {
     seg_l = seg_len(t, i);
@@ -226,6 +236,8 @@ pub fn seg_distance(t: Track, i: integer, px: float, py: float) -> float {
   d1
 }
 
+// How far a point lies from the track.  The test for "am I on the road", and the reason the
+// per-segment distance is kept cheap.
 pub fn track_distance(t: Track, px: float, py: float) -> float {
   best = 1000000.0;
   for i in 0..t.tk_n {

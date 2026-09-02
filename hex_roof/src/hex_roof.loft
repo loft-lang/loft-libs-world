@@ -600,6 +600,8 @@ fn ridge_climb(s: HexSet, f: Heights, sax: float, say: float, sbx: float, sby: f
             rf_x2: bx, rf_y2: by }
 }
 
+// Fit a cone to the heights over these cells: apex, radius and how well it fits.  Ask both
+// this and `roof_dome_fit` and keep the better residual — the shapes suit different roofs.
 pub fn roof_cone_fit(s: HexSet, f: Heights) -> RoofFit {
   hi = -1000000.0;
   bx = 0.0; by = 0.0;
@@ -682,6 +684,7 @@ fn dome_at(s: HexSet, f: Heights, cx: float, cy: float) -> (float, float, float)
   (base, rad, res)
 }
 
+// Fit a dome to the same heights, reported the same way, so the two are comparable.
 pub fn roof_dome_fit(s: HexSet, f: Heights) -> RoofFit {
   hi = -1000000.0;
   bx = 0.0; by = 0.0;

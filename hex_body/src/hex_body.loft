@@ -31,6 +31,8 @@ pub struct Joint {
   jt_hi:    float,   // limit high (turns)
 }
 
+// One articulation: its current value and the range it may move in.  The limits travel
+// WITH the joint so a pose cannot be built that the rig would refuse.
 pub fn joint_new(value: float, lo: float, hi: float) -> Joint {
   Joint { jt_value: value, jt_lo: lo, jt_hi: hi }
 }
@@ -168,6 +170,8 @@ pub struct Rig {
   rg_hi:     vector<float>,     // the joint's limit high (turns)
 }
 
+// An empty rig.  Add bones to it; every parallel vector stays the same length, which is
+// what makes bone index the only identity a caller needs.
 pub fn rig_new() -> Rig {
   Rig { rg_parent: [], rg_ox: [], rg_oy: [], rg_oz: [], rg_len: [],
         rg_ax: [], rg_ay: [], rg_az: [], rg_lo: [], rg_hi: [] }
@@ -198,6 +202,7 @@ pub fn rig_bone(r: Rig, parent: integer, ox: float, oy: float, len: float,
   rig_bone3(r, parent, ox, oy, 0.0, len, 0.0, 0.0, 1.0, lo, hi)
 }
 
+// How many bones the rig holds — the bound for any walk over it.
 pub fn rig_count(r: Rig) -> integer { len(r.rg_parent) }
 
 // Does bone `i` lie in the plane the 2-D rig assumes?  ⚠ It is asked with `==`

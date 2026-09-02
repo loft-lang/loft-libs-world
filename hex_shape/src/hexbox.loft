@@ -97,6 +97,10 @@ pub struct Box {
   bx_mir: boolean,     // the flip
 }
 
+// The selection the editor made: a centre cell, a width and depth in hexes, one of the 12
+// rotations and a mirror.  Everything else here derives the building from this one value.
+// ⚠ `rot` is 0..11 in thirty-degree steps, whose even and odd halves are two families
+// rather than rotations of one another — see the note above.
 pub fn box_new(cq: integer, cr: integer, wid: integer, dep: integer,
                rot: integer, mir: boolean) -> Box {
   Box { bx_cq: cq, bx_cr: cr, bx_wid: wid, bx_dep: dep,
