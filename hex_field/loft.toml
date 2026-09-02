@@ -3,7 +3,12 @@ name    = "hex_field"
 version = "0.1.1"
 loft    = ">=0.8"
 
-api_compatible_with  = "0.1.0"   # oldest own release this is a drop-in for
-data_compatible_with = "0.1.0"   # oldest own release whose stored data this reads
+api_compatible_with  = "0.1.1"   # DECLARED BREAK: `EdgeSet` gained `eg_refused`, so a
+                                 # literal `EdgeSet { … }` must now supply it.
+data_compatible_with = "0.1.1"   # DECLARED BREAK: that field reshapes `EdgeSet`, and
+                                 # `HexDoc` + `Stencil` through it, so a store written by
+                                 # 0.1.0 is read at the wrong offsets.  The HXF FILE
+                                 # format is unchanged (same magic, schema 1, 32-byte
+                                 # header) — only the record layout moved.
 [library]
 entry = "src/hex_field.loft"

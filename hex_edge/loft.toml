@@ -3,8 +3,14 @@ name    = "hex_edge"
 version = "0.2.0"
 loft    = ">=0.8"
 
-api_compatible_with  = "0.1.0"   # oldest own release this is a drop-in for
-data_compatible_with = "0.1.0"   # oldest own release whose stored data this reads
+api_compatible_with  = "0.2.0"   # DECLARED BREAK: not a drop-in for 0.1.0 — see below.
+                                 # This package's own API surface is a pure superset; the
+                                 # floor moves because a drop-in must also read what the
+                                 # older release stored, and that is what changed.
+data_compatible_with = "0.2.0"   # DECLARED BREAK: hex_field's `EdgeSet` gained a field, so
+                                 # `EdgeSet` / `HexDoc` / `Stencil` reshape through the
+                                 # dependency and a store written by 0.1.0 is read at the
+                                 # wrong offsets.
 [library]
 entry = "src/hex_edge.loft"
 
