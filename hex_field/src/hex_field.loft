@@ -21,6 +21,34 @@
 // Storage follows the survival guide: a flat pre-allocated vector indexed by a packed
 // key (no tuple-keyed sets, no capture-append-reassign), and loops are held as flat
 // coordinate arrays plus a start index, not vector<vector<>>.
+//
+// ── Using it ─────────────────────────────────────────────────────────────────
+//
+// Four steps, and every routine below serves one of them: make a chunk, fill cells,
+// trace, read the loops.
+//
+//   s = hexset_chunk(-2, -2, 5, 5);   // 1. a bounded window of hex coords
+//   hexdisk_into(s, 0, 0, 1);         // 2. fill it — a disc of radius 1 at (0,0)
+//   hexset_set(s, 0, 0, false);       //    …and punch the middle out
+//
+//   v = trace(s);                     // 3. -> VecMap: closed integer loops
+//   for i in 0..v.vm_loops {          // 4. loop i is [vm_start[i], vm_start[i+1])
+//     for j in (v.vm_start[i] ?? 0)..(v.vm_start[i + 1] ?? 0) {
+//       // (v.vm_k[j], v.vm_m[j]) is a lattice point: x = k*sqrt(3)/2, y = m/2
+//     }
+//   }
+//
+// The output is what a renderer or a mesher wants — closed outlines, holes included,
+// with no float to disagree about.  Scale is applied by the CONSUMER at the last
+// moment (see the README), so the same map serves a minimap and a mesh.
+//
+// The rest of the surface is the same four steps at more resolutions: `Heights` and
+// `Labels` attach a value per cell, `EdgeSet` and `Layers` attach one per edge, and
+// the `hexset_*`/`edgeset_*`/`layers_*` readers are how a consumer asks a chunk what
+// window it covers without knowing how it is stored.
+//
+// Worked examples: `tests/07-worked-examples.loft` (@HXL-001 … @HXL-005) — start at
+// @HXL-001, which writes down a single hex's six lattice points in full.
 
 // Occupancy over a BOUNDED CHUNK of hex coords: q in [hs_q0 .. hs_q0+hs_w),
 // r in [hs_r0 .. hs_r0+hs_h).  Deliberately a chunk, not a global graph — every
@@ -59,9 +87,14 @@ pub fn hexset_new(w: integer) -> HexSet {
   hexset_chunk(0 - w, 0 - w, 2 * w + 1, 2 * w + 1)
 }
 
+// Step 1's window, read back.  A consumer that did not build the chunk asks it where it
+// starts and how far it runs, rather than carrying those four numbers alongside it.
 pub fn hexset_q0(s: HexSet) -> integer { s.hs_q0 }
+// The window's first `r`.
 pub fn hexset_r0(s: HexSet) -> integer { s.hs_r0 }
+// How many `q` columns the window spans.
 pub fn hexset_w(s: HexSet) -> integer { s.hs_w }
+// How many `r` rows the window spans.
 pub fn hexset_h(s: HexSet) -> integer { s.hs_h }
 
 fn hs_index(s: HexSet, q: integer, r: integer) -> integer {
@@ -71,12 +104,16 @@ fn hs_index(s: HexSet, q: integer, r: integer) -> integer {
   dr * s.hs_w + dq
 }
 
+// Step 2 read: is this cell filled?  Outside the window is `false`, not an error — a
+// caller may probe a neighbour that lies past the edge without guarding every call.
 pub fn hexset_get(s: HexSet, q: integer, r: integer) -> boolean {
   i = hs_index(s, q, r);
   if i < 0 { return false; }
   s.hs_cells[i] ?? false
 }
 
+// Step 2 write: fill or clear one cell.  Clearing an interior cell is how a hole is made,
+// and `trace` will emit it as its own negative loop.  Outside the window it does nothing.
 pub fn hexset_set(s: HexSet, q: integer, r: integer, on: boolean) {
   i = hs_index(s, q, r);
   if i < 0 { return; }
@@ -86,6 +123,8 @@ pub fn hexset_set(s: HexSet, q: integer, r: integer, on: boolean) {
   if !on && had { s.hs_count = s.hs_count - 1; }
 }
 
+// How many cells are filled.  The cheap half of the area round-trip: `12 * hexset_count`
+// is what the traced outline must shoelace to, so this is the number a check compares.
 pub fn hexset_count(s: HexSet) -> integer { s.hs_count }
 
 // ── lattice + adjacency (integers only) ──────────────────────────────────────
@@ -93,6 +132,7 @@ pub fn hexset_count(s: HexSet) -> integer { s.hs_count }
 // Hex (q,r) -> exact integer lattice centre.  Matches hex_grid::hex_to_px scaled by
 // (sqrt(3)/2, 1/2) — verified against the library before porting.
 pub fn lattice_k(q: integer, r: integer) -> integer { 2 * q + (r & 1) }
+// The lattice `m` of hex (q,r) — the y half of the pair `lattice_k` gives the x of.
 pub fn lattice_m(_q: integer, r: integer) -> integer { 3 * r }
 
 // Neighbour (q,r) in direction d, odd-r offset.  Same SET as hex_grid::hex_neighbor.
@@ -107,6 +147,7 @@ pub fn nb_q(q: integer, r: integer, d: integer) -> integer {
   q - 1
 }
 
+// The neighbour's `r`, the companion of `nb_q`.  Walk both to step across the field.
 pub fn nb_r(_q: integer, r: integer, d: integer) -> integer {
   if d == 0 { return r; }
   if d == 1 { return r; }
@@ -133,6 +174,8 @@ pub struct Heights {
   hz_z:  vector<float>,
 }
 
+// A height per cell over the same window shape a HexSet uses, so the two index alike.
+// Attach one when the field needs elevation as well as occupancy; every cell starts 0.0.
 pub fn heights_new(q0: integer, r0: integer, w: integer, h: integer) -> Heights {
   z: vector<float> = [];
   for _ in 0..w * h { z += [0.0]; }
@@ -146,11 +189,13 @@ fn hz_index(f: Heights, q: integer, r: integer) -> integer {
   dr * f.hz_w + dq
 }
 
+// Set one cell's height.  Outside the window it does nothing, matching `hexset_set`.
 pub fn height_set(f: Heights, q: integer, r: integer, z: float) {
   i = hz_index(f, q, r);
   if i >= 0 { f.hz_z[i] = z; }
 }
 
+// One cell's height, or 0.0 outside the window — probe a neighbour without guarding.
 pub fn height_get(f: Heights, q: integer, r: integer) -> float {
   i = hz_index(f, q, r);
   if i < 0 { return 0.0; }
@@ -173,6 +218,8 @@ pub struct Labels {
   lb_v:  vector<integer>,
 }
 
+// An integer label per cell over a HexSet-shaped window: region ids, materials, owners.
+// Unset cells read -1, which is why -1 is not a usable label.
 pub fn labels_new(q0: integer, r0: integer, w: integer, h: integer) -> Labels {
   v: vector<integer> = [];
   for _ in 0..w * h { v += [-1]; }
@@ -186,11 +233,13 @@ fn lb_index(f: Labels, q: integer, r: integer) -> integer {
   dr * f.lb_w + dq
 }
 
+// Label one cell.  Outside the window it does nothing.
 pub fn label_set(f: Labels, q: integer, r: integer, v: integer) {
   i = lb_index(f, q, r);
   if i >= 0 { f.lb_v[i] = v; }
 }
 
+// One cell's label, or -1 when unset or outside the window.
 pub fn label_get(f: Labels, q: integer, r: integer) -> integer {
   i = lb_index(f, q, r);
   if i < 0 { return -1; }
@@ -240,6 +289,8 @@ pub fn corner_k(i: integer) -> integer {
   1
 }
 
+// Corner i's lattice `m` offset from the centre — the companion of `corner_k`.  Together
+// they are the six offsets every traced vertex is built from, in the order `trace` emits.
 pub fn corner_m(i: integer) -> integer {
   if i == 0 { return 2; }
   if i == 1 { return 1; }
@@ -262,6 +313,8 @@ fn edge_of(dk: integer, dm: integer) -> integer {
 
 // ── candidate placement routines ─────────────────────────────────────────────
 
+// Steps 1 and 2 in one call: a window of radius `w` holding a disc of radius `n`.  The
+// quickest way to get something traceable when the shape itself is not the point.
 pub fn form_hexdisk(w: integer, n: integer) -> HexSet {
   s = hexset_new(w);
   for r in s.hs_r0..s.hs_r0 + s.hs_h {
@@ -352,6 +405,8 @@ pub fn form_octagon(w: integer, apothem: float) -> HexSet {
 
 // ── the tracer: cells -> exact integer loops ─────────────────────────────────
 
+// How many filled cells touch an empty one or the window edge — the form's perimeter in
+// cells.  Useful before tracing, when a cost or a bound depends on the boundary size.
 pub fn wall_count(s: HexSet) -> integer {
   n = 0;
   for r in s.hs_r0..s.hs_r0 + s.hs_h {
@@ -1550,6 +1605,8 @@ pub fn edge_set_mat(e: EdgeSet, qa: integer, ra: integer, qb: integer, rb: integ
 // Example: @HXL-009
 pub fn edgeset_refused(e: EdgeSet) -> integer { e.eg_refused }
 
+// The material on the edge between two neighbouring cells, or 0 when there is none.
+// Edges carry what cells cannot: a wall belongs BETWEEN two hexes, not inside one.
 pub fn edge_mat(e: EdgeSet, qa: integer, ra: integer, qb: integer, rb: integer) -> integer {
   i = eg_index(e, qa, ra, qb, rb);
   if i < 0 { return 0; }
@@ -1581,6 +1638,7 @@ pub fn edge_set_surf(e: EdgeSet, qa: integer, ra: integer, qb: integer, rb: inte
   e.eg_surf[i] = (surf as i32?) ?? 0;
 }
 
+// The surface on that same edge — the finish, where `edge_mat` is the substance.
 pub fn edge_surf(e: EdgeSet, qa: integer, ra: integer, qb: integer, rb: integer) -> integer {
   i = eg_index(e, qa, ra, qb, rb);
   if i < 0 { return 0; }
@@ -1638,9 +1696,13 @@ pub fn edgeset_digest(e: EdgeSet) -> integer {
 // to read the vectors, which would make the field layout contract.
 pub fn edgeset_bytes(e: EdgeSet) -> integer { size(e.eg_mat) + size(e.eg_surf) }
 
+// The edge layer's window, read back, exactly as `hexset_q0` reads a cell layer's.
 pub fn edgeset_q0(e: EdgeSet) -> integer { e.eg_q0 }
+// The edge layer's first `r`.
 pub fn edgeset_r0(e: EdgeSet) -> integer { e.eg_r0 }
+// How many `q` columns the edge layer spans.
 pub fn edgeset_w(e: EdgeSet) -> integer { e.eg_w }
+// How many `r` rows the edge layer spans.
 pub fn edgeset_h(e: EdgeSet) -> integer { e.eg_h }
 
 // Every non-zero slot in the layer, INCLUDING the halo.  edgeset_count walks
@@ -1695,17 +1757,26 @@ pub struct Layers {
   ly_vals:  vector<integer>,
 }
 
+// Several named integer layers over one window, added as they are needed.  Reach for it
+// instead of many `Labels` when the set of layers is the consumer's to decide.
 pub fn layers_new(q0: integer, r0: integer, w: integer, h: integer) -> Layers {
   ns: vector<text> = [];
   vs: vector<integer> = [];
   Layers { ly_q0: q0, ly_r0: r0, ly_w: w, ly_h: h, ly_names: ns, ly_vals: vs }
 }
 
+// How many layers exist, and the name of layer i — enough to walk them without knowing
+// which names a consumer chose.
 pub fn layer_count(ls: Layers) -> integer { len(ls.ly_names) }
+// Layer i's name, or "" — walk `0..layer_count` to list them.
 pub fn layer_name(ls: Layers, i: integer) -> text { ls.ly_names[i] ?? "" }
+// The layer stack's window, read back, as `hexset_q0` reads a cell layer's.
 pub fn layers_q0(ls: Layers) -> integer { ls.ly_q0 }
+// The layer stack's first `r`.
 pub fn layers_r0(ls: Layers) -> integer { ls.ly_r0 }
+// How many `q` columns the layer stack spans.
 pub fn layers_w(ls: Layers) -> integer { ls.ly_w }
+// How many `r` rows the layer stack spans.
 pub fn layers_h(ls: Layers) -> integer { ls.ly_h }
 
 // Index of a named layer, or -1.  Names are the consumer's vocabulary; the
@@ -1736,12 +1807,15 @@ fn ly_slot(ls: Layers, li: integer, q: integer, r: integer) -> integer {
   li * ls.ly_w * ls.ly_h + dr * ls.ly_w + dq
 }
 
+// Write one cell of a named layer.  An unknown name does nothing rather than creating a
+// layer, so a typo loses the write instead of silently growing the stack.
 pub fn layer_set(ls: Layers, name: text, q: integer, r: integer, v: integer) {
   i = ly_slot(ls, layer_index(ls, name), q, r);
   if i < 0 { return; }
   ls.ly_vals[i] = v;
 }
 
+// Read one cell of a named layer; 0 when the name or the cell is not there.
 pub fn layer_get(ls: Layers, name: text, q: integer, r: integer) -> integer {
   i = ly_slot(ls, layer_index(ls, name), q, r);
   if i < 0 { return 0; }
@@ -1755,6 +1829,7 @@ pub fn layer_get_at(ls: Layers, li: integer, q: integer, r: integer) -> integer 
   ls.ly_vals[i] ?? 0
 }
 
+// Write by layer INDEX, for a loop that resolved the name once with `layer_index`.
 pub fn layer_set_at(ls: Layers, li: integer, q: integer, r: integer, v: integer) {
   i = ly_slot(ls, li, q, r);
   if i < 0 { return; }
