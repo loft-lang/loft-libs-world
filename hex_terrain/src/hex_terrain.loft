@@ -740,16 +740,30 @@ fn th_shape_river(t: Terrain, p: TerrainParams, vx: vector<float>, vy: vector<fl
     kx = vx[k] ?? 0.0;
     ky = vy[k] ?? 0.0;
     kv = vv[k] ?? 1.0;
+    // `sqrt` answers `float?` (a negative argument has no real root) and so does a
+    // division, so every value below that flows from one is nullable until it is
+    // discharged.  Left undischarged they reach the `vector<float>` stores at the
+    // bottom of the loop, where a null would be written as the float null sentinel
+    // and read back as a depth or a width -- so each is discharged at the point it
+    // is created, the same way `kx` / `ky` / `kv` are one line up.
+    //
+    // An accumulation is a count of drained tiles, so `kv` is never negative and
+    // this root always exists; 0.0 is the value a zero accumulation would give.
+    skv = sqrt(kv) ?? 0.0;
     hx = terrain_blend_h(t, p, kx + e, ky) - terrain_blend_h(t, p, kx - e, ky);
     hy = terrain_blend_h(t, p, kx, ky + e) - terrain_blend_h(t, p, kx, ky - e);
     sl = (sqrt(hx * hx + hy * hy) / (2.0 * e)) ?? 0.0;
-    fs = min(1.0, sl / 0.05);
+    // Both divisors below are non-zero constants, so neither quotient can be null;
+    // the fallbacks say what a null WOULD mean -- a flat slope, and no drop below
+    // the reference height -- rather than being a value picked to silence a check.
+    fs = min(1.0, (sl / 0.05) ?? 0.0);
     h0 = terrain_blend_h(t, p, kx, ky);
-    base = 3.0 + 1.7 * sqrt(kv);
-    dep = base * (0.45 + 0.55 * fs) + base * 0.90 * exp(0.0 - max(h0, 0.0) / 14.0);
+    fall = (max(h0, 0.0) / 14.0) ?? 0.0;
+    base = 3.0 + 1.7 * skv;
+    dep = base * (0.45 + 0.55 * fs) + base * 0.90 * exp(0.0 - fall);
     dd += [min(p.tp_carve_max, dep)];
-    vw += [min(p.tp_valley_max, (24.0 + 11.0 * sqrt(kv)) * (1.6 - 0.6 * fs))];
-    ww += [min(26.0, 2.2 + 1.35 * sqrt(kv))];
+    vw += [min(p.tp_valley_max, (24.0 + 11.0 * skv) * (1.6 - 0.6 * fs))];
+    ww += [min(26.0, 2.2 + 1.35 * skv)];
     x0 = min(x0, kx);
     y0 = min(y0, ky);
     x1 = max(x1, kx);
