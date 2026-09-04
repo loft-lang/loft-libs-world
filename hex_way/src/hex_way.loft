@@ -26,6 +26,9 @@ use hex_edge;
 pub const WAY_STRAIGHT = 1;
 pub const WAY_ARC      = 2;
 
+// A path made of straight and arc segments, stored as parallel vectors: a kind per segment,
+// six numbers per segment, and the segment count.  `track_new` makes an empty one; the index of
+// a segment is its identity.
 pub struct Track {
   tk_kind: vector<integer>,
   tk_p:    vector<float>,      // 6 per segment

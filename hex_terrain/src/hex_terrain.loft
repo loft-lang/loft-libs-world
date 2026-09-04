@@ -940,6 +940,9 @@ pub fn terrain_rivers(t: Terrain, types: vector<TerrainType>, p: TerrainParams) 
 
 // ── Fine sampling (the game-facing surface) ────────────────────────────────
 
+// What the terrain is at one fine point: the carved height, the winning land material, the
+// water classification (dry, river, sea or lake) and the distance to the nearest river course.
+// Answered by `terrain_sample`, a pure function of the terrain and the point.
 pub struct TerrainSample {
   ts_h:     float,    // carved fine height
   ts_mat:   integer,  // winning land material

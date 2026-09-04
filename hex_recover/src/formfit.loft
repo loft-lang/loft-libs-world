@@ -71,6 +71,9 @@ pub fn fit_chunk(f: Form) -> HexSet {
 pub const REGIME_R1 = 1;
 pub const REGIME_R2 = 2;
 
+// The result of recovering a form from a drawn field: which regime applied, the recovered form
+// (meaningful only in the exact regime), the smallest unexplained-cell count otherwise, and how
+// many candidates matched — more than one means the level is ambiguous.
 pub struct Rebuilt {
   rb_regime:  integer,   // REGIME_R1 (exact, unique) or REGIME_R2 (no grammar form draws this)
   rb_form:    Form,      // the recovered model — meaningful only in R1
@@ -214,6 +217,9 @@ pub struct IdxEntry {
   ix_form:   Form,
 }
 
+// The candidate forms `rebuild` matches against, indexed by the digest of each form's drawn
+// field, with the counts that describe the index: entries, digest collisions (a law F failure)
+// and the draws it cost to build.  Made by `index_build`.
 pub struct RecoveryIndex {
   ri_map:        hash<IdxEntry[ix_digest]>,
   ri_count:      integer,   // entries indexed

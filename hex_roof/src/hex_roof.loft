@@ -311,6 +311,9 @@ pub const ROOF_CONE    = 2;
 pub const ROOF_DOME    = 3;   // rf_z = base, rf_slope = sphere radius
 pub const ROOF_RIDGE   = 4;   // rf_x,rf_y = one end; rf_x2,rf_y2 = the other
 
+// A roof primitive fitted to a footprint: its kind (plane, cone, dome or ridge), the numbers
+// that kind reads (a plane's coefficients, a cone's centre and apex, a ridge's two ends), the
+// slope, and the worst residual the fit left over the footprint.
 pub struct RoofFit {
   rf_kind:  integer,
   rf_x:     float,     // plane: a       cone: centre x

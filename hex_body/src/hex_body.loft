@@ -157,6 +157,9 @@ pub fn joint_residual(j: Joint, value: float) -> float {
 // ⚠ `rig_world_seg` IS UNCHANGED.  Re-expressing it through the 3-D path would
 // have moved every existing consumer's numbers by an ulp to buy nothing.
 
+// A skeleton of bones as parallel vectors, one entry per bone: its parent, the joint's offset in
+// the parent's frame, the bone's length along its own +x, the revolute axis, and the joint's
+// limits in turns.  A planar rig has zero z offsets and the (0,0,1) axis throughout.
 pub struct Rig {
   rg_parent: vector<integer>,   // parent bone index; -1 for the root
   rg_ox:     vector<float>,     // joint offset in the parent's frame (x)

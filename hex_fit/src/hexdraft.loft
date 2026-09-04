@@ -43,6 +43,8 @@ use hex_recover;
 use hex_draw;
 use hex_shape;
 
+// A stencil description: the form, plus the linework run it carries — its direction (or -1 for
+// none), its anchor in triangle coordinates and its period count.  Made by `draft_new`.
 pub struct Draft {
   df_form: Form,
   df_d:    integer,     // embedded run direction, or -1 for none

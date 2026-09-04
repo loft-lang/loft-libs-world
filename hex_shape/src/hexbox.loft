@@ -88,6 +88,9 @@ pub fn box_sin(n: integer) -> float {
 // Example: @HXS-006
 pub fn box_orbit(rot: integer) -> integer { (((rot % BOX_ROT) + BOX_ROT) % BOX_ROT) % 2 }
 
+// The editor's selection of a building footprint: an anchor cell, a width and depth in hex
+// steps, one of the twelve thirty-degree rotations and a mirror flag.  Everything else in this
+// library derives the building from this one value.
 pub struct Box {
   bx_cq:  integer,     // anchor cell
   bx_cr:  integer,
