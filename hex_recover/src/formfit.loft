@@ -407,8 +407,10 @@ pub fn rebuild_construct(cells: HexSet) -> Rebuilt {
   for ci in 0..nh {
     ak = pk_k(hk[ci] ?? 0);
     am = pk_m(hk[ci] ?? 0);
-    bk = pk_k(hk[(ci + 1) % nh] ?? 0);
-    bm = pk_m(hk[(ci + 1) % nh] ?? 0);
+    // `% nh` types nullable (a zero divisor answers null); `nh >= 3` is checked above,
+    // so `?? 0` names an unreachable index rather than a chosen one.
+    bk = pk_k(hk[(ci + 1) % nh ?? 0] ?? 0);
+    bm = pk_m(hk[(ci + 1) % nh ?? 0] ?? 0);
     sh = side_heading(bk - ak, bm - am);
     if sh < 0 { bad = true; }
     else {
@@ -422,7 +424,7 @@ pub fn rebuild_construct(cells: HexSet) -> Rebuilt {
   }
   turns: vector<integer> = [];
   for ti in 0..nh {
-    d = head_norm((hs[(ti + 1) % nh] ?? 0) - (hs[ti] ?? 0));
+    d = head_norm((hs[(ti + 1) % nh ?? 0] ?? 0) - (hs[ti] ?? 0));
     if d == 0 { d = 12; }
     turns += [d];
   }

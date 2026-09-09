@@ -327,7 +327,7 @@ pub fn poly_holds(vk: vector<integer>, vm: vector<integer>,
   for ei in 0..n {
     ak = vk[ei] ?? 0;
     am = vm[ei] ?? 0;
-    ej = (ei + 1) % n;
+    ej = (ei + 1) % n ?? 0;      // n >= 3 here, so the null arm is unreachable
     bk = vk[ej] ?? 0;
     bm = vm[ej] ?? 0;
     crs = (bk - ak) * (pm - am) - (bm - am) * (pk - ak);
@@ -340,7 +340,7 @@ pub fn poly_holds(vk: vector<integer>, vm: vector<integer>,
   for ci in 0..n {
     ck = vk[ci] ?? 0;
     cm = vm[ci] ?? 0;
-    cj = (ci + 1) % n;
+    cj = (ci + 1) % n ?? 0;
     dk = vk[cj] ?? 0;
     dm = vm[cj] ?? 0;
     if (cm > pm) != (dm > pm) {

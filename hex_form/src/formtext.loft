@@ -51,14 +51,16 @@ pub fn form_write(f: Form, name: text) -> text {
 fn shift_lens(lens: vector<integer>, s: integer) -> vector<integer> {
   n = len(lens);
   out: vector<integer> = [];
-  for li in 0..n { out += [lens[(li + s) % n] ?? 0]; }
+  // `% n` types nullable (a zero divisor answers null); the loop does not run when
+  // `n` is 0, so `?? 0` names an unreachable index rather than a chosen one.
+  for li in 0..n { out += [lens[(li + s) % n ?? 0] ?? 0]; }
   out
 }
 
 fn shift_turns(turns: vector<integer>, s: integer) -> vector<integer> {
   n = len(turns);
   out: vector<integer> = [];
-  for ti in 0..n { out += [turns[(ti + s) % n] ?? 0]; }
+  for ti in 0..n { out += [turns[(ti + s) % n ?? 0] ?? 0]; }
   out
 }
 
