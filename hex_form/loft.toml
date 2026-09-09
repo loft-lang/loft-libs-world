@@ -1,6 +1,6 @@
 [package]
 name    = "hex_form"
-version = "0.1.2"
+version = "0.1.3"
 loft    = ">=0.8"
 
 api_compatible_with  = "0.1.2"   # DECLARED BREAK: not a drop-in for 0.1.0 — see below.
