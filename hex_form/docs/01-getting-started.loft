@@ -1,0 +1,169 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @NAME: Getting Started
+// @TITLE: A closed form with four right angles and four equal sides — that is not a square.
+//
+// `hex_form` is the turtle model of a shape on the hex lattice: a start heading, then a
+// length and a turn per side, exact in `ℤ²`. A form that closes bounds a region you can fill,
+// and every form has a canonical text it writes and reads back byte-for-byte — which is what
+// makes a project file diffable and an undo history exact.
+//
+// It is not the cell set and not the lattice. `hex_field` holds occupancy and traces outlines
+// back out of it; `hex_grid` owns coordinates and neighbours. Reach for `hex_form` when the
+// shape is the thing you want to store, compare or transform — a house plan, a footprint, an
+// authored outline — rather than the cells it happens to cover.
+//
+// Headings live on `H₁₂`: twelve directions, 30° apart, counter-clockwise from due east.
+// EVEN headings step to an edge neighbour, ODD ones point at a vertex.
+use hex_form;
+
+fn main() {
+  // Six sides, turning two twelfths (60°) at each — a hexagon.
+  hexa = hex_form::form_new(0, [1, 1, 1, 1, 1, 1], [2, 2, 2, 2, 2, 2]);
+  (ck, cm) = hex_form::form_close(hexa);
+
+  println("sides    : {hex_form::form_sides(hexa)}");
+  println("turn sum : {hex_form::form_turn_sum(hexa)} of {hex_form::TURN_FULL}");
+  println("ends at  : ({ck}, {cm})");
+  println("closes   : {hex_form::form_closes(hexa)}");
+
+  assert(hex_form::form_turn_sum(hexa) == hex_form::TURN_FULL, "one full revolution");
+  assert(ck == 0 and cm == 0, "and the walk comes back to where it started");
+  assert(hex_form::form_closes(hexa), "so the form closes");
+
+  // Every section below is a function, and `main` calls each one. A section `main` does not
+  // call still COMPILES — so a renamed API is caught, and the assertions that check the
+  // example is RIGHT never run.
+  there_is_no_square_in_a_hex_lattice();
+  closing_needs_both_halves();
+  a_heading_is_never_used_raw();
+  the_shapes_that_have_a_closed_count();
+}
+
+// That prints:
+//
+//     sides    : 6
+//     turn sum : 12 of 12
+//     ends at  : (0, 0)
+//     closes   : true
+//
+// ## The one that bites: four right angles and four equal sides is not a square
+//
+// Two headings ninety degrees apart do exist — 0 and 3 — so a turtle cycle CAN turn a right
+// angle, four times, and close. Give every side the same length count and you get a form that
+// is a square by every number you wrote down.
+//
+// It is not one. **An edge step and a vertex step are different lengths**, and exactly so:
+// `head_n2_4` answers `12` for an even heading and `36` for an odd one, so a vertex step is
+// √3 times an edge step. Alternate them and the figure's sides alternate in the same ratio.
+//
+// This is a property of the lattice, not of this table. The perpendicular of `(k, m)` is
+// `(-m, 3k)`, whose squared length is exactly `3 ×` the original — so no choice of headings
+// gives a rectangle whose two sides are counted in the same unit. **There is no square
+// sublattice of a hexagonal lattice**; a lattice cannot carry both 4-fold and 6-fold symmetry.
+//
+// Nothing in the API can warn you. `form_closes` says `true`, because it IS a closed form.
+// What is false is the reader's picture of it.
+
+fn there_is_no_square_in_a_hex_lattice() {
+  // Four sides, four right-angle turns, every side two steps long.
+  sq = hex_form::form_new(0, [2, 2, 2, 2], [3, 3, 3, 3]);
+  (k, m) = hex_form::form_close(sq);
+
+  assert(hex_form::form_closes(sq), "it closes — the counts are all consistent");
+  assert(k == 0 and m == 0, "…and returns exactly to its origin");
+
+  // …and its sides are not the same length.
+  assert(hex_form::head_n2_4(0) == 12, "a step along heading 0 has 4·len² = 12");
+  assert(hex_form::head_n2_4(3) == 36, "a step along heading 3 has 36 — three times over");
+  assert(hex_form::head_is_edge(0), "heading 0 steps to an edge neighbour");
+  assert(!hex_form::head_is_edge(3), "heading 3 points at a vertex");
+
+  // The lattice fact underneath it, at the vector level.
+  (ek, em) = hex_form::head_step(0);
+  pk = hex_form::perp_k(ek, em);
+  pm = hex_form::perp_m(ek, em);
+  assert(hex_form::vec_n2_4(pk, pm) == 3 * hex_form::vec_n2_4(ek, em),
+         "the perpendicular is EXACTLY three times as long, squared — so never equal");
+
+  println("square   : closes={hex_form::form_closes(sq)}, but side lengths are {hex_form::head_n2_4(0)} and {hex_form::head_n2_4(3)}");
+}
+
+// ## Closing needs both halves, and one of them is cheap
+//
+// `form_closes` asks two independent questions: do the turns add to one full revolution, and
+// does the walk return to its origin? Neither implies the other.
+//
+// `form_turn_sum` is the cheap half — it reads the turn list and generates no coordinates, so
+// it is the test to reach for while a form is being edited. `form_close` is the other half and
+// answers where the walk actually ended, which is the useful number when it did not close: it
+// tells you by how much you missed.
+
+fn closing_needs_both_halves() {
+  // Turns are perfect; one side is too long, so the walk does not return.
+  bad = hex_form::form_new(0, [3, 1, 1, 1, 1, 1], [2, 2, 2, 2, 2, 2]);
+  (bk, bm) = hex_form::form_close(bad);
+
+  assert(hex_form::form_turn_sum(bad) == hex_form::TURN_FULL, "the cheap half passes…");
+  assert(bk != 0 or bm != 0, "…and the walk still ends ({bk}, {bm}) away from home");
+  assert(!hex_form::form_closes(bad), "so it does not close");
+
+  // And a form with too few sides cannot bound a region at all.
+  thin = hex_form::form_new(0, [1, 1], [6, 6]);
+  assert(!hex_form::form_closes(thin), "fewer than three sides bounds nothing");
+
+  println("closing  : turns sum {hex_form::form_turn_sum(bad)} yet the walk ends ({bk}, {bm}) out");
+}
+
+// ## A heading is never used raw
+//
+// A running heading is `h0 + Σ turns`, and turns range over -5..6 — so it leaves `0..11`
+// constantly. A four-sided cycle turning 3 each time reaches 12 on its last side.
+//
+// `head_norm` exists because both ways of getting that wrong are SILENT in loft: a negative
+// vector index reads from the END of the vector rather than answering null, and an index at or
+// past the length answers null rather than wrapping. Each hands back a plausible wrong
+// direction. Every table lookup in this package goes through `head_norm` first, and yours
+// should too if you do heading arithmetic of your own.
+
+fn a_heading_is_never_used_raw() {
+  assert(hex_form::head_norm(12) == 0, "one full revolution is where you started");
+  assert(hex_form::head_norm(-1) == 11, "and -1 is the heading before it, not an end-relative index");
+  assert(hex_form::head_norm(25) == 1, "two revolutions and one step");
+
+  // `form_heading` does the arithmetic for you, already normalised.
+  hexa = hex_form::form_new(0, [1, 1, 1, 1, 1, 1], [2, 2, 2, 2, 2, 2]);
+  assert(hex_form::form_heading(hexa, 0) == 0, "side 0 runs in the start heading");
+  assert(hex_form::form_heading(hexa, 3) == 6, "side 3 has taken three turns of 2 — due west");
+
+  println("headings : head_norm(-1)={hex_form::head_norm(0 - 1)}, and side 3 of the hexagon runs {hex_form::form_heading(hexa, 3)}");
+}
+
+// ## The shapes that have a closed count
+//
+// Three families have an exact cell count as a formula rather than a fill-and-count, which is
+// what lets a caller size a buffer, or check a fill against arithmetic instead of against
+// another run of the same code.
+
+fn the_shapes_that_have_a_closed_count() {
+  assert(hex_form::tri_cells(2) == 6, "a triangle of side 2: (n+1)(n+2)/2");
+  assert(hex_form::rhombus_cells(2, 3) == 12, "a rhombus: (a+1)(b+1)");
+  assert(hex_form::hexagon_cells(2) == 19, "a hexagon of radius 2: 3n² + 3n + 1");
+
+  // The hexagon formula is the same 19 `hex_field`'s radius-2 disk fills — the two halves of
+  // the family agree by arithmetic, not by having been run against each other.
+  assert(hex_form::hexagon_cells(0) == 1, "radius 0 is one cell");
+  assert(hex_form::hexagon_cells(1) == 7, "radius 1 is a centre and its six neighbours");
+
+  println("counts   : tri(2)={hex_form::tri_cells(2)} rhombus(2,3)={hex_form::rhombus_cells(2, 3)} hexagon(2)={hex_form::hexagon_cells(2)}");
+}
+
+// ## Where to go next
+//
+// - `README.md` and `USAGE.md` — the worked guide, with every example pointed at a passing
+//   test, plus the canonical text and its five rules.
+// - `tests/02-worked-examples.loft` — `@HXF-001` … `@HXF-007`, including the five ways a
+//   hand-written canonical text parses and means something else.
+// - `tests/01-hex-form.loft` — the round trip this package exists to make exact.
+// - `hex_grid` for the coordinates, `hex_field` for turning a form into cells and back out as
+//   an outline, and `hex_recover` for rebuilding a form from a cell set.

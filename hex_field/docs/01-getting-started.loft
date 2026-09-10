@@ -1,0 +1,176 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @NAME: Getting Started
+// @TITLE: An outline that provably describes its cell set — and the one error that guarantee cannot see.
+//
+// `hex_field` is occupancy over a bounded window of hex coordinates, plus the tracer that
+// turns a set of filled cells into closed loops whose vertices are exact LATTICE INTEGERS.
+// No floats in the geometry, no epsilon compare, so no drift — which is what makes exact
+// diffs, exact undo and exact rotation possible.
+//
+// It is not the coordinate system: `hex_grid` owns conversions, neighbours and distance.
+// It is not the world either — `hex_world` does chunked sparse addressing across many
+// windows, and `hex_terrain` layers heights and materials. Reach for `hex_field` when you
+// have a set of cells and need its OUTLINE, or a small map you can hand to a renderer.
+//
+// Every threshold here is dimensionless — hex steps and lattice units. The package never
+// states a metre; a consumer picks metres-per-hex and converts once, at its own edge.
+use hex_field;
+
+fn main() {
+  s = hex_field::hexset_chunk(0, 0, 5, 5);
+  hex_field::hexset_set(s, 2, 2, true);
+
+  v = hex_field::trace(s);
+  code = hex_field::validate(v, hex_field::hexset_count(s));
+
+  println("cells    : {hex_field::hexset_count(s)}");
+  println("outlines : {hex_field::outline_count(v)}");
+  println("shoelace : {hex_field::shoelace_total(v)}");
+  println("validate : {code}");
+
+  assert(hex_field::hexset_count(s) == 1, "one cell filled");
+  assert(hex_field::shoelace_total(v) == 12, "a single hex shoelaces to exactly 12");
+  assert(code == 0, "0 means the map is safe to hand to a renderer");
+
+  // Every section below is a function, and `main` calls each one. A section `main` does not
+  // call still COMPILES — so a renamed API is caught, and the assertions that check the
+  // example is RIGHT never run.
+  the_window_clips_and_says_nothing();
+  the_area_round_trip_is_the_guarantee();
+  a_hole_is_a_loop_that_runs_backwards();
+  several_forms_in_one_window_are_legal();
+}
+
+// That prints:
+//
+//     cells    : 1
+//     outlines : 1
+//     shoelace : 12
+//     validate : 0
+//
+// ## The one that bites: the window CLIPS, silently, and `validate` still says 0
+//
+// A `HexSet` is a bounded window — `hexset_chunk(q0, r0, w, h)`. Writing outside it does
+// nothing at all, and reading outside it answers `false`. Both are deliberate: a caller
+// probing a neighbour past the edge should not have to guard every call.
+//
+// The cost is that a form larger than its window is quietly truncated. `hexset_count` reports
+// what landed, not what you asked for, and there is no diagnostic anywhere.
+//
+// ⚠ **And the package's load-bearing guarantee cannot catch it.** The area round-trip proves
+// the outline matches THE CELLS THAT ARE THERE. A truncated form is a perfectly consistent
+// smaller form, so `validate` answers 0 and means it. The check that catches this is yours:
+// compare `hexset_count` against what you meant to fill, or size the window first.
+
+fn the_window_clips_and_says_nothing() {
+  w = hex_field::hexset_chunk(0, 0, 3, 3);
+  hex_field::hexset_set(w, 1, 1, true);
+  hex_field::hexset_set(w, 99, 99, true);        // outside the window — a no-op
+
+  assert(hex_field::hexset_count(w) == 1, "two writes asked for, one landed");
+  assert(!hex_field::hexset_get(w, 99, 99), "and reading outside is false, not an error");
+  assert(hex_field::hexset_get(w, 1, 1), "the one inside is there");
+
+  // The same clip on a real form: one disk, two window sizes.
+  small = hex_field::hexset_chunk(0, 0, 3, 3);
+  hex_field::hexdisk_into(small, 1, 1, 3);
+  big = hex_field::hexset_chunk(0, 0, 15, 15);
+  hex_field::hexdisk_into(big, 7, 7, 3);
+
+  assert(hex_field::hexset_count(small) == 9, "a radius-3 disk in a 3x3 window: 9 cells");
+  assert(hex_field::hexset_count(big) == 37, "…and 37 where it fits — a quarter of it was lost");
+
+  sv = hex_field::trace(small);
+  assert(hex_field::validate(sv, hex_field::hexset_count(small)) == 0,
+         "and validate says 0 — the outline of the TRUNCATED form is correct");
+
+  println("clip     : disk r=3 is {hex_field::hexset_count(small)} cells in a 3x3 window, {hex_field::hexset_count(big)} where it fits");
+}
+
+// ## The area round-trip is the guarantee, and it is exact
+//
+// Every hex centre and every corner lies on `x = k·√3/2`, `y = m/2` for integer `k, m`. So
+// the shoelace of a traced outline is an exact integer, and one hex is exactly `12`:
+//
+//     Σ integer shoelace over all loops  ==  12 × (number of hexes)
+//
+// **Cell count and traced outline can therefore never disagree.** That is what makes the
+// result safe to hand to a mesh builder — not a tolerance, an identity. `validate` checks it
+// as code 4, along with five other refusals; `0` is the only good answer.
+
+fn the_area_round_trip_is_the_guarantee() {
+  d = hex_field::form_hexdisk(9, 2);
+  v = hex_field::trace(d);
+  n = hex_field::hexset_count(d);
+
+  assert(n == 19, "a radius-2 hex disk is 19 cells");
+  assert(hex_field::shoelace_total(v) == 12 * n, "228 == 12 x 19, exactly — no epsilon");
+  assert(hex_field::validate(v, n) == 0, "so validate passes");
+
+  // Lie about the cell count and code 4 is what comes back.
+  assert(hex_field::validate(v, n + 1) == 4, "claim one cell more and the round-trip refuses it");
+
+  println("area     : {hex_field::shoelace_total(v)} == 12 x {n}, and a wrong count answers 4");
+}
+
+// ## A hole is a loop that runs backwards
+//
+// Clearing an interior cell makes a hole, and `trace` emits it as its own loop with a
+// NEGATIVE shoelace. The total still lands on `12 × cells`, because the hole subtracts.
+//
+// Two counts to keep apart, and they are different numbers on the same map:
+// `outline_count(v)` counts only the loops that ENCLOSE area — one per connected piece —
+// while `v.vm_loops` counts every loop, holes included. A caller triangulating the result
+// wants all of them; a caller asking "how many pieces is this?" wants the first.
+
+fn a_hole_is_a_loop_that_runs_backwards() {
+  d = hex_field::form_hexdisk(9, 2);
+  hex_field::hexset_set(d, 0, 0, false);          // punch the centre out
+  v = hex_field::trace(d);
+  n = hex_field::hexset_count(d);
+
+  assert(n == 18, "19 cells less the one we cleared");
+  assert(v.vm_loops == 2, "two loops: the rim and the hole");
+  assert(hex_field::outline_count(v) == 1, "…but one OUTLINE — the hole encloses nothing");
+  assert(hex_field::shoelace2(v, 0) == 228, "the rim is positive");
+  assert(hex_field::shoelace2(v, 1) == -12, "the hole is negative, and exactly one hex");
+  assert(hex_field::shoelace_total(v) == 12 * n, "216 == 12 x 18 — the identity still holds");
+
+  println("hole     : loops={v.vm_loops} outlines={hex_field::outline_count(v)} rim={hex_field::shoelace2(v, 0)} hole={hex_field::shoelace2(v, 1)}");
+}
+
+// ## Several forms in one window are legal
+//
+// `validate`'s code 5 says there is **no** outer loop — not that there is more than one. A
+// window may hold two disjoint buildings, or one form the chunk edge cut in half, and each
+// piece contributes its own outer loop. Requiring exactly one refused maps that `trace` had
+// produced correctly and whose areas summed exactly.
+//
+// If you know your form is a single piece, keep the stronger property by asserting it
+// yourself: `outline_count(v) == 1`. That is why the function is exported.
+
+fn several_forms_in_one_window_are_legal() {
+  t = hex_field::hexset_chunk(0, 0, 12, 6);
+  hex_field::hexset_set(t, 1, 1, true);
+  hex_field::hexset_set(t, 9, 4, true);           // far away — a second piece
+  v = hex_field::trace(t);
+  n = hex_field::hexset_count(t);
+
+  assert(hex_field::outline_count(v) == 2, "two disjoint cells, two outlines");
+  assert(hex_field::validate(v, n) == 0, "and that is a VALID map, not a code 5");
+  assert(hex_field::shoelace_total(v) == 12 * n, "24 == 12 x 2");
+
+  println("pieces   : {hex_field::outline_count(v)} outlines, validate {hex_field::validate(v, n)} — several pieces are fine");
+}
+
+// ## Where to go next
+//
+// - `README.md` — the exact-integer contract, the full `validate` code table (1–6 and what
+//   each refuses), the `.hxf` document format and the stencil/rotation surface.
+// - `tests/07-worked-examples.loft` — `@HXL-001` … the contracts above as running tests,
+//   each cited from the doc comment of the function it demonstrates.
+// - `tests/01-hex-field.loft` for the tracer's own cases, `tests/02-hex-doc.loft` for
+//   reading and writing a field to disk.
+// - `hex_grid` for the coordinates underneath this, `hex_shape` for building cell sets from
+//   lines, boxes and arcs, and `hex_draw` to render the outlines this produces.
