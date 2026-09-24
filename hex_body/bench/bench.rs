@@ -11,15 +11,27 @@
 // The ports, from src/hex_body.loft:
 //   `rig_world_frame3`  the same Rodrigues rotation and 3x3 composition, term for term, but
 //                       each bone's frame is one `[f64; 12]` in a stack array — no heap.
-//   `bone_shape_has`    `rig_world_seg` + `seg_dist`, with the chain walk HOISTED: the
-//                       library re-walks bones 0..=i on every query, the twin walks the rig
-//                       once per op and answers each query from the stored segments.  Every
-//                       segment is bit-identical either way, so the gap is the re-walk.
+//   `bone_shape_has`    `rig_world_seg` + `seg_dist` as the library does it: EVERY query
+//                       walks bones 0..=i into three fresh vectors and reads the i-th.
 //   `rig_read`          the same strict reader (field counts, keywords, the re-spelling
-//                       identity), but each line is split ONCE into its words, where the
-//                       library's word helpers re-split it for every field they read.
+//                       identity), with the library's word helpers ported as they are: each
+//                       one splits the whole line again, collected, for the one word it reads.
 // `black_box` guards each op's INPUT (the repetition number) and the sink — never anything
 // inside a kernel.
+//
+// FOR THE LIBRARY'S AUTHOR.  Bench rule 1 — the same algorithm in every lane — makes the twin
+// pay for work an idiomatic implementation would not do.  Two rows used to skip it (the walk
+// hoisted, the line split once), and each then charged loft for the library's algorithm.
+//   `bone_shape_has`    `rig_world_seg` allocates `bx`, `by`, `th` and walks bones 0..=i on
+//                       every call — a `cos`/`sin` pair per non-root ancestor and one for the
+//                       tip — so QUERIES point tests pose the chain QUERIES times, where one
+//                       pose per joint-value set (the `Frame` the source already recommends
+//                       for many points) serves them all.
+//   `rig_read`          `rig_word`, `rig_word_int`, `rig_word_float`, `rig_word_is_int`,
+//                       `rig_word_is_float` and `rig_word_count` each `split(' ')` the line
+//                       and build the whole word vector for the ONE word they answer: 5 splits
+//                       on the header, 20 per `bone` line (12 words) and 29 per `bone3` line
+//                       (17 words), where one split per line serves every field.
 use std::hint::black_box;
 use std::time::Instant;
 
@@ -117,84 +129,143 @@ fn rig_write(rig: &[Bone], name: &str) -> String {
     s
 }
 
-/// Is `w` a number spelled the way `rig_write` spells one?  The parse must re-print as `w`.
-fn is_int(w: &str) -> bool {
+/// Word `i` of a line, the library's way: the whole line split and collected for one word.
+fn rig_word(line: &str, i: usize) -> &str {
+    let parts: Vec<&str> = line.split(' ').collect();
+    parts.get(i).copied().unwrap_or("")
+}
+
+fn rig_word_int(line: &str, i: usize) -> i64 {
+    rig_word(line, i).parse().unwrap_or(0)
+}
+
+fn rig_word_float(line: &str, i: usize) -> f64 {
+    rig_word(line, i).parse().unwrap_or(0.0)
+}
+
+/// How many space-separated fields the line has — a split, collected, for its length.
+fn rig_word_count(line: &str) -> usize {
+    line.split(' ').collect::<Vec<&str>>().len()
+}
+
+/// Is field `i` a number spelled the way `rig_write` spells one?  The parse must re-print as
+/// the word.
+fn rig_word_is_int(line: &str, i: usize) -> bool {
+    let w = rig_word(line, i);
     let v: i64 = w.parse().unwrap_or(0);
     v.to_string() == w
 }
 
-fn is_float(w: &str) -> bool {
+fn rig_word_is_float(line: &str, i: usize) -> bool {
+    let w = rig_word(line, i);
     let v: f64 = w.parse().unwrap_or(0.0);
     v.to_string() == w
 }
 
-fn word_int(w: &str) -> i64 {
-    w.parse().unwrap_or(0)
+/// Every float field `lo..=hi` of a record, spelled as the library spells one.
+fn rig_floats_ok(line: &str, lo: usize, hi: usize) -> bool {
+    (lo..=hi).all(|i| rig_word_is_float(line, i))
 }
 
-fn word_float(w: &str) -> f64 {
-    w.parse().unwrap_or(0.0)
-}
-
-/// The strict reader: exactly what `rig_write` emits, or an empty rig.
+/// The strict reader: exactly what `rig_write` emits, or an empty rig.  The checks run in
+/// the library's order, each through the word helpers above.
 fn rig_read(t: &str) -> Vec<Bone> {
     let lines: Vec<&str> = t.split('\n').collect();
     let nl = lines.len();
-    let head: Vec<&str> = lines[0].split(' ').collect();
-    let hw = |i: usize| head.get(i).copied().unwrap_or("");
-    if hw(0) != "rig" || hw(2) != "bones" || head.len() != 4 || !is_int(hw(3)) {
+    if nl < 1 {
         return Vec::new();
     }
-    let nb = word_int(hw(3));
+    let head = lines[0];
+    if rig_word(head, 0) != "rig" {
+        return Vec::new();
+    }
+    if rig_word(head, 2) != "bones" {
+        return Vec::new();
+    }
+    if rig_word_count(head) != 4 {
+        return Vec::new();
+    }
+    if !rig_word_is_int(head, 3) {
+        return Vec::new();
+    }
+    let nb = rig_word_int(head, 3);
     if nl as i64 != nb + 1 {
         return Vec::new();
     }
     let mut out = Vec::with_capacity(nl - 1);
     for (ri, ln) in lines.iter().enumerate().skip(1) {
-        let ws: Vec<&str> = ln.split(' ').collect();
-        let w = |i: usize| ws.get(i).copied().unwrap_or("");
-        let floats_ok = |lo: usize, hi: usize| (lo..=hi).all(|i| is_float(w(i)));
-        if word_int(w(1)) != ri as i64 - 1 || w(2) != "parent" || !is_int(w(1)) || !is_int(w(3)) {
+        let tag = rig_word(ln, 0);
+        if rig_word_int(ln, 1) != ri as i64 - 1 {
             return Vec::new();
         }
-        let tag = w(0);
+        if rig_word(ln, 2) != "parent" {
+            return Vec::new();
+        }
+        if !rig_word_is_int(ln, 1) || !rig_word_is_int(ln, 3) {
+            return Vec::new();
+        }
         if tag == "bone" {
-            if ws.len() != 12 || w(4) != "at" || w(7) != "len" || w(9) != "lim" {
+            if rig_word_count(ln) != 12 {
                 return Vec::new();
             }
-            if !floats_ok(5, 6) || !is_float(w(8)) || !floats_ok(10, 11) {
+            if rig_word(ln, 4) != "at" {
+                return Vec::new();
+            }
+            if rig_word(ln, 7) != "len" {
+                return Vec::new();
+            }
+            if rig_word(ln, 9) != "lim" {
+                return Vec::new();
+            }
+            if !rig_floats_ok(ln, 5, 6) || !rig_word_is_float(ln, 8) || !rig_floats_ok(ln, 10, 11) {
                 return Vec::new();
             }
             out.push(Bone {
-                parent: word_int(w(3)),
-                ox: word_float(w(5)),
-                oy: word_float(w(6)),
+                parent: rig_word_int(ln, 3),
+                ox: rig_word_float(ln, 5),
+                oy: rig_word_float(ln, 6),
                 oz: 0.0,
-                len: word_float(w(8)),
+                len: rig_word_float(ln, 8),
                 ax: 0.0,
                 ay: 0.0,
                 az: 1.0,
-                lo: word_float(w(10)),
-                hi: word_float(w(11)),
+                lo: rig_word_float(ln, 10),
+                hi: rig_word_float(ln, 11),
             });
         } else if tag == "bone3" {
-            if ws.len() != 17 || w(4) != "at" || w(8) != "len" || w(10) != "axis" || w(14) != "lim" {
+            if rig_word_count(ln) != 17 {
                 return Vec::new();
             }
-            if !floats_ok(5, 7) || !is_float(w(9)) || !floats_ok(11, 13) || !floats_ok(15, 16) {
+            if rig_word(ln, 4) != "at" {
+                return Vec::new();
+            }
+            if rig_word(ln, 8) != "len" {
+                return Vec::new();
+            }
+            if rig_word(ln, 10) != "axis" {
+                return Vec::new();
+            }
+            if rig_word(ln, 14) != "lim" {
+                return Vec::new();
+            }
+            if !rig_floats_ok(ln, 5, 7)
+                || !rig_word_is_float(ln, 9)
+                || !rig_floats_ok(ln, 11, 13)
+                || !rig_floats_ok(ln, 15, 16)
+            {
                 return Vec::new();
             }
             out.push(Bone {
-                parent: word_int(w(3)),
-                ox: word_float(w(5)),
-                oy: word_float(w(6)),
-                oz: word_float(w(7)),
-                len: word_float(w(9)),
-                ax: word_float(w(11)),
-                ay: word_float(w(12)),
-                az: word_float(w(13)),
-                lo: word_float(w(15)),
-                hi: word_float(w(16)),
+                parent: rig_word_int(ln, 3),
+                ox: rig_word_float(ln, 5),
+                oy: rig_word_float(ln, 6),
+                oz: rig_word_float(ln, 7),
+                len: rig_word_float(ln, 9),
+                ax: rig_word_float(ln, 11),
+                ay: rig_word_float(ln, 12),
+                az: rig_word_float(ln, 13),
+                lo: rig_word_float(ln, 15),
+                hi: rig_word_float(ln, 16),
             });
         } else {
             return Vec::new();
@@ -266,14 +337,16 @@ fn pose_of(value: f64, lx: f64, ly: f64) -> (f64, f64) {
     (lx * c - ly * s, lx * s + ly * c)
 }
 
-/// Every bone's world segment `(x0, y0, x1, y1)` — the planar walk, done once.
-fn rig_world_segs(rig: &[Bone], values: &[f64]) -> Vec<(f64, f64, f64, f64)> {
-    let n = rig.len();
+/// Bone `i`'s world segment `(x0, y0, x1, y1)` — the planar walk over bones 0..=i, into
+/// three vectors built for this one call, as the library does it.
+fn rig_world_seg(rig: &[Bone], values: &[f64], i: usize) -> (f64, f64, f64, f64) {
+    let n = i + 1;
     let mut bx = Vec::with_capacity(n);
     let mut by = Vec::with_capacity(n);
     let mut th = Vec::with_capacity(n);
-    for (k, b) in rig.iter().enumerate() {
+    for k in 0..n {
         let v = values[k];
+        let b = &rig[k];
         if b.parent < 0 {
             bx.push(0.0);
             by.push(0.0);
@@ -287,13 +360,9 @@ fn rig_world_segs(rig: &[Bone], values: &[f64]) -> Vec<(f64, f64, f64, f64)> {
             th.push(pth + v);
         }
     }
-    (0..n)
-        .map(|i| {
-            let (x0, y0) = (bx[i], by[i]);
-            let (ex, ey) = pose_of(th[i], rig[i].len, 0.0);
-            (x0, y0, x0 + ex, y0 + ey)
-        })
-        .collect()
+    let (x0, y0) = (bx[i], by[i]);
+    let (ex, ey) = pose_of(th[i], rig[i].len, 0.0);
+    (x0, y0, x0 + ex, y0 + ey)
 }
 
 fn seg_dist(x0: f64, y0: f64, x1: f64, y1: f64, px: f64, py: f64) -> f64 {
@@ -313,6 +382,12 @@ fn seg_dist(x0: f64, y0: f64, x1: f64, y1: f64, px: f64, py: f64) -> f64 {
     let cx = x0 + t * dx;
     let cy = y0 + t * dy;
     ((px - cx) * (px - cx) + (py - cy) * (py - cy)).sqrt()
+}
+
+/// Is a world point within `w` of bone `i`'s segment?  Poses the chain for every call.
+fn bone_shape_has(rig: &[Bone], values: &[f64], i: usize, w: f64, px: f64, py: f64) -> bool {
+    let (x0, y0, x1, y1) = rig_world_seg(rig, values, i);
+    seg_dist(x0, y0, x1, y1, px, py) <= w
 }
 
 // ── The rigs ────────────────────────────────────────────────────────
@@ -393,7 +468,6 @@ fn bench_frame3(n: i64) -> Row {
 
 fn shape_op(rig: &[Bone], r: i64) -> [i64; 2] {
     let v = joint_values(BONES2, r);
-    let segs = rig_world_segs(rig, &v);
     let mut s: i64 = 12345;
     let mut hits = 0i64;
     let mut first = -1i64;
@@ -401,8 +475,7 @@ fn shape_op(rig: &[Bone], r: i64) -> [i64; 2] {
         s = (s * 1103515245 + 12345) & 0x7FFF_FFFF;
         let px = ((s >> 4) & 4095) as f64 / 256.0 - 8.0;
         let py = ((s >> 16) & 4095) as f64 / 256.0 - 8.0;
-        let (x0, y0, x1, y1) = segs[(c % BONES2 as i64) as usize];
-        if seg_dist(x0, y0, x1, y1, px, py) <= 0.5 {
+        if bone_shape_has(rig, &v, (c % BONES2 as i64) as usize, 0.5, px, py) {
             hits += 1;
             if first < 0 {
                 first = c;

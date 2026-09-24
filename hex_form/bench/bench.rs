@@ -11,10 +11,19 @@
 // The ports: `form_write`, `form_read`, `side_edges` and `boundary_loops` from src/, and what
 // they stand on — `HexSet`, `nb_q`/`nb_r`, `lattice_k`/`lattice_m`, `corner_k`/`corner_m`
 // and `hex_dist` from hex_field, `hex_neighbor` and `hex_edge_corners` from hex_grid.
-// `form_write` is `write!` per side; `form_read` splits each line ONCE (the library re-splits
-// it for every word it asks about) and applies the same checks to the same fields.
+// `form_write` is `write!` per side; `form_read` is the library's reader with its word helpers
+// ported as they are: each one splits the whole line again, collected, for the one word it
+// reads, and the checks run in the library's order on the same fields.
 // `black_box` guards each op's INPUT (the repetition number) and the sink — never anything
 // inside a kernel.
+//
+// FOR THE LIBRARY'S AUTHOR.  Bench rule 1 — the same algorithm in every lane — makes the twin
+// pay for work an idiomatic implementation would not do.  One row used to skip it (the line
+// split once), and it then charged loft for the library's algorithm.
+//   `form_read`   `nth_word`, `word_int`, `word_is_int` and `word_count` each `split(' ')`
+//                 the line and build the whole word vector for the ONE word they answer:
+//                 5 splits on the header and 10 per `side` line (6 words), where one split
+//                 per line serves every field.
 use std::fmt::Write as _;
 use std::hint::black_box;
 use std::time::Instant;
@@ -229,48 +238,84 @@ fn form_write(f: &Form, name: &str) -> String {
     s
 }
 
-/// An integer spelled exactly the way `form_write` spells one.
-fn word_is_int(w: &str) -> bool {
-    let v: i64 = w.parse().unwrap_or(0);
-    v.to_string() == w
+/// Word `i` of a line, the library's way: the whole line split and collected for one word.
+fn nth_word(line: &str, i: usize) -> &str {
+    let parts: Vec<&str> = line.split(' ').collect();
+    parts.get(i).copied().unwrap_or("")
 }
 
-fn word_int(w: &str) -> i64 {
-    w.parse().unwrap_or(0)
+fn word_int(line: &str, i: usize) -> i64 {
+    nth_word(line, i).parse().unwrap_or(0)
+}
+
+/// How many space-separated fields the line has — a split, collected, for its length.
+fn word_count(line: &str) -> usize {
+    line.split(' ').collect::<Vec<&str>>().len()
+}
+
+/// Is field `i` an integer spelled exactly the way `form_write` spells one?
+fn word_is_int(line: &str, i: usize) -> bool {
+    let w = nth_word(line, i);
+    let v: i64 = w.parse().unwrap_or(0);
+    v.to_string() == w
 }
 
 fn refused() -> Form {
     form_new(0, Vec::new(), Vec::new())
 }
 
+/// The strict reader, its checks in the library's order, each through the word helpers above.
 fn form_read(t: &str) -> Form {
     let lines: Vec<&str> = t.split('\n').collect();
     if lines.len() < 2 {
         return refused();
     }
-    let head: Vec<&str> = lines[0].split(' ').collect();
-    if head.len() != 4 || head[0] != "stencil" || head[2] != "h0" || !word_is_int(head[3]) {
+    let head = lines[0];
+    if word_count(head) != 4 {
         return refused();
     }
-    let h0 = word_int(head[3]);
+    if nth_word(head, 0) != "stencil" {
+        return refused();
+    }
+    if nth_word(head, 2) != "h0" {
+        return refused();
+    }
+    if !word_is_int(head, 3) {
+        return refused();
+    }
+    let h0 = word_int(head, 3);
     if head_norm(h0) != h0 {
         return refused();
     }
     let mut lens = Vec::new();
     let mut turns = Vec::new();
     for (ri, ln) in lines.iter().enumerate().skip(1) {
-        let w: Vec<&str> = ln.split(' ').collect();
-        if w.len() != 6 || w[0] != "side" || w[2] != "len" || w[4] != "turn" {
+        if word_count(ln) != 6 {
             return refused();
         }
-        if !word_is_int(w[1]) || !word_is_int(w[3]) || !word_is_int(w[5]) {
+        if nth_word(ln, 0) != "side" {
             return refused();
         }
-        if word_int(w[1]) != ri as i64 - 1 {
+        if nth_word(ln, 2) != "len" {
             return refused();
         }
-        lens.push(word_int(w[3]));
-        turns.push(word_int(w[5]));
+        if nth_word(ln, 4) != "turn" {
+            return refused();
+        }
+        if !word_is_int(ln, 1) {
+            return refused();
+        }
+        if !word_is_int(ln, 3) {
+            return refused();
+        }
+        if !word_is_int(ln, 5) {
+            return refused();
+        }
+        if word_int(ln, 1) != ri as i64 - 1 {
+            return refused();
+        }
+        lens.push(word_int(ln, 3));
+        turns.push(word_int(ln, 5));
     }
     form_new(h0, lens, turns)
 }
