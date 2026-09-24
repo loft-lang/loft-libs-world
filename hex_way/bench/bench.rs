@@ -9,9 +9,11 @@
 //     rustc -O --edition=2021 bench/bench.rs -o bench/.build/stats_rs && bench/.build/stats_rs --n 2
 //
 // The port of src/hex_way.loft's `track_distance` and what it calls (`seg_distance`,
-// `seg_point`, `seg_len`, `ang_wrap`), over a `Vec<[f64; 6]>` segment table.  `black_box`
-// guards each op's INPUT (the repetition number) and the sink — never anything inside a
-// kernel.
+// `seg_point`, `seg_len`, `ang_wrap`), over a `Vec<[f64; 6]>` segment table; and of
+// `way_stamp` with `nearest_seg`, hex_edge's `edge_point` / `edge_block_full`, and the
+// hex_field storage they write (`HexSet`, the `EdgeSet` material and surface slots with
+// the blocked count, `edgeset_digest`).  `black_box` guards each op's INPUT (the
+// repetition number) and the sink — never anything inside a kernel.
 use std::hint::black_box;
 use std::time::Instant;
 
@@ -19,6 +21,8 @@ const FNV_OFFSET: i64 = 2166136261;
 const FNV_PRIME: i64 = 16777619;
 
 const QUERIES: i64 = 100000;
+const WIN: i64 = 96;
+const STAMPS: i64 = 4;
 
 const WAY_STRAIGHT: i64 = 1;
 const WAY_ARC: i64 = 2;
@@ -163,7 +167,221 @@ fn track_distance(t: &Track, px: f64, py: f64) -> f64 {
     best
 }
 
-// ── The row ─────────────────────────────────────────────────────────
+fn nearest_seg(t: &Track, px: f64, py: f64) -> i64 {
+    let mut best = -1;
+    let mut bd = 1000000.0;
+    for i in 0..t.kind.len() {
+        let d = seg_distance(t, i, px, py);
+        if d < bd - 0.000000001 {
+            bd = d;
+            best = i as i64;
+        }
+    }
+    best
+}
+
+// ── hex_field.loft: the cell and edge layers ────────────────────────
+
+struct HexSet {
+    q0: i64,
+    r0: i64,
+    w: i64,
+    h: i64,
+    cells: Vec<bool>,
+    count: i64,
+}
+
+impl HexSet {
+    fn chunk(q0: i64, r0: i64, w: i64, h: i64) -> HexSet {
+        HexSet { q0, r0, w, h, cells: vec![false; (w * h) as usize], count: 0 }
+    }
+    fn index(&self, q: i64, r: i64) -> i64 {
+        let dq = q - self.q0;
+        let dr = r - self.r0;
+        if dq < 0 || dq >= self.w || dr < 0 || dr >= self.h {
+            return -1;
+        }
+        dr * self.w + dq
+    }
+    fn get(&self, q: i64, r: i64) -> bool {
+        let i = self.index(q, r);
+        i >= 0 && self.cells[i as usize]
+    }
+    fn set(&mut self, q: i64, r: i64, on: bool) {
+        let i = self.index(q, r);
+        if i < 0 {
+            return;
+        }
+        let had = self.cells[i as usize];
+        self.cells[i as usize] = on;
+        if on && !had {
+            self.count += 1;
+        }
+        if !on && had {
+            self.count -= 1;
+        }
+    }
+}
+
+fn lattice_k(q: i64, r: i64) -> i64 {
+    2 * q + (r & 1)
+}
+
+fn lattice_m(r: i64) -> i64 {
+    3 * r
+}
+
+fn nb_q(q: i64, r: i64, d: i64) -> i64 {
+    let odd = r & 1 == 1;
+    match d {
+        0 => q + 1,
+        1 => q - 1,
+        2 | 4 => if odd { q + 1 } else { q },
+        _ => if odd { q } else { q - 1 },
+    }
+}
+
+fn nb_r(r: i64, d: i64) -> i64 {
+    match d {
+        0 | 1 => r,
+        2 | 3 => r - 1,
+        _ => r + 1,
+    }
+}
+
+struct EdgeSet {
+    q0: i64,
+    r0: i64,
+    gw: i64,
+    gh: i64,
+    mat: Vec<u8>,
+    surf: Vec<i32>,
+    count: i64,
+    refused: i64,
+}
+
+impl EdgeSet {
+    fn new(q0: i64, r0: i64, w: i64, h: i64) -> EdgeSet {
+        let (gw, gh) = (w + 2, h + 2);
+        let n = (gw * gh * 3) as usize;
+        EdgeSet { q0, r0, gw, gh, mat: vec![0; n], surf: vec![0; n], count: 0, refused: 0 }
+    }
+
+    fn index(&self, qa: i64, ra: i64, qb: i64, rb: i64) -> i64 {
+        let mut d = -1;
+        for i in 0..6 {
+            if nb_q(qa, ra, i) == qb && nb_r(ra, i) == rb {
+                d = i;
+            }
+        }
+        if d < 0 {
+            return -1;
+        }
+        let (cq, cr, slot) = match d {
+            2 => (qa, ra, 1),
+            3 => (qa, ra, 2),
+            1 => (qb, rb, 0),
+            5 => (qb, rb, 1),
+            4 => (qb, rb, 2),
+            _ => (qa, ra, 0),
+        };
+        let dq = cq - self.q0 + 1;
+        let dr = cr - self.r0 + 1;
+        if dq < 0 || dq >= self.gw || dr < 0 || dr >= self.gh {
+            return -1;
+        }
+        (dr * self.gw + dq) * 3 + slot
+    }
+
+    fn set_mat(&mut self, qa: i64, ra: i64, qb: i64, rb: i64, mat: i64) {
+        let i = self.index(qa, ra, qb, rb);
+        if i < 0 {
+            return;
+        }
+        if !(0..=255).contains(&mat) {
+            self.refused += 1;
+            return;
+        }
+        self.mat[i as usize] = mat as u8;
+    }
+
+    fn surf_at(&self, qa: i64, ra: i64, qb: i64, rb: i64) -> i64 {
+        let i = self.index(qa, ra, qb, rb);
+        if i < 0 {
+            return 0;
+        }
+        self.surf[i as usize] as i64
+    }
+
+    fn set_surf(&mut self, qa: i64, ra: i64, qb: i64, rb: i64, surf: i64) {
+        let i = self.index(qa, ra, qb, rb);
+        if i < 0 {
+            return;
+        }
+        let was = self.surf[i as usize] as i64;
+        if was == 0 && surf != 0 {
+            self.count += 1;
+        }
+        if was != 0 && surf == 0 {
+            self.count -= 1;
+        }
+        self.surf[i as usize] = surf as i32;
+    }
+
+    fn digest(&self) -> i64 {
+        let mut h: i64 = 1469598103;
+        for i in 0..self.surf.len() {
+            h = (h * 31 + self.mat[i] as i64) % 1000000007;
+            h = (h * 31 + self.surf[i] as i64) % 1000000007;
+        }
+        h
+    }
+}
+
+// ── hex_edge.loft, and the stamp ────────────────────────────────────
+
+fn edge_point(qa: i64, ra: i64, qb: i64, rb: i64) -> (f64, f64) {
+    (((lattice_k(qa, ra) + lattice_k(qb, rb)) as f64) * 0.4330127018922193,
+     ((lattice_m(ra) + lattice_m(rb)) as f64) * 0.25)
+}
+
+fn edge_block_full(e: &mut EdgeSet, qa: i64, ra: i64, qb: i64, rb: i64, surf: i64, mat: i64) {
+    if e.surf_at(qa, ra, qb, rb) == 0 {
+        e.set_surf(qa, ra, qb, rb, surf);
+    }
+    e.set_mat(qa, ra, qb, rb, mat);
+}
+
+fn way_stamp(t: &Track, halfwidth: f64, s: &mut HexSet, e: &mut EdgeSet, first_surf: i64, mat: i64) {
+    for r in s.r0..s.r0 + s.h {
+        for q in s.q0..s.q0 + s.w {
+            let px = (lattice_k(q, r) as f64) * 0.8660254037844386;
+            let py = (lattice_m(r) as f64) * 0.5;
+            if track_distance(t, px, py) <= halfwidth {
+                s.set(q, r, true);
+            }
+        }
+    }
+    for r in s.r0..s.r0 + s.h {
+        for q in s.q0..s.q0 + s.w {
+            if s.get(q, r) {
+                for d in 0..6 {
+                    let nq = nb_q(q, r, d);
+                    let nr = nb_r(r, d);
+                    if !s.get(nq, nr) {
+                        let (ex, ey) = edge_point(q, r, nq, nr);
+                        let si = nearest_seg(t, ex, ey);
+                        if si >= 0 {
+                            edge_block_full(e, q, r, nq, nr, first_surf + si, mat);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ── The rows ────────────────────────────────────────────────────────
 
 fn road() -> Track {
     let mut t = Track::new();
@@ -204,6 +422,37 @@ fn bench_distance(n: i64) -> Row {
           hash: fnv(FNV_OFFSET, &distance_op(&t, black_box(0))), sink }
 }
 
+fn stamp_road(dx: f64) -> Track {
+    let mut t = Track::new();
+    for k in 0..6 {
+        let x = (k as f64) * 20.0 + 10.0 + dx;
+        t.straight(x, 40.0, x + 10.0, 45.0);
+        if (k & 1) == 0 {
+            t.arc(x + 14.0, 50.0, 6.0, -1.2, 1.9);
+        } else {
+            t.arc(x + 14.0, 50.0, 6.0, 2.6, -0.4);
+        }
+    }
+    t
+}
+
+fn stamp_op(t: &Track) -> [i64; 4] {
+    let mut s = HexSet::chunk(0, 0, WIN, WIN);
+    let mut e = EdgeSet::new(0, 0, WIN, WIN);
+    for _ in 0..STAMPS {
+        way_stamp(t, 2.5, &mut s, &mut e, 1, 3);
+    }
+    [s.count, e.count, e.refused, e.digest()]
+}
+
+fn bench_stamp(n: i64) -> Row {
+    let t0 = stamp_road(0.0);
+    let t1 = stamp_road(1.7320508075688772);
+    let (us, sink) = timed(n, |r| stamp_op(if (r & 1) == 0 { &t0 } else { &t1 })[1]);
+    Row { name: "way_stamp", iters: n, us, px: STAMPS * WIN * WIN,
+          hash: fnv(FNV_OFFSET, &stamp_op(black_box(&t0))), sink }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let mut n: i64 = 20;
@@ -220,7 +469,7 @@ fn main() {
     }
     let t0 = Instant::now();
     println!("routine\titers\tus\tns_op\tpx\tns_px\thash");
-    let rows = [bench_distance(n)];
+    let rows = [bench_distance(n), bench_stamp(n)];
     let mut sink = 0i64;
     for row in &rows {
         print_row(row);

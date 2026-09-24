@@ -17,6 +17,11 @@
 // Every op starts from the repetition number `r`: `r & 1` moves the walker's start cell or
 // the disk's centre by one column — the values, never the amount of work — so no backend
 // can hoist an op out of the repetition loop.  Each op's result is folded into `sink`.
+//
+// `sweep_path_from` is the swept-movement query: per lattice step six bisector
+// intersections in doubles and one `passable`.  Its op sweeps SWEEPS pseudo-random
+// segments of up to ten units across the walled field, each starting inside the cell it
+// names; `r & 1` nudges every start point a tenth of a unit, inside the same cell.
 use hex_field;
 use hex_edge;
 
@@ -37,6 +42,7 @@ const FIELD = 64;
 const WALK = 1000000;
 const WIN = 96;
 const CUTS = 20;
+const SWEEPS = 20000;
 
 /// FNV-1a-32 over the low 32 bits of each integer, high byte first.
 fn fnv(h0: integer, v: const vector<integer>) -> integer {
@@ -136,6 +142,49 @@ fn bench_cut(n: integer) -> Row {
         hash: fnv(FNV_OFFSET, cut_op(bc_s0)), sink: bc_sink }
 }
 
+// ── The swept path: bisector crossings, one edge at a time ──────────
+
+/// SWEEPS segments from a pseudo-random cell centre (nudged by `salt`) to a point up to
+/// ten units away in each axis; the travelled fractions, where they stopped and what
+/// stopped them, summed.
+fn sweep_op(e: EdgeSet, r: integer) -> vector<integer> {
+  so_salt = ((r & 1) as float) * 0.1;
+  so_s = 777;
+  so_t = 0.0;
+  so_q = 0;
+  so_r = 0;
+  so_hits = 0;
+  so_dirs = 0;
+  for _i in 0..SWEEPS {
+    so_s = (so_s * 1103515245 + 12345) & 0x7FFFFFFF;
+    so_sq = 2 + (so_s >> 16) % 60;
+    so_s = (so_s * 1103515245 + 12345) & 0x7FFFFFFF;
+    so_sr = 2 + (so_s >> 16) % 60;
+    so_s = (so_s * 1103515245 + 12345) & 0x7FFFFFFF;
+    so_dx = (((so_s >> 16) % 4001 - 2000) as float) * 0.005;
+    so_s = (so_s * 1103515245 + 12345) & 0x7FFFFFFF;
+    so_dy = (((so_s >> 16) % 4001 - 2000) as float) * 0.005;
+    so_x0 = (lattice_k(so_sq, so_sr) as float) * 0.8660254037844386 + so_salt;
+    so_y0 = (lattice_m(so_sq, so_sr) as float) * 0.5 + 0.05;
+    (st, sq, sr, sd) = sweep_path_from(e, so_sq, so_sr, so_x0, so_y0, so_x0 + so_dx, so_y0 + so_dy);
+    so_t += st;
+    so_q += sq;
+    so_r += sr;
+    if sd >= 0 { so_hits += 1; so_dirs += sd; }
+  }
+  [(so_t * 1000000.0) as integer, so_q, so_r, so_hits, so_dirs]
+}
+
+fn bench_sweep(n: integer) -> Row {
+  bs_e = walled_field();
+  bs_t0 = ticks();
+  bs_sink = 0;
+  for r in 0..n { bs_sink += sweep_op(bs_e, r)[3]?; }
+  bs_us = ticks() - bs_t0;
+  Row { name: "sweep_path_from", iters: n, us: bs_us, px: SWEEPS,
+        hash: fnv(FNV_OFFSET, sweep_op(bs_e, 0)), sink: bs_sink }
+}
+
 fn main() {
   mn_n = 20;
   mn_args = arguments();
@@ -150,7 +199,7 @@ fn main() {
   if mn_n < 1 { mn_n = 1; }
   mn_t0 = ticks();
   println("routine\titers\tus\tns_op\tpx\tns_px\thash");
-  mn_rows: vector<Row> = [bench_passable(mn_n), bench_cut(mn_n)];
+  mn_rows: vector<Row> = [bench_passable(mn_n), bench_cut(mn_n), bench_sweep(mn_n)];
   mn_sink = 0;
   for row in mn_rows {
     print_row(row);

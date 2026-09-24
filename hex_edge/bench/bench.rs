@@ -12,6 +12,8 @@
 // storage they sit on from hex_field (`HexSet`, `EdgeSet`, `nb_q`/`nb_r`, the six-way
 // direction search `eg_dir_from`, `eg_index`, `edge_surf`/`edge_set_surf`,
 // `edgeset_digest`, `hexdisk_into`/`hex_dist`) — the same slot layout, the same search.
+// And `sweep_path_from`: the same bounded walk, six bisector solves per step over the
+// exact integer lattice, asking `passable` of the one edge it crosses.
 // `black_box` guards each op's INPUT (the repetition number) and the sink — never anything
 // inside a kernel.
 use std::hint::black_box;
@@ -24,6 +26,7 @@ const FIELD: i64 = 64;
 const WALK: i64 = 1000000;
 const WIN: i64 = 96;
 const CUTS: i64 = 20;
+const SWEEPS: i64 = 20000;
 
 const SURF_NONE: i64 = 65535;
 
@@ -124,6 +127,14 @@ fn nb_r(r: i64, d: i64) -> i64 {
         2 | 3 => r - 1,
         _ => r + 1,
     }
+}
+
+fn lattice_k(q: i64, r: i64) -> i64 {
+    2 * q + (r & 1)
+}
+
+fn lattice_m(r: i64) -> i64 {
+    3 * r
 }
 
 fn hex_dist(q1: i64, r1: i64, q2: i64, r2: i64) -> i64 {
@@ -250,6 +261,59 @@ fn edges_cut(s: &HexSet, e: &mut EdgeSet) {
     }
 }
 
+fn sweep_path_from(e: &EdgeSet, sq: i64, sr: i64, x0: f64, y0: f64, x1: f64, y1: f64) -> (f64, i64, i64, i64) {
+    let vx = x1 - x0;
+    let vy = y1 - y0;
+    let (mut cq, mut cr) = (sq, sr);
+    let (mut pq, mut pr) = (cq, cr);
+    let mut havep = false;
+    let mut t = 0.0;
+    for _ in 0..256 {
+        let ck = (lattice_k(cq, cr) as f64) * 0.8660254037844386;
+        let cm = (lattice_m(cr) as f64) * 0.5;
+        let mut bt = 2.0;
+        let mut bd = -1;
+        for d in 0..6 {
+            let nq = nb_q(cq, cr, d);
+            let nr = nb_r(cr, d);
+            if !(havep && nq == pq && nr == pr) {
+                let nk = (lattice_k(nq, nr) as f64) * 0.8660254037844386;
+                let nm = (lattice_m(nr) as f64) * 0.5;
+                let dx = nk - ck;
+                let dy = nm - cm;
+                let den = vx * dx + vy * dy;
+                if den > 0.000000001 {
+                    let mx = (nk + ck) * 0.5;
+                    let my = (nm + cm) * 0.5;
+                    let tt = ((mx - x0) * dx + (my - y0) * dy) / den;
+                    if tt > t - 0.000000001 && tt < bt {
+                        bt = tt;
+                        bd = d;
+                    }
+                }
+            }
+        }
+        if bd < 0 || bt > 1.0 {
+            return (1.0, cq, cr, -1);
+        }
+        if bt < t {
+            bt = t;
+        }
+        let bq = nb_q(cq, cr, bd);
+        let br = nb_r(cr, bd);
+        if !passable(e, cq, cr, bq, br) {
+            return (bt, cq, cr, bd);
+        }
+        t = bt;
+        pq = cq;
+        pr = cr;
+        havep = true;
+        cq = bq;
+        cr = br;
+    }
+    (t, cq, cr, -1)
+}
+
 // ── The rows ────────────────────────────────────────────────────────
 
 fn walled_field() -> EdgeSet {
@@ -314,6 +378,44 @@ fn bench_cut(n: i64) -> Row {
           hash: fnv(FNV_OFFSET, &cut_op(black_box(&s0))), sink }
 }
 
+fn lcg(s: i64) -> i64 {
+    (s * 1103515245 + 12345) & 0x7FFF_FFFF
+}
+
+fn sweep_op(e: &EdgeSet, r: i64) -> [i64; 5] {
+    let salt = ((r & 1) as f64) * 0.1;
+    let mut s = 777i64;
+    let mut ts = 0.0;
+    let (mut qs, mut rs, mut hits, mut dirs) = (0i64, 0i64, 0i64, 0i64);
+    for _ in 0..SWEEPS {
+        s = lcg(s);
+        let sq = 2 + (s >> 16) % 60;
+        s = lcg(s);
+        let sr = 2 + (s >> 16) % 60;
+        s = lcg(s);
+        let dx = (((s >> 16) % 4001 - 2000) as f64) * 0.005;
+        s = lcg(s);
+        let dy = (((s >> 16) % 4001 - 2000) as f64) * 0.005;
+        let x0 = (lattice_k(sq, sr) as f64) * 0.8660254037844386 + salt;
+        let y0 = (lattice_m(sr) as f64) * 0.5 + 0.05;
+        let (t, cq, cr, d) = sweep_path_from(e, sq, sr, x0, y0, x0 + dx, y0 + dy);
+        ts += t;
+        qs += cq;
+        rs += cr;
+        if d >= 0 {
+            hits += 1;
+            dirs += d;
+        }
+    }
+    [(ts * 1000000.0) as i64, qs, rs, hits, dirs]
+}
+
+fn bench_sweep(n: i64) -> Row {
+    let e = walled_field();
+    let (us, sink) = timed(n, |r| sweep_op(&e, r)[3]);
+    Row { name: "sweep_path_from", iters: n, us, px: SWEEPS, hash: fnv(FNV_OFFSET, &sweep_op(&e, black_box(0))), sink }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let mut n: i64 = 20;
@@ -330,7 +432,7 @@ fn main() {
     }
     let t0 = Instant::now();
     println!("routine\titers\tus\tns_op\tpx\tns_px\thash");
-    let rows = [bench_passable(n), bench_cut(n)];
+    let rows = [bench_passable(n), bench_cut(n), bench_sweep(n)];
     let mut sink = 0i64;
     for row in &rows {
         print_row(row);
