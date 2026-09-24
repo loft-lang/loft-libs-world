@@ -1,0 +1,242 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// bench — the performance pass: the package's hot doors, timed on a fixed workload, with a
+// hash of what they produced.
+//
+//     loft --interpret bench/bench.loft [--n N]         the interpreter
+//     loft --native-release bench/bench.loft [--n N]    compiled
+//     rustc -O --edition=2021 bench/bench.rs -o bench/.build/stats_rs   the Rust twin
+//
+// One tab-separated line per routine: name, iterations, total µs, ns per op, items one op
+// processes (calls, queries or rig texts), ns per item, and an FNV-1a-32 hash of one
+// canonical op's output.  The interpreter, the native build and the pure-Rust twin in
+// bench/bench.rs must print the same hash for a row, or one of them is not computing the
+// routine it claims to.
+//
+// Every op starts from the repetition number `r`: `r & 1` shifts every joint value, or which
+// rig text a batch starts on — the values, never the amount of work — so no backend can hoist
+// an op out of the repetition loop.  Each op's result is folded into `sink`.
+use hex_body;
+
+/// One measured routine.
+struct Row {
+  name: text = "",
+  iters: integer = 0,
+  us: integer = 0,
+  px: integer = 0,
+  hash: integer = 0,
+  sink: integer = 0,
+}
+
+const FNV_OFFSET = 2166136261;
+const FNV_PRIME = 16777619;
+
+const BONES3 = 24;
+const CALLS = 12000;
+const BONES2 = 12;
+const QUERIES = 20000;
+const TEXTS = 8;
+const PARSES = 40;
+
+/// FNV-1a-32 over the low 32 bits of each integer, high byte first.
+fn fnv(h0: integer, v: const vector<integer>) -> integer {
+  fv_h = h0;
+  for x in v {
+    fv_w = x & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ ((fv_w >> 24) & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ ((fv_w >> 16) & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ ((fv_w >> 8) & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ (fv_w & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+  }
+  fv_h
+}
+
+fn print_row(r: const Row) {
+  pr_ns = ((r.us * 1000) / r.iters) ?? 0;
+  pr_px = if r.px > 0 { (((r.us * 1000) as float) / ((r.iters * r.px) as float)) ?? 0.0 }
+          else { 0.0 };
+  println("{r.name}\t{r.iters}\t{r.us}\t{pr_ns}\t{r.px}\t{pr_px:.3}\t{r.hash:x}");
+}
+
+/// A float as the integer the hash sees: micro-units, truncated.
+fn micro(x: float) -> integer { (x * 1000000.0) as integer }
+
+// ── The rigs ────────────────────────────────────────────────────────
+
+/// Bone `k`'s parent: a binary tree, so every parent is an EARLIER bone.
+fn parent_of(k: integer) -> integer { if k == 0 { -1 } else { (k - 1) / 2 } }
+
+/// A spatial rig of `n` bones, salted by `salt`: every bone is `bone3` on one of six axes,
+/// none of them unit length, so the walk normalises each one.
+fn rig3(n: integer, salt: integer) -> Rig {
+  r3 = rig_new();
+  for k in 0..n {
+    kk = k + salt;
+    ax = 0.0; ay = 0.0; az = 1.0;
+    sel = kk % 6;
+    if sel == 1 { ax = 0.0; ay = 2.0; az = 0.0; }
+    if sel == 2 { ax = 3.0; ay = 0.0; az = 0.0; }
+    if sel == 3 { ax = 1.0; ay = 1.0; az = 0.0; }
+    if sel == 4 { ax = 0.0; ay = 1.0; az = 1.0; }
+    if sel == 5 { ax = 1.0; ay = 2.0; az = 2.0; }
+    r3 = rig_bone3(r3, parent_of(k),
+                   ((kk * 5) % 7) as float * 0.25 + 0.5,
+                   ((kk * 3) % 5 - 2) as float * 0.125,
+                   ((kk % 4) as float - 1.5) * 0.25,
+                   1.0 + (kk % 3) as float * 0.5,
+                   ax, ay, az,
+                   -0.25, 0.25 + (kk % 4) as float * 0.125);
+  }
+  r3
+}
+
+/// A planar rig of `n` bones — the shape `rig_world_seg` and `bone_shape_has` are for.
+fn rig2(n: integer) -> Rig {
+  r2 = rig_new();
+  for k in 0..n {
+    r2 = rig_bone(r2, parent_of(k),
+                  ((k * 5) % 7) as float * 0.25 + 0.5,
+                  ((k * 3) % 5 - 2) as float * 0.125,
+                  1.0 + (k % 3) as float * 0.5,
+                  -0.25, 0.25);
+  }
+  r2
+}
+
+/// The joint values of one op: every value moves by 1/32 turn with `r & 1`.
+fn joint_values(n: integer, r: integer) -> vector<float> {
+  jv: vector<float> = [];
+  for k in 0..n { jv += [(k as float) * 0.0625 - 0.5 + ((r & 1) as float) * 0.03125]; }
+  jv
+}
+
+// ── rig_world_frame3: the Rodrigues + 3x3 matmul walk ───────────────
+
+/// CALLS frames, the bone cycling over the whole rig; every frame's twelve numbers are
+/// summed so the walk's whole output is witnessed.
+fn frame_op(rg: Rig, r: integer) -> vector<integer> {
+  fo_v = joint_values(BONES3, r);
+  fo_s: vector<float> = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+  for c in 0..CALLS {
+    f = rig_world_frame3(rg, fo_v, c % BONES3);
+    fo_s[0] = fo_s[0]? + f.fr_x;
+    fo_s[1] = fo_s[1]? + f.fr_y;
+    fo_s[2] = fo_s[2]? + f.fr_z;
+    fo_s[3] = fo_s[3]? + f.fr_00;
+    fo_s[4] = fo_s[4]? + f.fr_01;
+    fo_s[5] = fo_s[5]? + f.fr_02;
+    fo_s[6] = fo_s[6]? + f.fr_10;
+    fo_s[7] = fo_s[7]? + f.fr_11;
+    fo_s[8] = fo_s[8]? + f.fr_12;
+    fo_s[9] = fo_s[9]? + f.fr_20;
+    fo_s[10] = fo_s[10]? + f.fr_21;
+    fo_s[11] = fo_s[11]? + f.fr_22;
+  }
+  [for x in fo_s { micro(x) }]
+}
+
+fn bench_frame3(n: integer) -> Row {
+  bf_rg = rig3(BONES3, 0);
+  bf_t0 = ticks();
+  bf_sink = 0;
+  for r in 0..n { bf_sink += frame_op(bf_rg, r)[0]?; }
+  bf_us = ticks() - bf_t0;
+  Row { name: "rig_world_frame3", iters: n, us: bf_us, px: CALLS,
+        hash: fnv(FNV_OFFSET, frame_op(bf_rg, 0)), sink: bf_sink }
+}
+
+// ── bone_shape_has: a point query that re-walks the chain ───────────
+
+/// QUERIES capsule tests at pseudo-random points, the bone cycling over the rig.
+fn shape_op(rg: Rig, r: integer) -> vector<integer> {
+  so_v = joint_values(BONES2, r);
+  so_s = 12345;
+  so_hits = 0;
+  so_first = -1;
+  for c in 0..QUERIES {
+    so_s = (so_s * 1103515245 + 12345) & 0x7FFFFFFF;
+    so_px = ((so_s >> 4) & 4095) as float / 256.0 - 8.0;
+    so_py = ((so_s >> 16) & 4095) as float / 256.0 - 8.0;
+    if bone_shape_has(rg, so_v, c % BONES2, 0.5, so_px, so_py) {
+      so_hits += 1;
+      if so_first < 0 { so_first = c; }
+    }
+  }
+  [so_hits, so_first]
+}
+
+fn bench_shape(n: integer) -> Row {
+  bs_rg = rig2(BONES2);
+  bs_t0 = ticks();
+  bs_sink = 0;
+  for r in 0..n { bs_sink += shape_op(bs_rg, r)[0]?; }
+  bs_us = ticks() - bs_t0;
+  Row { name: "bone_shape_has", iters: n, us: bs_us, px: QUERIES,
+        hash: fnv(FNV_OFFSET, shape_op(bs_rg, 0)), sink: bs_sink }
+}
+
+// ── rig_read: the strict reader of the canonical text ───────────────
+
+/// PARSES rig texts, starting at text `r & 1`; every field of every bone read back is
+/// folded into integer sums.
+fn read_op(texts: const vector<text>, r: integer) -> vector<integer> {
+  ro_bones = 0;
+  ro_par = 0;
+  ro_pos = 0;
+  ro_len = 0;
+  ro_axis = 0;
+  ro_lim = 0;
+  for j in 0..PARSES {
+    rg = rig_read(texts[(j + (r & 1)) % TEXTS]?);
+    for k in 0..rig_count(rg) {
+      ro_bones += 1;
+      ro_par += rg.rg_parent[k]? * (k + 1);
+      ro_pos += micro(rg.rg_ox[k]?) + 3 * micro(rg.rg_oy[k]?) + 7 * micro(rg.rg_oz[k]?);
+      ro_len += micro(rg.rg_len[k]?);
+      ro_axis += micro(rg.rg_ax[k]?) + 3 * micro(rg.rg_ay[k]?) + 7 * micro(rg.rg_az[k]?);
+      ro_lim += micro(rg.rg_lo[k]?) + 3 * micro(rg.rg_hi[k]?);
+    }
+  }
+  [ro_bones, ro_par, ro_pos, ro_len, ro_axis, ro_lim]
+}
+
+fn bench_read(n: integer) -> Row {
+  br_texts: vector<text> = [];
+  for t in 0..TEXTS {
+    // Half the rigs are planar (`bone` lines), half spatial (`bone3` lines).
+    if t % 2 == 0 { br_texts += [rig_write(rig3(BONES3, t), "arm{t}")]; }
+    else { br_texts += [rig_write(rig2(BONES3), "leg{t}")]; }
+  }
+  br_t0 = ticks();
+  br_sink = 0;
+  for r in 0..n { br_sink += read_op(br_texts, r)[0]?; }
+  br_us = ticks() - br_t0;
+  br_out = read_op(br_texts, 0);
+  br_out += [size(br_texts[0]?), size(br_texts[1]?)];
+  Row { name: "rig_read", iters: n, us: br_us, px: PARSES,
+        hash: fnv(FNV_OFFSET, br_out), sink: br_sink }
+}
+
+fn main() {
+  mn_n = 20;
+  mn_args = arguments();
+  mn_i = 0;
+  while mn_i < len(mn_args) {
+    if mn_args[mn_i]? == "--n" && mn_i + 1 < len(mn_args) {
+      mn_n = (mn_args[mn_i + 1]? as integer?)?;
+      mn_i += 1;
+    }
+    mn_i += 1;
+  }
+  if mn_n < 1 { mn_n = 1; }
+  mn_t0 = ticks();
+  println("routine\titers\tus\tns_op\tpx\tns_px\thash");
+  mn_rows: vector<Row> = [bench_frame3(mn_n), bench_shape(mn_n), bench_read(mn_n)];
+  mn_sink = 0;
+  for row in mn_rows {
+    print_row(row);
+    mn_sink += row.sink;
+  }
+  println("time: {(ticks() - mn_t0) / 1000}ms sink={mn_sink}");
+}

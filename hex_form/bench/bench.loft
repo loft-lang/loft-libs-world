@@ -1,0 +1,275 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// bench — the performance pass: the package's hot doors, timed on a fixed workload, with a
+// hash of what they produced.
+//
+//     loft --interpret bench/bench.loft [--n N]         the interpreter
+//     loft --native-release bench/bench.loft [--n N]    compiled
+//     rustc -O --edition=2021 bench/bench.rs -o bench/.build/stats_rs   the Rust twin
+//
+// One tab-separated line per routine: name, iterations, total µs, ns per op, items one op
+// processes (forms, texts, cells swept or boundary edges), ns per item, and an FNV-1a-32
+// hash of one canonical op's output.  The interpreter, the native build and the pure-Rust
+// twin in bench/bench.rs must print the same hash for a row, or one of them is not
+// computing the routine it claims to.
+//
+// Every op starts from the repetition number `r`: `r & 1` picks one of two same-length
+// names, one of two same-length text pools or one of two rings a column apart, and `r`
+// turns the plan — the values, never the amount of work — so no backend can hoist an op
+// out of the repetition loop.  Each op's result is folded into `sink`.
+use hex_field;
+use hex_grid;
+use hex_form;
+
+/// One measured routine.
+struct Row {
+  name: text = "",
+  iters: integer = 0,
+  us: integer = 0,
+  px: integer = 0,
+  hash: integer = 0,
+  sink: integer = 0,
+}
+
+const FNV_OFFSET = 2166136261;
+const FNV_PRIME = 16777619;
+
+const POOL = 2000;
+const WIN = 61;
+const RING = 17;
+const PASSES = 10;
+
+/// FNV-1a-32 over the low 32 bits of each integer, high byte first.
+fn fnv(h0: integer, v: const vector<integer>) -> integer {
+  fv_h = h0;
+  for x in v {
+    fv_w = x & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ ((fv_w >> 24) & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ ((fv_w >> 16) & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ ((fv_w >> 8) & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ (fv_w & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+  }
+  fv_h
+}
+
+/// FNV-1a-32 over every byte of a text.
+fn fnv_text(h0: integer, t: text) -> integer {
+  ft_h = h0;
+  for ft_i in 0..size(t) {
+    ft_h = ((ft_h ^ t.byte_at(ft_i)) * FNV_PRIME) & 0xFFFFFFFF;
+  }
+  ft_h
+}
+
+fn print_row(r: const Row) {
+  pr_ns = ((r.us * 1000) / r.iters) ?? 0;
+  pr_px = if r.px > 0 { (((r.us * 1000) as float) / ((r.iters * r.px) as float)) ?? 0.0 }
+          else { 0.0 };
+  println("{r.name}\t{r.iters}\t{r.us}\t{pr_ns}\t{r.px}\t{pr_px:.3}\t{r.hash:x}");
+}
+
+// ── The pool: POOL pseudo-random forms of 3 to 6 sides ──────────────
+
+/// Not admissible forms — the text layer does not ask — just every field in its range:
+/// h0 in 0..11, lengths 1..9, turns 1..11.
+fn form_pool() -> vector<Form> {
+  fp_out: vector<Form> = [];
+  fp_s = 20260924;
+  for _i in 0..POOL {
+    fp_s = (fp_s * 1103515245 + 12345) & 0x7FFFFFFF;
+    fp_sides = 3 + (fp_s >> 16) % 4;
+    fp_s = (fp_s * 1103515245 + 12345) & 0x7FFFFFFF;
+    fp_h0 = (fp_s >> 16) % 12;
+    fp_lens: vector<integer> = [];
+    fp_turns: vector<integer> = [];
+    for _j in 0..fp_sides {
+      fp_s = (fp_s * 1103515245 + 12345) & 0x7FFFFFFF;
+      fp_lens += [1 + (fp_s >> 16) % 9];
+      fp_s = (fp_s * 1103515245 + 12345) & 0x7FFFFFFF;
+      fp_turns += [1 + (fp_s >> 16) % 11];
+    }
+    fp_out += [form_new(fp_h0, fp_lens, fp_turns)];
+  }
+  fp_out
+}
+
+fn pool_name(r: integer) -> text { if (r & 1) == 0 { "towa" } else { "towb" } }
+
+// ── form_write: the canonical text of every form in the pool ────────
+
+fn write_op(pool: vector<Form>, r: integer) -> integer {
+  wo_name = pool_name(r);
+  wo_acc = 0;
+  for wo_f in pool {
+    wo_t = form_write(wo_f, wo_name);
+    wo_acc += size(wo_t);
+  }
+  wo_acc
+}
+
+fn write_hash(pool: vector<Form>) -> integer {
+  wh_h = FNV_OFFSET;
+  for wh_f in pool { wh_h = fnv_text(wh_h, form_write(wh_f, pool_name(0))); }
+  wh_h
+}
+
+fn bench_write(n: integer, pool: vector<Form>) -> Row {
+  bw_t0 = ticks();
+  bw_sink = 0;
+  for r in 0..n { bw_sink += write_op(pool, r); }
+  bw_us = ticks() - bw_t0;
+  Row { name: "form_write", iters: n, us: bw_us, px: POOL,
+        hash: write_hash(pool), sink: bw_sink }
+}
+
+// ── form_read: every pool text parsed back ──────────────────────────
+
+fn text_pool(pool: vector<Form>, name: text) -> vector<text> {
+  tp_out: vector<text> = [];
+  for tp_f in pool { tp_out += [form_write(tp_f, name)]; }
+  tp_out
+}
+
+fn read_op(texts: vector<text>) -> integer {
+  ro_acc = 0;
+  for ro_t in texts {
+    ro_f = form_read(ro_t);
+    ro_acc += ro_f.fm_h0 + form_sides(ro_f);
+  }
+  ro_acc
+}
+
+/// Every parsed form flattened: h0, side count, the lengths, the turns.
+fn read_hash(texts: vector<text>) -> integer {
+  rh_v: vector<integer> = [];
+  for rh_t in texts {
+    rh_f = form_read(rh_t);
+    rh_v += [rh_f.fm_h0, form_sides(rh_f)];
+    for rh_l in rh_f.fm_len { rh_v += [rh_l]; }
+    for rh_u in rh_f.fm_turn { rh_v += [rh_u]; }
+  }
+  fnv(FNV_OFFSET, rh_v)
+}
+
+fn bench_read(n: integer, pool: vector<Form>) -> Row {
+  br_a = text_pool(pool, "towa");
+  br_b = text_pool(pool, "towb");
+  br_t0 = ticks();
+  br_sink = 0;
+  for r in 0..n {
+    if (r & 1) == 0 { br_sink += read_op(br_a); } else { br_sink += read_op(br_b); }
+  }
+  br_us = ticks() - br_t0;
+  Row { name: "form_read", iters: n, us: br_us, px: POOL, hash: read_hash(br_a), sink: br_sink }
+}
+
+// ── side_edges: the four sides of a plan over a disk ────────────────
+
+fn side_cells() -> HexSet {
+  sc_s = hexset_chunk(-30, -30, WIN, WIN);
+  hexdisk_into(sc_s, 0, 0, 24);
+  sc_s
+}
+
+/// PASSES times the four sides of the plan, at rotation `(r + pass) % 6`: every boundary
+/// edge lands on exactly one side whatever the rotation, so the appended total is the same
+/// for every `r`.
+fn sides_op(cells: HexSet, r: integer) -> integer {
+  so_n = 0;
+  for so_pass in 0..PASSES {
+    so_p = plan_new(0, 0, 20, 16, (r + so_pass) % 6, false);
+    for so_side in 0..4 { so_n += side_run_len(side_edges(so_p, cells, so_side)); }
+  }
+  so_n
+}
+
+fn sides_hash(cells: HexSet) -> integer {
+  sh_p = plan_new(0, 0, 20, 16, 0, false);
+  sh_v: vector<integer> = [];
+  for sh_side in 0..4 {
+    sh_run = side_edges(sh_p, cells, sh_side);
+    for sh_i in 0..side_run_len(sh_run) {
+      sh_v += [sh_run.sr_qa[sh_i]?, sh_run.sr_ra[sh_i]?, sh_run.sr_qb[sh_i]?,
+               sh_run.sr_rb[sh_i]?, (sh_run.sr_t[sh_i]? * 1000000.0) as integer];
+    }
+  }
+  fnv(FNV_OFFSET, sh_v)
+}
+
+fn bench_sides(n: integer) -> Row {
+  bs_cells = side_cells();
+  bs_t0 = ticks();
+  bs_sink = 0;
+  for r in 0..n { bs_sink += sides_op(bs_cells, r); }
+  bs_us = ticks() - bs_t0;
+  Row { name: "side_edges", iters: n, us: bs_us, px: PASSES * 4 * WIN * WIN,
+        hash: sides_hash(bs_cells), sink: bs_sink }
+}
+
+// ── boundary_loops: label propagation over a ring's boundary ────────
+
+/// The cells at hex distance exactly RING from (cq, 20): a 102-cell ring, two loops.
+fn ring(cq: integer) -> HexSet {
+  rg_s = hexset_chunk(0, 0, 44, 42);
+  for rg_r in 0..42 {
+    for rg_q in 0..44 {
+      if hex_dist(cq, 20, rg_q, rg_r) == RING { hexset_set(rg_s, rg_q, rg_r, true); }
+    }
+  }
+  rg_s
+}
+
+/// Boundary edges of the ring — the `px` of the row (each op compares all ordered pairs).
+fn ring_edges(s: HexSet) -> integer {
+  re_n = 0;
+  for re_r in 0..42 {
+    for re_q in 0..44 {
+      if hexset_get(s, re_q, re_r) {
+        for re_d in 0..6 {
+          (re_nq, re_nr) = hex_neighbor(re_q, re_r, re_d);
+          if !hexset_get(s, re_nq, re_nr) { re_n += 1; }
+        }
+      }
+    }
+  }
+  re_n
+}
+
+fn bench_loops(n: integer) -> Row {
+  bl_s0 = ring(20);
+  bl_s1 = ring(21);
+  bl_t0 = ticks();
+  bl_sink = 0;
+  for r in 0..n {
+    if (r & 1) == 0 { bl_sink += boundary_loops(bl_s0); } else { bl_sink += boundary_loops(bl_s1); }
+  }
+  bl_us = ticks() - bl_t0;
+  Row { name: "boundary_loops", iters: n, us: bl_us, px: ring_edges(bl_s0),
+        hash: fnv(FNV_OFFSET, [boundary_loops(bl_s0), hexset_count(bl_s0)]), sink: bl_sink }
+}
+
+fn main() {
+  mn_n = 20;
+  mn_args = arguments();
+  mn_i = 0;
+  while mn_i < len(mn_args) {
+    if mn_args[mn_i]? == "--n" && mn_i + 1 < len(mn_args) {
+      mn_n = (mn_args[mn_i + 1]? as integer?)?;
+      mn_i += 1;
+    }
+    mn_i += 1;
+  }
+  if mn_n < 1 { mn_n = 1; }
+  mn_t0 = ticks();
+  mn_pool = form_pool();
+  println("routine\titers\tus\tns_op\tpx\tns_px\thash");
+  mn_rows: vector<Row> = [bench_write(mn_n, mn_pool), bench_read(mn_n, mn_pool),
+                          bench_sides(mn_n), bench_loops(mn_n)];
+  mn_sink = 0;
+  for row in mn_rows {
+    print_row(row);
+    mn_sink += row.sink;
+  }
+  println("time: {(ticks() - mn_t0) / 1000}ms sink={mn_sink}");
+}

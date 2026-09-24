@@ -17,6 +17,12 @@
 // clamp and a sqrt for a straight, a sqrt, an atan2 and an angle wrap for an arc — and for
 // a point off the arc's span, both end points through cos / sin.  Every op shifts its
 // query points by `(r & 1) * 0.25`, which moves the values and never the work.
+//
+// `way_stamp` is the one-pass build: a sweep of the whole window asking `track_distance`
+// per cell centre, then a sweep of the footprint asking `nearest_seg` per boundary edge
+// and writing the edge.  Its op reads one of two roads chosen by `r & 1`, the second one
+// cell column to the right — a lattice translation, so the values move and the footprint,
+// and with it the work, does not.
 use hex_field;
 use hex_edge;
 use hex_way;
@@ -35,6 +41,8 @@ const FNV_OFFSET = 2166136261;
 const FNV_PRIME = 16777619;
 
 const QUERIES = 100000;
+const WIN = 96;
+const STAMPS = 4;
 
 /// FNV-1a-32 over the low 32 bits of each integer, high byte first.
 fn fnv(h0: integer, v: const vector<integer>) -> integer {
@@ -103,6 +111,46 @@ fn bench_distance(n: integer) -> Row {
         hash: fnv(FNV_OFFSET, distance_op(bd_t, 0)), sink: bd_sink }
 }
 
+// ── The one-pass build: cells, edges and surface ids ────────────────
+
+/// A 12-segment road across a 96 x 96 window: six straights, each followed by an arc, the
+/// whole of it moved `dx` to the right.
+fn stamp_road(dx: float) -> Track {
+  sr_t = track_new();
+  for k in 0..6 {
+    sr_x = (k as float) * 20.0 + 10.0 + dx;
+    track_straight(sr_t, sr_x, 40.0, sr_x + 10.0, 45.0);
+    if (k & 1) == 0 {
+      track_arc(sr_t, sr_x + 14.0, 50.0, 6.0, -1.2, 1.9);
+    } else {
+      track_arc(sr_t, sr_x + 14.0, 50.0, 6.0, 2.6, -0.4);
+    }
+  }
+  sr_t
+}
+
+/// STAMPS stamps of the road into a fresh window: the first writes the cells and edges, the
+/// rest find them already set — every stamp sweeps the window and the footprint.
+fn stamp_op(t: Track) -> vector<integer> {
+  st_s = hexset_chunk(0, 0, WIN, WIN);
+  st_e = edgeset_new(0, 0, WIN, WIN);
+  for _k in 0..STAMPS { way_stamp(t, 2.5, st_s, st_e, 1, 3); }
+  [hexset_count(st_s), edgeset_surf_count(st_e), edgeset_refused(st_e), edgeset_digest(st_e)]
+}
+
+fn bench_stamp(n: integer) -> Row {
+  bs_t0r = stamp_road(0.0);
+  bs_t1r = stamp_road(1.7320508075688772);
+  bs_t0 = ticks();
+  bs_sink = 0;
+  for r in 0..n {
+    if (r & 1) == 0 { bs_sink += stamp_op(bs_t0r)[1]?; } else { bs_sink += stamp_op(bs_t1r)[1]?; }
+  }
+  bs_us = ticks() - bs_t0;
+  Row { name: "way_stamp", iters: n, us: bs_us, px: STAMPS * WIN * WIN,
+        hash: fnv(FNV_OFFSET, stamp_op(bs_t0r)), sink: bs_sink }
+}
+
 fn main() {
   mn_n = 20;
   mn_args = arguments();
@@ -117,7 +165,7 @@ fn main() {
   if mn_n < 1 { mn_n = 1; }
   mn_t0 = ticks();
   println("routine\titers\tus\tns_op\tpx\tns_px\thash");
-  mn_rows: vector<Row> = [bench_distance(mn_n)];
+  mn_rows: vector<Row> = [bench_distance(mn_n), bench_stamp(mn_n)];
   mn_sink = 0;
   for row in mn_rows {
     print_row(row);

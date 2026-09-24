@@ -16,6 +16,15 @@
 // `terrain_fbm` is the densest per-op kernel in the family: per octave four integer hashes
 // and a smoothstep lerp.  Every op shifts its sample points by `(r & 1) * 0.5` world units,
 // which moves the values and never the work.
+//
+// `terrain_surface_at` is the game-facing sample: per point a weight vector ALLOCATED, a
+// 3 x 4 kernel-tap loop over the overland cells and some thirty value-noise evaluations
+// (domain-warped detail, the ridge field, the boundary contest).  `terrain_hydrology` is
+// the generation-time pass: a SELECTION-scan priority flood and a selection-ordered flow
+// accumulation, each O(n^2) over seven parallel vectors.  `terrain_relief_pass` reads each
+// cell's type through a NULLABLE record, then its six neighbours' heights.  Each op reads
+// an input chosen by `r & 1`: the sample points half a metre over, the terrain a quarter
+// metre higher, the neighbour multiplier another value — never another amount of work.
 use hex_grid;
 use hex_terrain;
 
@@ -34,6 +43,13 @@ const FNV_PRIME = 16777619;
 
 const CALLS = 100000;
 const OCTAVES = 8;
+
+const TILE = 300.0;
+const SURF_NX = 96;
+const SURF_GRID = 128;
+const HYD_NX = 64;
+const REL_NX = 128;
+const RELIEFS = 20;
 
 /// FNV-1a-32 over the low 32 bits of each integer, high byte first.
 fn fnv(h0: integer, v: const vector<integer>) -> integer {
@@ -81,6 +97,151 @@ fn bench_fbm(n: integer) -> Row {
         hash: fnv(FNV_OFFSET, fbm_op(0)), sink: bf_sink }
 }
 
+/// A float as the integer its millionths truncate to — how every float enters a hash.
+fn micro(x: float) -> integer { (x * 1000000.0) as integer }
+
+// ── A generated overland map ────────────────────────────────────────
+
+fn ttype(key: text, rise: float, steep: float, wet: boolean) -> TerrainType {
+  TerrainType { tt_key: key, tt_rise: rise, tt_steep: steep, tt_wet: wet }
+}
+
+/// The type table: type 0 is the sea, the rest land of rising steepness; `n` is 6 or 8.
+fn terrain_types(n: integer) -> vector<TerrainType> {
+  ty_v: vector<TerrainType> = [ttype("sea", 0.0, 0.0, true), ttype("plain", 10.0, 4.0, false),
+    ttype("hills", 40.0, 25.0, false), ttype("mountain", 120.0, 80.0, false),
+    ttype("forest", 15.0, 8.0, false), ttype("marsh", 5.0, 2.0, false)];
+  if n > 6 { ty_v += [ttype("lake", 0.0, 0.0, true), ttype("scree", 70.0, 60.0, false)]; }
+  ty_v
+}
+
+/// The height of overland cell (c, r): four octaves of the library's own noise, a coast
+/// along the low rows.
+fn gen_height(c: integer, r: integer) -> float {
+  terrain_fbm(11, (c as float) * 300.0, (r as float) * 260.0, 6000.0, 4, 1) * 400.0
+    + (r as float) * 6.0 - 60.0
+}
+
+/// An nx-by-nx overland map: heights from `gen_height` plus `lift`, the material from bands
+/// over the land and the sea below zero, the moisture from the hash.
+fn gen_terrain(nx: integer, ntypes: integer, lift: float) -> Terrain {
+  gt_t = terrain_new(nx, nx);
+  for gt_r in 0..nx {
+    for gt_c in 0..nx {
+      gt_i = gt_r * nx + gt_c;
+      gt_h = gen_height(gt_c, gt_r) + lift;
+      gt_t.tr_h[gt_i] = gt_h;
+      gt_m = 1 + (gt_c / 20 + gt_r / 24) % (ntypes - 1) ?? 0;
+      if gt_h <= 0.0 { gt_m = 0; }
+      gt_t.tr_mat[gt_i] = gt_m;
+      gt_t.tr_moist[gt_i] = terrain_hash01(3, gt_c, gt_r, 9);
+    }
+  }
+  gt_t
+}
+
+// ── The fine surface: one kernel blend per sample point ─────────────
+
+/// A SURF_GRID x SURF_GRID sample grid over the map's interior; per-field sums and the
+/// last sample.
+fn surface_op(t: Terrain, types: vector<TerrainType>, p: TerrainParams, r: integer)
+    -> vector<integer> {
+  so_salt = ((r & 1) as float) * 0.5;
+  so_h = 0.0; so_b = 0.0; so_mix = 0.0; so_rel = 0.0; so_moi = 0.0; so_wat = 0.0; so_lak = 0.0;
+  so_mat = 0;
+  so_last = 0.0;
+  for sy in 0..SURF_GRID {
+    for sx in 0..SURF_GRID {
+      so_x = 400.0 + (sx as float) * 215.5 + so_salt;
+      so_y = 300.0 + (sy as float) * 186.5;
+      so_sf = terrain_surface_at(t, types, p, so_x, so_y);
+      so_h += so_sf.sf_h;
+      so_b += so_sf.sf_blend;
+      so_mix += so_sf.sf_mix;
+      so_rel += so_sf.sf_relief;
+      so_moi += so_sf.sf_moist;
+      so_wat += so_sf.sf_watery;
+      so_lak += so_sf.sf_lakey;
+      so_mat += so_sf.sf_mat;
+      so_last = so_sf.sf_h;
+    }
+  }
+  [micro(so_h), micro(so_b), micro(so_mix), micro(so_rel), micro(so_moi), micro(so_wat),
+   micro(so_lak), so_mat, micro(so_last)]
+}
+
+fn bench_surface(n: integer) -> Row {
+  bs_types = terrain_types(6);
+  bs_p = terrain_params(7, TILE);
+  bs_t = gen_terrain(SURF_NX, 6, 0.0);
+  terrain_relief_pass(bs_t, bs_types, bs_p);
+  bs_t0 = ticks();
+  bs_sink = 0;
+  for r in 0..n { bs_sink += surface_op(bs_t, bs_types, bs_p, r)[7]?; }
+  bs_us = ticks() - bs_t0;
+  Row { name: "terrain_surface_at", iters: n, us: bs_us, px: SURF_GRID * SURF_GRID,
+        hash: fnv(FNV_OFFSET, surface_op(bs_t, bs_types, bs_p, 0)), sink: bs_sink }
+}
+
+// ── Hydrology: the selection flood ──────────────────────────────────
+
+/// A fresh HYD_NX-square map at `lift`, flooded, drained and accumulated; the filled
+/// surface, the lakes, the flow directions and the accumulation, summed.
+fn hydrology_op(types: vector<TerrainType>, p: TerrainParams, lift: float) -> vector<integer> {
+  ho_t = gen_terrain(HYD_NX, len(types), lift);
+  terrain_hydrology(ho_t, p, 6);
+  ho_h = 0.0; ho_a = 0.0; ho_m = 0; ho_f = 0;
+  for ho_i in 0..HYD_NX * HYD_NX {
+    ho_h += ho_t.tr_h[ho_i] ?? 0.0;
+    ho_a += ho_t.tr_acc[ho_i] ?? 0.0;
+    ho_m += ho_t.tr_mat[ho_i] ?? 0;
+    ho_f += (ho_t.tr_flow[ho_i] ?? 0) * (ho_i % 97 + 1);
+  }
+  [micro(ho_h), micro(ho_a), ho_m, ho_f]
+}
+
+fn bench_hydrology(n: integer) -> Row {
+  bh_types = terrain_types(8);
+  bh_p = terrain_params(7, TILE);
+  bh_t0 = ticks();
+  bh_sink = 0;
+  for r in 0..n { bh_sink += hydrology_op(bh_types, bh_p, ((r & 1) as float) * 0.25)[2]?; }
+  bh_us = ticks() - bh_t0;
+  Row { name: "terrain_hydrology", iters: n, us: bh_us, px: HYD_NX * HYD_NX,
+        hash: fnv(FNV_OFFSET, hydrology_op(bh_types, bh_p, 0.0)), sink: bh_sink }
+}
+
+// ── Relief: a type read through a nullable record per cell ──────────
+
+/// RELIEFS relief passes over the map; the relief and the wet set, summed.
+fn relief_op(t: Terrain, types: vector<TerrainType>, p: TerrainParams) -> vector<integer> {
+  for _k in 0..RELIEFS { terrain_relief_pass(t, types, p); }
+  ro_rel = 0.0;
+  ro_wet = 0;
+  for ro_i in 0..REL_NX * REL_NX {
+    ro_rel += t.tr_relief[ro_i] ?? 0.0;
+    if t.tr_wet[ro_i] ?? false { ro_wet += 1; }
+  }
+  [micro(ro_rel), ro_wet]
+}
+
+fn bench_relief(n: integer) -> Row {
+  br_types = terrain_types(8);
+  br_p0 = terrain_params(7, TILE);
+  br_p1 = terrain_params(7, TILE);
+  br_p1.tp_nb_base = 0.65;
+  br_t = gen_terrain(REL_NX, 8, 0.0);
+  br_t0 = ticks();
+  br_sink = 0;
+  for r in 0..n {
+    if (r & 1) == 0 { br_sink += relief_op(br_t, br_types, br_p0)[1]?; }
+    else { br_sink += relief_op(br_t, br_types, br_p1)[1]?; }
+  }
+  br_us = ticks() - br_t0;
+  Row { name: "terrain_relief_pass", iters: n, us: br_us, px: RELIEFS * REL_NX * REL_NX,
+        hash: fnv(FNV_OFFSET, relief_op(br_t, br_types, br_p0)), sink: br_sink }
+}
+
 fn main() {
   mn_n = 20;
   mn_args = arguments();
@@ -95,7 +256,8 @@ fn main() {
   if mn_n < 1 { mn_n = 1; }
   mn_t0 = ticks();
   println("routine\titers\tus\tns_op\tpx\tns_px\thash");
-  mn_rows: vector<Row> = [bench_fbm(mn_n)];
+  mn_rows: vector<Row> = [bench_fbm(mn_n), bench_surface(mn_n), bench_hydrology(mn_n),
+                          bench_relief(mn_n)];
   mn_sink = 0;
   for row in mn_rows {
     print_row(row);

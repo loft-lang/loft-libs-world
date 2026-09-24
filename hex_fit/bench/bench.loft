@@ -1,0 +1,123 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// bench — the performance pass: the package's hot doors, timed on a fixed workload, with a
+// hash of what they produced.
+//
+//     loft --interpret bench/bench.loft [--n N]         the interpreter
+//     loft --native-release bench/bench.loft [--n N]    compiled
+//     rustc -O --edition=2021 bench/bench.rs -o bench/.build/stats_rs   the Rust twin
+//
+// One tab-separated line per routine: name, iterations, total µs, ns per op, items one op
+// processes (trial runs rasterised and swept), ns per item, and an FNV-1a-32 hash of one
+// canonical op's output.  The interpreter, the native build and the pure-Rust twin in
+// bench/bench.rs must print the same hash for a row, or one of them is not computing the
+// routine it claims to.
+//
+// Every op starts from the repetition number `r`: `r & 1` moves the footprint AND the runs'
+// anchors one column right — the values, never the amount of work — so no backend can hoist
+// an op out of the repetition loop.  Each op's result is folded into `sink`.
+use hex_field;
+use hex_form;
+use hex_fit;
+
+/// One measured routine.
+struct Row {
+  name: text = "",
+  iters: integer = 0,
+  us: integer = 0,
+  px: integer = 0,
+  hash: integer = 0,
+  sink: integer = 0,
+}
+
+const FNV_OFFSET = 2166136261;
+const FNV_PRIME = 16777619;
+
+const WIN = 41;
+const HALF = 20;
+const RADIUS = 16;
+const WANT = 24;
+// The four drafts' trials: offers 1, 2, 3 and 5 from 24 asked, every period legal.
+const TRIALS = 89;
+
+/// FNV-1a-32 over the low 32 bits of each integer, high byte first.
+fn fnv(h0: integer, v: const vector<integer>) -> integer {
+  fv_h = h0;
+  for x in v {
+    fv_w = x & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ ((fv_w >> 24) & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ ((fv_w >> 16) & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ ((fv_w >> 8) & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ (fv_w & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+  }
+  fv_h
+}
+
+fn print_row(r: const Row) {
+  pr_ns = ((r.us * 1000) / r.iters) ?? 0;
+  pr_px = if r.px > 0 { (((r.us * 1000) as float) / ((r.iters * r.px) as float)) ?? 0.0 }
+          else { 0.0 };
+  println("{r.name}\t{r.iters}\t{r.us}\t{pr_ns}\t{r.px}\t{pr_px:.3}\t{r.hash:x}");
+}
+
+// ── The doorstep's offer: the longest run that fits ─────────────────
+
+/// A disk footprint of radius 16 in a 41 x 41 window, centred `dq` columns right.
+fn footprint(dq: integer) -> HexSet {
+  fp_c = hexset_chunk(0 - HALF, 0 - HALF, WIN, WIN);
+  hexdisk_into(fp_c, dq, 0, RADIUS);
+  fp_c
+}
+
+/// Four drafts asking for 24 periods from a vertex ten cells west of the centre, in four
+/// directions that leave the disk early — so every trial from 24 down rasterises a run into a
+/// fresh edge set and sweeps the window.  One column right (`dq = 1`) moves the anchor by
+/// (6, -3) on the triangle lattice, the same vertex of the shifted cell.
+fn fit_op(cells: HexSet, dq: integer) -> vector<integer> {
+  fo_f = form_new(0, [], []);
+  fo_out: vector<integer> = [];
+  for d in [9, 7, 5, 3] {
+    fo_out += [draft_fit_p(draft_new(fo_f, d, -60 + 6 * dq, 33 - 3 * dq, WANT), cells)];
+  }
+  fo_out
+}
+
+fn bench_fit(n: integer) -> Row {
+  bf_c0 = footprint(0);
+  bf_c1 = footprint(1);
+  bf_t0 = ticks();
+  bf_sink = 0;
+  for r in 0..n {
+    if (r & 1) == 0 { bf_sink += fit_op(bf_c0, 0)[0]?; }
+    else { bf_sink += fit_op(bf_c1, 1)[0]?; }
+  }
+  bf_us = ticks() - bf_t0;
+  bf_out = fit_op(bf_c0, 0);
+  bf_out += [hexset_count(bf_c0), hexset_count(bf_c1)];
+  Row { name: "draft_fit_p", iters: n, us: bf_us, px: TRIALS,
+        hash: fnv(FNV_OFFSET, bf_out), sink: bf_sink }
+}
+
+fn main() {
+  mn_n = 20;
+  mn_args = arguments();
+  mn_i = 0;
+  while mn_i < len(mn_args) {
+    if mn_args[mn_i]? == "--n" && mn_i + 1 < len(mn_args) {
+      mn_n = (mn_args[mn_i + 1]? as integer?)?;
+      mn_i += 1;
+    }
+    mn_i += 1;
+  }
+  if mn_n < 1 { mn_n = 1; }
+  mn_t0 = ticks();
+  println("routine\titers\tus\tns_op\tpx\tns_px\thash");
+  mn_rows: vector<Row> = [bench_fit(mn_n)];
+  mn_sink = 0;
+  for row in mn_rows {
+    print_row(row);
+    mn_sink += row.sink;
+  }
+  println("time: {(ticks() - mn_t0) / 1000}ms sink={mn_sink}");
+}

@@ -1,0 +1,159 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// bench — the performance pass: the package's hot doors, timed on a fixed workload, with a
+// hash of what they produced.
+//
+//     loft --interpret bench/bench.loft [--n N]         the interpreter
+//     loft --native-release bench/bench.loft [--n N]    compiled
+//     rustc -O --edition=2021 bench/bench.rs -o bench/.build/stats_rs   the Rust twin
+//
+// One tab-separated line per routine: name, iterations, total µs, ns per op, items one op
+// processes (cells swept), ns per item, and an FNV-1a-32 hash of one canonical op's
+// output.  The interpreter, the native build and the pure-Rust twin in bench/bench.rs must
+// print the same hash for a row, or one of them is not computing the routine it claims to.
+//
+// Every op starts from the repetition number `r`: `r & 1` picks one of two footprint pairs,
+// the second the first moved one column over — the values, never the amount of work — so
+// no backend can hoist an op out of the repetition loop.  Each op's result is folded into
+// `sink`.
+use hex_field;
+use hex_form;
+use hex_place;
+
+/// One measured routine.
+struct Row {
+  name: text = "",
+  iters: integer = 0,
+  us: integer = 0,
+  px: integer = 0,
+  hash: integer = 0,
+  sink: integer = 0,
+}
+
+const FNV_OFFSET = 2166136261;
+const FNV_PRIME = 16777619;
+
+const CUT_W = 64;
+const CUTS = 20;
+const UNION_W = 128;
+const UNIONS = 10;
+
+/// FNV-1a-32 over the low 32 bits of each integer, high byte first.
+fn fnv(h0: integer, v: const vector<integer>) -> integer {
+  fv_h = h0;
+  for x in v {
+    fv_w = x & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ ((fv_w >> 24) & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ ((fv_w >> 16) & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ ((fv_w >> 8) & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ (fv_w & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+  }
+  fv_h
+}
+
+fn print_row(r: const Row) {
+  pr_ns = ((r.us * 1000) / r.iters) ?? 0;
+  pr_px = if r.px > 0 { (((r.us * 1000) as float) / ((r.iters * r.px) as float)) ?? 0.0 }
+          else { 0.0 };
+  println("{r.name}\t{r.iters}\t{r.us}\t{pr_ns}\t{r.px}\t{pr_px:.3}\t{r.hash:x}");
+}
+
+/// A w x w chunk holding one disk of radius `n` centred on (cq, cr).
+fn footprint(w: integer, cq: integer, cr: integer, n: integer) -> HexSet {
+  fo_s = hexset_chunk(0, 0, w, w);
+  hexdisk_into(fo_s, cq, cr, n);
+  fo_s
+}
+
+// ── combine_cut: two overlapping footprints, marked then cut once ───
+
+/// CUTS combines into one edge layer; the writes are unconditional, so every pass does
+/// the same work whatever the layer already holds.
+fn cut_op(a: HexSet, b: HexSet, e: EdgeSet) -> integer {
+  co_n = 0;
+  for _c in 0..CUTS { co_n += combine_cut(a, 3, b, 5, e); }
+  co_n
+}
+
+fn cut_hash(a: HexSet, b: HexSet) -> integer {
+  ch_e = edgeset_new(0, 0, CUT_W, CUT_W);
+  ch_n = combine_cut(a, 3, b, 5, ch_e);
+  fnv(FNV_OFFSET, [ch_n, edgeset_count_all(ch_e), edgeset_digest(ch_e)])
+}
+
+fn bench_cut(n: integer) -> Row {
+  bc_a0 = footprint(CUT_W, 26, 32, 20);
+  bc_b0 = footprint(CUT_W, 38, 32, 20);
+  bc_a1 = footprint(CUT_W, 27, 32, 20);
+  bc_b1 = footprint(CUT_W, 39, 32, 20);
+  bc_e = edgeset_new(0, 0, CUT_W, CUT_W);
+  bc_t0 = ticks();
+  bc_sink = 0;
+  for r in 0..n {
+    if (r & 1) == 0 { bc_sink += cut_op(bc_a0, bc_b0, bc_e); }
+    else { bc_sink += cut_op(bc_a1, bc_b1, bc_e); }
+  }
+  bc_us = ticks() - bc_t0;
+  Row { name: "combine_cut", iters: n, us: bc_us, px: CUTS * CUT_W * CUT_W,
+        hash: cut_hash(bc_a0, bc_b0), sink: bc_sink }
+}
+
+// ── field_union: a fresh set, the OR of two ─────────────────────────
+
+fn union_op(a: HexSet, b: HexSet) -> integer {
+  uo_n = 0;
+  for _u in 0..UNIONS { uo_n += hexset_count(field_union(a, b)); }
+  uo_n
+}
+
+/// The union's filled-cell count per row, then its total.
+fn union_hash(a: HexSet, b: HexSet) -> integer {
+  uh_u = field_union(a, b);
+  uh_v: vector<integer> = [];
+  for uh_r in 0..UNION_W {
+    uh_c = 0;
+    for uh_q in 0..UNION_W { if hexset_get(uh_u, uh_q, uh_r) { uh_c += 1; } }
+    uh_v += [uh_c];
+  }
+  uh_v += [hexset_count(uh_u)];
+  fnv(FNV_OFFSET, uh_v)
+}
+
+fn bench_union(n: integer) -> Row {
+  bu_a0 = footprint(UNION_W, 50, 64, 40);
+  bu_b0 = footprint(UNION_W, 76, 64, 40);
+  bu_a1 = footprint(UNION_W, 51, 64, 40);
+  bu_b1 = footprint(UNION_W, 77, 64, 40);
+  bu_t0 = ticks();
+  bu_sink = 0;
+  for r in 0..n {
+    if (r & 1) == 0 { bu_sink += union_op(bu_a0, bu_b0); } else { bu_sink += union_op(bu_a1, bu_b1); }
+  }
+  bu_us = ticks() - bu_t0;
+  Row { name: "field_union", iters: n, us: bu_us, px: UNIONS * UNION_W * UNION_W,
+        hash: union_hash(bu_a0, bu_b0), sink: bu_sink }
+}
+
+fn main() {
+  mn_n = 20;
+  mn_args = arguments();
+  mn_i = 0;
+  while mn_i < len(mn_args) {
+    if mn_args[mn_i]? == "--n" && mn_i + 1 < len(mn_args) {
+      mn_n = (mn_args[mn_i + 1]? as integer?)?;
+      mn_i += 1;
+    }
+    mn_i += 1;
+  }
+  if mn_n < 1 { mn_n = 1; }
+  mn_t0 = ticks();
+  println("routine\titers\tus\tns_op\tpx\tns_px\thash");
+  mn_rows: vector<Row> = [bench_cut(mn_n), bench_union(mn_n)];
+  mn_sink = 0;
+  for row in mn_rows {
+    print_row(row);
+    mn_sink += row.sink;
+  }
+  println("time: {(ticks() - mn_t0) / 1000}ms sink={mn_sink}");
+}
