@@ -1,0 +1,105 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// bench — the performance pass: the package's hot door, timed on a fixed workload, with a
+// hash of what it produced.
+//
+//     loft --interpret bench/bench.loft [--n N]         the interpreter
+//     loft --native-release bench/bench.loft [--n N]    compiled
+//     rustc -O --edition=2021 bench/bench.rs -o bench/.build/stats_rs   the Rust twin
+//
+// One tab-separated line per routine: name, iterations, total µs, ns per op, calls one op
+// makes, ns per call, and an FNV-1a-32 hash of one canonical op's output.  The
+// interpreter, the native build and the pure-Rust twin in bench/bench.rs must print the
+// same hash for a row, or one of them is not computing the routine it claims to.
+//
+// `terrain_fbm` is the densest per-op kernel in the family: per octave four integer hashes
+// and a smoothstep lerp.  Every op shifts its sample points by `(r & 1) * 0.5` world units,
+// which moves the values and never the work.
+use hex_grid;
+use hex_terrain;
+
+/// One measured routine.
+struct Row {
+  name: text = "",
+  iters: integer = 0,
+  us: integer = 0,
+  px: integer = 0,
+  hash: integer = 0,
+  sink: integer = 0,
+}
+
+const FNV_OFFSET = 2166136261;
+const FNV_PRIME = 16777619;
+
+const CALLS = 100000;
+const OCTAVES = 8;
+
+/// FNV-1a-32 over the low 32 bits of each integer, high byte first.
+fn fnv(h0: integer, v: const vector<integer>) -> integer {
+  fv_h = h0;
+  for x in v {
+    fv_w = x & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ ((fv_w >> 24) & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ ((fv_w >> 16) & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ ((fv_w >> 8) & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ (fv_w & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+  }
+  fv_h
+}
+
+fn print_row(r: const Row) {
+  pr_ns = ((r.us * 1000) / r.iters) ?? 0;
+  pr_px = if r.px > 0 { (((r.us * 1000) as float) / ((r.iters * r.px) as float)) ?? 0.0 }
+          else { 0.0 };
+  println("{r.name}\t{r.iters}\t{r.us}\t{pr_ns}\t{r.px}\t{pr_px:.3}\t{r.hash:x}");
+}
+
+// ── Fractal value noise ─────────────────────────────────────────────
+
+/// CALLS samples over a 74,000 x 58,000 world rectangle that crosses y = 0, so the floor of
+/// a negative lattice coordinate is exercised; the sum and the last sample, in millionths.
+fn fbm_op(r: integer) -> vector<integer> {
+  fo_salt = ((r & 1) as float) * 0.5;
+  fo_sum = 0.0;
+  fo_v = 0.0;
+  for i in 0..CALLS {
+    fo_x = ((i * 7919) % 20011) as float * 3.7 + fo_salt;
+    fo_y = ((i * 104729) % 19997) as float * 2.9 - 5000.0;
+    fo_v = terrain_fbm(7, fo_x, fo_y, 700.0, OCTAVES, 3);
+    fo_sum += fo_v;
+  }
+  [(fo_sum * 1000000.0) as integer, (fo_v * 1000000.0) as integer]
+}
+
+fn bench_fbm(n: integer) -> Row {
+  bf_t0 = ticks();
+  bf_sink = 0;
+  for r in 0..n { bf_sink += fbm_op(r)[0]?; }
+  bf_us = ticks() - bf_t0;
+  Row { name: "terrain_fbm", iters: n, us: bf_us, px: CALLS,
+        hash: fnv(FNV_OFFSET, fbm_op(0)), sink: bf_sink }
+}
+
+fn main() {
+  mn_n = 20;
+  mn_args = arguments();
+  mn_i = 0;
+  while mn_i < len(mn_args) {
+    if mn_args[mn_i]? == "--n" && mn_i + 1 < len(mn_args) {
+      mn_n = (mn_args[mn_i + 1]? as integer?)?;
+      mn_i += 1;
+    }
+    mn_i += 1;
+  }
+  if mn_n < 1 { mn_n = 1; }
+  mn_t0 = ticks();
+  println("routine\titers\tus\tns_op\tpx\tns_px\thash");
+  mn_rows: vector<Row> = [bench_fbm(mn_n)];
+  mn_sink = 0;
+  for row in mn_rows {
+    print_row(row);
+    mn_sink += row.sink;
+  }
+  println("time: {(ticks() - mn_t0) / 1000}ms sink={mn_sink}");
+}

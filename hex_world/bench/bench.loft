@@ -1,0 +1,134 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// bench — the performance pass: the package's hot door, timed on a fixed workload, with a
+// hash of what it produced.
+//
+//     loft --interpret bench/bench.loft [--n N]         the interpreter
+//     loft --native-release bench/bench.loft [--n N]    compiled
+//     rustc -O --edition=2021 bench/bench.rs -o bench/.build/stats_rs   the Rust twin
+//
+// One tab-separated line per routine: name, iterations, total µs, ns per op, cell reads one
+// op makes, ns per read, and an FNV-1a-32 hash of one canonical op's output.  The
+// interpreter, the native build and the pure-Rust twin in bench/bench.rs must print the
+// same hash for a row, or one of them is not computing the routine it claims to.
+//
+// `get_cell` finds its chunk by a LINEAR scan of the chunk list comparing two fields, then
+// returns the Cell record by value.  Every op reads one of two prebuilt worlds, picked by
+// `r & 1`: the same 200 chunks in the same order, with different cell values — so the
+// values move and the scan lengths do not.
+//
+// HELD OUT: `tick_and_decay` (64 chunks 30 % filled, 20 ticks).  On current loft each
+// `get_cell(self, …).c_color` read inside `neighbour_count` leaks one store, and the census
+// workload's first tick (19,662 filled cells x 6 reads) exhausts the 65,535-store table on
+// both backends.  The row returns once that leak is fixed.  For the same reason the read
+// below binds the returned Cell to a local before reading its fields.
+use hex_world;
+
+/// One measured routine.
+struct Row {
+  name: text = "",
+  iters: integer = 0,
+  us: integer = 0,
+  px: integer = 0,
+  hash: integer = 0,
+  sink: integer = 0,
+}
+
+const FNV_OFFSET = 2166136261;
+const FNV_PRIME = 16777619;
+
+const CHUNKS = 200;
+const READS = 200000;
+
+/// FNV-1a-32 over the low 32 bits of each integer, high byte first.
+fn fnv(h0: integer, v: const vector<integer>) -> integer {
+  fv_h = h0;
+  for x in v {
+    fv_w = x & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ ((fv_w >> 24) & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ ((fv_w >> 16) & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ ((fv_w >> 8) & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ (fv_w & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+  }
+  fv_h
+}
+
+fn print_row(r: const Row) {
+  pr_ns = ((r.us * 1000) / r.iters) ?? 0;
+  pr_px = if r.px > 0 { (((r.us * 1000) as float) / ((r.iters * r.px) as float)) ?? 0.0 }
+          else { 0.0 };
+  println("{r.name}\t{r.iters}\t{r.us}\t{pr_ns}\t{r.px}\t{pr_px:.3}\t{r.hash:x}");
+}
+
+// ── The keyed read ──────────────────────────────────────────────────
+
+/// 200 chunks on a 20 x 10 chunk grid spanning the origin (so half the coordinates are
+/// negative and take the floor-division path), each holding 32 filled cells; `salt`
+/// changes the cells' values, never where they are.
+fn build_world(salt: integer) -> World {
+  bw_w = world_empty();
+  for k in 0..CHUNKS {
+    bw_cx = k % 20 - 10;
+    bw_cz = k / 20 - 5;
+    for j in 0..32 {
+      bw_hx = (j * 5 + k) & 31;
+      bw_hz = (j * 11 + k * 3) & 31;
+      bw_v = j + k + salt;
+      set_cell(bw_w, bw_cx * 32 + bw_hx, bw_cz * 32 + bw_hz,
+               Cell { c_color: (1 + bw_v % 9) as u8? ?? 1, c_height: (bw_v & 127) as u8? ?? 0,
+                      c_age: (bw_v & 1023) as u16? ?? 0 });
+    }
+  }
+  bw_w
+}
+
+/// READS scattered reads over the whole 640 x 320 cell extent.
+fn read_op(w: World) -> vector<integer> {
+  ro_acc = 0;
+  ro_filled = 0;
+  for i in 0..READS {
+    ro_q = (i * 7919) % 640 - 320;
+    ro_r = (i * 104729) % 320 - 160;
+    ro_c = get_cell(w, ro_q, ro_r);
+    if ro_c.c_color != 0 { ro_filled += 1; }
+    ro_acc += ro_c.c_color + ro_c.c_height * 3 + ro_c.c_age * 7;
+  }
+  [ro_filled, ro_acc]
+}
+
+fn bench_get_cell(n: integer) -> Row {
+  bg_w0 = build_world(0);
+  bg_w1 = build_world(1);
+  bg_t0 = ticks();
+  bg_sink = 0;
+  for r in 0..n {
+    if (r & 1) == 0 { bg_sink += read_op(bg_w0)[1]?; } else { bg_sink += read_op(bg_w1)[1]?; }
+  }
+  bg_us = ticks() - bg_t0;
+  Row { name: "get_cell", iters: n, us: bg_us, px: READS,
+        hash: fnv(FNV_OFFSET, read_op(bg_w0)), sink: bg_sink }
+}
+
+fn main() {
+  mn_n = 20;
+  mn_args = arguments();
+  mn_i = 0;
+  while mn_i < len(mn_args) {
+    if mn_args[mn_i]? == "--n" && mn_i + 1 < len(mn_args) {
+      mn_n = (mn_args[mn_i + 1]? as integer?)?;
+      mn_i += 1;
+    }
+    mn_i += 1;
+  }
+  if mn_n < 1 { mn_n = 1; }
+  mn_t0 = ticks();
+  println("routine\titers\tus\tns_op\tpx\tns_px\thash");
+  mn_rows: vector<Row> = [bench_get_cell(mn_n)];
+  mn_sink = 0;
+  for row in mn_rows {
+    print_row(row);
+    mn_sink += row.sink;
+  }
+  println("time: {(ticks() - mn_t0) / 1000}ms sink={mn_sink}");
+}

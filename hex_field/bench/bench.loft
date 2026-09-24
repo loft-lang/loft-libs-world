@@ -1,0 +1,165 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// bench — the performance pass: the package's hot doors, timed on a fixed workload, with a
+// hash of what they produced.
+//
+//     loft --interpret bench/bench.loft [--n N]         the interpreter
+//     loft --native-release bench/bench.loft [--n N]    compiled
+//     rustc -O --edition=2021 bench/bench.rs -o bench/.build/stats_rs   the Rust twin
+//
+// One tab-separated line per routine: name, iterations, total µs, ns per op, items one op
+// processes (edge slots counted, or boundary edges traced), ns per item, and an FNV-1a-32
+// hash of one canonical op's output.  The interpreter, the native build and the pure-Rust
+// twin in bench/bench.rs must print the same hash for a row, or one of them is not
+// computing the routine it claims to.
+//
+// Every op reads an input chosen by the repetition number `r`: `r & 1` picks one of two
+// prebuilt inputs that differ in VALUE (other materials, a disk one column over) and never
+// in the amount of work, so no backend can hoist an op out of the repetition loop.  Each
+// op's result is folded into `sink`.
+use hex_field;
+
+/// One measured routine.
+struct Row {
+  name: text = "",
+  iters: integer = 0,
+  us: integer = 0,
+  px: integer = 0,
+  hash: integer = 0,
+  sink: integer = 0,
+}
+
+const FNV_OFFSET = 2166136261;
+const FNV_PRIME = 16777619;
+
+const FIELD = 64;
+const COUNTS = 100;
+const TRACES = 50;
+
+/// FNV-1a-32 over the low 32 bits of each integer, high byte first.
+fn fnv(h0: integer, v: const vector<integer>) -> integer {
+  fv_h = h0;
+  for x in v {
+    fv_w = x & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ ((fv_w >> 24) & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ ((fv_w >> 16) & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ ((fv_w >> 8) & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ (fv_w & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+  }
+  fv_h
+}
+
+fn print_row(r: const Row) {
+  pr_ns = ((r.us * 1000) / r.iters) ?? 0;
+  pr_px = if r.px > 0 { (((r.us * 1000) as float) / ((r.iters * r.px) as float)) ?? 0.0 }
+          else { 0.0 };
+  println("{r.name}\t{r.iters}\t{r.us}\t{pr_ns}\t{r.px}\t{pr_px:.3}\t{r.hash:x}");
+}
+
+// ── Counting the edge layer: three accessor calls per slot ──────────
+
+/// A 64 x 64 edge layer whose three canonical edges per cell carry a material in 0..4
+/// (zero, open, for about a fifth of them), shifted by `salt`.
+fn material_field(salt: integer) -> EdgeSet {
+  mf_e = edgeset_new(0, 0, FIELD, FIELD);
+  for mf_r in 0..FIELD {
+    for mf_q in 0..FIELD {
+      for mf_s in 0..3 {
+        mf_d = 0;
+        if mf_s == 1 { mf_d = 2; }
+        if mf_s == 2 { mf_d = 3; }
+        mf_m = (mf_q * 7 + mf_r * 3 + mf_d + salt) % 5;
+        edge_set_mat(mf_e, mf_q, mf_r, nb_q(mf_q, mf_r, mf_d), nb_r(mf_q, mf_r, mf_d), mf_m);
+      }
+    }
+  }
+  mf_e
+}
+
+fn count_op(e: EdgeSet) -> vector<integer> {
+  ct_sum = 0;
+  ct_last = 0;
+  for _c in 0..COUNTS {
+    ct_last = edgeset_count(e);
+    ct_sum += ct_last;
+  }
+  [ct_last, ct_sum]
+}
+
+fn bench_count(n: integer) -> Row {
+  bc_e0 = material_field(0);
+  bc_e1 = material_field(1);
+  bc_t0 = ticks();
+  bc_sink = 0;
+  for r in 0..n {
+    if (r & 1) == 0 { bc_sink += count_op(bc_e0)[0]?; } else { bc_sink += count_op(bc_e1)[0]?; }
+  }
+  bc_us = ticks() - bc_t0;
+  Row { name: "edgeset_count", iters: n, us: bc_us, px: COUNTS * FIELD * FIELD * 3,
+        hash: fnv(FNV_OFFSET, count_op(bc_e0)), sink: bc_sink }
+}
+
+// ── The loop stitcher: every boundary edge found by a scan of all of them ─
+
+/// A radius-26 window holding a hex disk of radius 24 (1,801 cells, 294 boundary edges).
+fn disk(cq: integer) -> HexSet {
+  dk_s = hexset_new(26);
+  hexdisk_into(dk_s, cq, 0, 24);
+  dk_s
+}
+
+/// The traced loops of the disk, TRACES times over; the last one's vertices hashed.
+fn trace_op(s: HexSet) -> vector<integer> {
+  to_ints: vector<integer> = [];
+  to_verts = 0;
+  for tj in 0..TRACES {
+    to_v = trace(s);
+    to_verts += len(to_v.vm_k);
+    if tj == TRACES - 1 {
+      to_ints = [to_v.vm_loops, len(to_v.vm_k)];
+      for k in to_v.vm_k { to_ints += [k]; }
+      for m in to_v.vm_m { to_ints += [m]; }
+      for st in to_v.vm_start { to_ints += [st]; }
+    }
+  }
+  to_ints += [to_verts];
+  to_ints
+}
+
+fn bench_trace(n: integer) -> Row {
+  bt_s0 = disk(0);
+  bt_s1 = disk(1);
+  bt_t0 = ticks();
+  bt_sink = 0;
+  for r in 0..n {
+    if (r & 1) == 0 { bt_sink += trace_op(bt_s0)[1]?; } else { bt_sink += trace_op(bt_s1)[1]?; }
+  }
+  bt_us = ticks() - bt_t0;
+  bt_one = trace_op(bt_s0);
+  Row { name: "trace", iters: n, us: bt_us, px: TRACES * (bt_one[1] ?? 0),
+        hash: fnv(FNV_OFFSET, bt_one), sink: bt_sink }
+}
+
+fn main() {
+  mn_n = 20;
+  mn_args = arguments();
+  mn_i = 0;
+  while mn_i < len(mn_args) {
+    if mn_args[mn_i]? == "--n" && mn_i + 1 < len(mn_args) {
+      mn_n = (mn_args[mn_i + 1]? as integer?)?;
+      mn_i += 1;
+    }
+    mn_i += 1;
+  }
+  if mn_n < 1 { mn_n = 1; }
+  mn_t0 = ticks();
+  println("routine\titers\tus\tns_op\tpx\tns_px\thash");
+  mn_rows: vector<Row> = [bench_count(mn_n), bench_trace(mn_n)];
+  mn_sink = 0;
+  for row in mn_rows {
+    print_row(row);
+    mn_sink += row.sink;
+  }
+  println("time: {(ticks() - mn_t0) / 1000}ms sink={mn_sink}");
+}

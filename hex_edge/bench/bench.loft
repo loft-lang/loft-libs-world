@@ -1,0 +1,160 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// bench — the performance pass: the package's hot doors, timed on a fixed workload, with a
+// hash of what they produced.
+//
+//     loft --interpret bench/bench.loft [--n N]         the interpreter
+//     loft --native-release bench/bench.loft [--n N]    compiled
+//     rustc -O --edition=2021 bench/bench.rs -o bench/.build/stats_rs   the Rust twin
+//
+// One tab-separated line per routine: name, iterations, total µs, ns per op, items one op
+// processes (queries, or cells swept), ns per item, and an FNV-1a-32 hash of one canonical
+// op's output.  The interpreter, the native build and the pure-Rust twin in bench/bench.rs
+// must print the same hash for a row, or one of them is not computing the routine it
+// claims to.
+//
+// Every op starts from the repetition number `r`: `r & 1` moves the walker's start cell or
+// the disk's centre by one column — the values, never the amount of work — so no backend
+// can hoist an op out of the repetition loop.  Each op's result is folded into `sink`.
+use hex_field;
+use hex_edge;
+
+/// One measured routine.
+struct Row {
+  name: text = "",
+  iters: integer = 0,
+  us: integer = 0,
+  px: integer = 0,
+  hash: integer = 0,
+  sink: integer = 0,
+}
+
+const FNV_OFFSET = 2166136261;
+const FNV_PRIME = 16777619;
+
+const FIELD = 64;
+const WALK = 1000000;
+const WIN = 96;
+const CUTS = 20;
+
+/// FNV-1a-32 over the low 32 bits of each integer, high byte first.
+fn fnv(h0: integer, v: const vector<integer>) -> integer {
+  fv_h = h0;
+  for x in v {
+    fv_w = x & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ ((fv_w >> 24) & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ ((fv_w >> 16) & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ ((fv_w >> 8) & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ (fv_w & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+  }
+  fv_h
+}
+
+fn print_row(r: const Row) {
+  pr_ns = ((r.us * 1000) / r.iters) ?? 0;
+  pr_px = if r.px > 0 { (((r.us * 1000) as float) / ((r.iters * r.px) as float)) ?? 0.0 }
+          else { 0.0 };
+  println("{r.name}\t{r.iters}\t{r.us}\t{pr_ns}\t{r.px}\t{pr_px:.3}\t{r.hash:x}");
+}
+
+// ── The movement query: one edge, asked from a walking mover ────────
+
+/// A 64 x 64 field walled by the thin outlines of three disks.
+fn walled_field() -> EdgeSet {
+  wf_s = hexset_chunk(0, 0, FIELD, FIELD);
+  hexdisk_into(wf_s, 16, 16, 8);
+  hexdisk_into(wf_s, 44, 20, 10);
+  hexdisk_into(wf_s, 30, 46, 12);
+  wf_e = edgeset_new(0, 0, FIELD, FIELD);
+  edges_cut(wf_s, wf_e);
+  wf_e
+}
+
+/// WALK steps of a mover that picks a pseudo-random direction each step, asks `passable`
+/// and moves when the edge is open and the target is in the field.
+fn walk_op(e: EdgeSet, r: integer) -> vector<integer> {
+  wo_q = 2 + (r & 1);
+  wo_r = 2;
+  wo_s = 12345;
+  wo_moves = 0;
+  wo_blocked = 0;
+  for _i in 0..WALK {
+    wo_s = (wo_s * 1103515245 + 12345) & 0x7FFFFFFF;
+    wo_d = (wo_s >> 16) % 6;
+    wo_nq = nb_q(wo_q, wo_r, wo_d);
+    wo_nr = nb_r(wo_q, wo_r, wo_d);
+    if passable(e, wo_q, wo_r, wo_nq, wo_nr) {
+      if wo_nq >= 0 && wo_nq < FIELD && wo_nr >= 0 && wo_nr < FIELD {
+        wo_q = wo_nq;
+        wo_r = wo_nr;
+        wo_moves += 1;
+      }
+    } else {
+      wo_blocked += 1;
+    }
+  }
+  [wo_q, wo_r, wo_moves, wo_blocked]
+}
+
+fn bench_passable(n: integer) -> Row {
+  bp_e = walled_field();
+  bp_t0 = ticks();
+  bp_sink = 0;
+  for r in 0..n { bp_sink += walk_op(bp_e, r)[3]?; }
+  bp_us = ticks() - bp_t0;
+  Row { name: "passable", iters: n, us: bp_us, px: WALK,
+        hash: fnv(FNV_OFFSET, walk_op(bp_e, 0)), sink: bp_sink }
+}
+
+// ── The thin wall: every boundary edge of a filled disk ─────────────
+
+fn disk(cq: integer) -> HexSet {
+  dk_s = hexset_chunk(0, 0, WIN, WIN);
+  hexdisk_into(dk_s, cq, 48, 45);
+  dk_s
+}
+
+/// A fresh edge layer cut CUTS times from the same disk: the first pass writes every
+/// boundary edge, the rest find each one already claimed — every pass sweeps the window.
+fn cut_op(s: HexSet) -> vector<integer> {
+  co_e = edgeset_new(0, 0, WIN, WIN);
+  for _c in 0..CUTS { edges_cut(s, co_e); }
+  [edgeset_surf_count(co_e), edgeset_digest(co_e)]
+}
+
+fn bench_cut(n: integer) -> Row {
+  bc_s0 = disk(47);
+  bc_s1 = disk(48);
+  bc_t0 = ticks();
+  bc_sink = 0;
+  for r in 0..n {
+    if (r & 1) == 0 { bc_sink += cut_op(bc_s0)[0]?; } else { bc_sink += cut_op(bc_s1)[0]?; }
+  }
+  bc_us = ticks() - bc_t0;
+  Row { name: "edges_cut", iters: n, us: bc_us, px: CUTS * WIN * WIN,
+        hash: fnv(FNV_OFFSET, cut_op(bc_s0)), sink: bc_sink }
+}
+
+fn main() {
+  mn_n = 20;
+  mn_args = arguments();
+  mn_i = 0;
+  while mn_i < len(mn_args) {
+    if mn_args[mn_i]? == "--n" && mn_i + 1 < len(mn_args) {
+      mn_n = (mn_args[mn_i + 1]? as integer?)?;
+      mn_i += 1;
+    }
+    mn_i += 1;
+  }
+  if mn_n < 1 { mn_n = 1; }
+  mn_t0 = ticks();
+  println("routine\titers\tus\tns_op\tpx\tns_px\thash");
+  mn_rows: vector<Row> = [bench_passable(mn_n), bench_cut(mn_n)];
+  mn_sink = 0;
+  for row in mn_rows {
+    print_row(row);
+    mn_sink += row.sink;
+  }
+  println("time: {(ticks() - mn_t0) / 1000}ms sink={mn_sink}");
+}
