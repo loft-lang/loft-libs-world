@@ -218,10 +218,21 @@ impl EdgeSet {
 // ── hexcombine.loft ─────────────────────────────────────────────────
 
 /// `a ∪ b` over `a`'s window (the bench's two sets share it): one OR over the cell vectors.
+/// The library's algorithm (rule 1): a fresh chunk on `a`'s window, then per cell two
+/// windowed reads and a windowed write.  For the library's author: where both sets share one
+/// window — every caller in this bench, and `combine_cut`'s — the union is an element-wise OR
+/// of the two cell vectors and a count, which rustc vectorises (~0.15 ns a cell against this
+/// form's per-cell index arithmetic).
 fn field_union(a: &HexSet, b: &HexSet) -> HexSet {
-    let cells: Vec<bool> = a.cells.iter().zip(&b.cells).map(|(&x, &y)| x || y).collect();
-    let count = cells.iter().filter(|&&c| c).count() as i64;
-    HexSet { q0: a.q0, r0: a.r0, w: a.w, h: a.h, cells, count }
+    let mut u = HexSet::chunk(a.q0, a.r0, a.w, a.h);
+    for r in a.r0..a.r0 + a.h {
+        for q in a.q0..a.q0 + a.w {
+            if a.get(q, r) || b.get(q, r) {
+                u.set(q, r, true);
+            }
+        }
+    }
+    u
 }
 
 /// Mark all, cut once — the union read on the fly rather than built.
