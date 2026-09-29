@@ -20,9 +20,9 @@
 // and two accessor calls.  Every op reads an input chosen by `r & 1` — a roof with its
 // eave a quarter higher, a cone centre a quarter to the right — which moves the values and
 // never the amount of work.
-use hex_field;
-use hex_way;
-use hex_roof;
+use hex_field::*;
+use hex_way::*;
+use hex_roof::*;
 
 /// One measured routine.
 struct Row {

@@ -17,9 +17,9 @@
 // the second the first moved one column over — the values, never the amount of work — so
 // no backend can hoist an op out of the repetition loop.  Each op's result is folded into
 // `sink`.
-use hex_field;
-use hex_form;
-use hex_place;
+use hex_field::*;
+use hex_form::*;
+use hex_place::*;
 
 /// One measured routine.
 struct Row {

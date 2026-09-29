@@ -23,9 +23,9 @@
 // and writing the edge.  Its op reads one of two roads chosen by `r & 1`, the second one
 // cell column to the right — a lattice translation, so the values move and the footprint,
 // and with it the work, does not.
-use hex_field;
-use hex_edge;
-use hex_way;
+use hex_field::*;
+use hex_edge::*;
+use hex_way::*;
 
 /// One measured routine.
 struct Row {

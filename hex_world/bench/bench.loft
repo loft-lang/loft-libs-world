@@ -23,7 +23,7 @@
 // workload's first tick (19,662 filled cells x 6 reads) exhausts the 65,535-store table on
 // both backends.  The row returns once that leak is fixed.  For the same reason the read
 // below binds the returned Cell to a local before reading its fields.
-use hex_world;
+use hex_world::*;
 
 /// One measured routine.
 struct Row {

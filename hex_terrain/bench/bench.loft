@@ -25,8 +25,8 @@
 // cell's type through a NULLABLE record, then its six neighbours' heights.  Each op reads
 // an input chosen by `r & 1`: the sample points half a metre over, the terrain a quarter
 // metre higher, the neighbour multiplier another value — never another amount of work.
-use hex_grid;
-use hex_terrain;
+use hex_grid::*;
+use hex_terrain::*;
 
 /// One measured routine.
 struct Row {

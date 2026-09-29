@@ -27,7 +27,7 @@
 // differ only in their heights.  Both files live in bench/.build/, resolved against the
 // working directory (`#cwd`), where the bench is run from the package root.
 #cwd
-use hex_field;
+use hex_field::*;
 
 /// One measured routine.
 struct Row {

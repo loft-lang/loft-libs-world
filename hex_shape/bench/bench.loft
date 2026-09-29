@@ -18,10 +18,10 @@
 // for its degree, once per step for the way ahead.  Every op reads one of two edge layers
 // chosen by `r & 1`, the same wall one cell column apart: the values move, the amount of
 // work does not.
-use hex_field;
-use hex_grid;
-use hex_form;
-use hex_shape;
+use hex_field::*;
+use hex_grid::*;
+use hex_form::*;
+use hex_shape::*;
 
 /// One measured routine.
 struct Row {

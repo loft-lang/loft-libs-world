@@ -18,9 +18,9 @@
 // names, one of two same-length text pools or one of two rings a column apart, and `r`
 // turns the plan — the values, never the amount of work — so no backend can hoist an op
 // out of the repetition loop.  Each op's result is folded into `sink`.
-use hex_field;
-use hex_grid;
-use hex_form;
+use hex_field::*;
+use hex_grid::*;
+use hex_form::*;
 
 /// One measured routine.
 struct Row {

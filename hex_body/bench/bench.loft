@@ -17,7 +17,7 @@
 // Every op starts from the repetition number `r`: `r & 1` shifts every joint value, or which
 // rig text a batch starts on — the values, never the amount of work — so no backend can hoist
 // an op out of the repetition loop.  Each op's result is folded into `sink`.
-use hex_body;
+use hex_body::*;
 
 /// One measured routine.
 struct Row {

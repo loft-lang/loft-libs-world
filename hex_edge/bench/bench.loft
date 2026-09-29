@@ -22,8 +22,8 @@
 // intersections in doubles and one `passable`.  Its op sweeps SWEEPS pseudo-random
 // segments of up to ten units across the walled field, each starting inside the cell it
 // names; `r & 1` nudges every start point a tenth of a unit, inside the same cell.
-use hex_field;
-use hex_edge;
+use hex_field::*;
+use hex_edge::*;
 
 /// One measured routine.
 struct Row {

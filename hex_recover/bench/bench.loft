@@ -19,9 +19,9 @@
 // work — so no backend can hoist an op out of the repetition loop.  `forms_upto` has no
 // input but its level, so its repetitions differ in nothing; the Rust twin `black_box`es
 // the level instead.  Each op's result is folded into `sink`.
-use hex_field;
-use hex_form;
-use hex_recover;
+use hex_field::*;
+use hex_form::*;
+use hex_recover::*;
 
 /// One measured routine.
 struct Row {

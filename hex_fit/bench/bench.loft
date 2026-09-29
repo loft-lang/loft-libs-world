@@ -17,9 +17,9 @@
 // Every op starts from the repetition number `r`: `r & 1` moves the footprint AND the runs'
 // anchors one column right — the values, never the amount of work — so no backend can hoist
 // an op out of the repetition loop.  Each op's result is folded into `sink`.
-use hex_field;
-use hex_form;
-use hex_fit;
+use hex_field::*;
+use hex_form::*;
+use hex_fit::*;
 
 /// One measured routine.
 struct Row {
