@@ -20,8 +20,8 @@
 // Segment record: 6 floats, uniform for both kinds (flat arrays, no vector<vector<>>).
 //   straight: [x0, y0, x1, y1,  0,  0]
 //   arc:      [cx, cy,  R, a0, a1,  0]
-use hex_field;
-use hex_edge;
+use hex_field::*;
+use hex_edge::*;
 
 pub const WAY_STRAIGHT = 1;
 pub const WAY_ARC      = 2;

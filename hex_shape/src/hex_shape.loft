@@ -7,6 +7,6 @@
 // whose centre is exact and whose radius quantises to a realisable shell.
 //
 // Entry point: re-exports `hexwall`, `hexbox`, `hexarc`.
-use hexwall;
-use hexbox;
-use hexarc;
+pub use hexwall::*;
+pub use hexbox::*;
+pub use hexarc::*;

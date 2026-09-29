@@ -17,9 +17,9 @@
 // from the wrong source still looks like a roof: it still has an apex, it still
 // sheds water, and it still passes every property the conformance suite checks.
 // The damage shows at the EAVE, which is the last place anyone looks.
-use hex_roof;
-use hex_way;
-use hex_field;
+use hex_roof::*;
+use hex_way::*;
+use hex_field::*;
 
 const W = 9;
 const H = 9;

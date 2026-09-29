@@ -3,9 +3,9 @@
 // hex_draw — the conformance tests: a Plan draws into the field, and its wall surface reads back.
 //
 // Contract only; the exhaustive measurement is hexbody's `tests/house.loft` and `tests/surface.loft`.
-use hex_draw;
-use hex_form;
-use hex_field;
+use hex_draw::*;
+use hex_form::*;
+use hex_field::*;
 
 fn plan5x4() -> Plan { plan_new(0, 0, 5, 4, 0, false) }
 

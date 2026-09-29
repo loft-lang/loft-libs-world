@@ -31,10 +31,11 @@
 // the wall material rather than sitting in a channel beside it.  Composition therefore
 // belongs in the material vocabulary — "a door in a cottage wall" is a material — which is
 // what the consumer reads to decide passability.
-use hex_field;
-use hex_form;
-use hex_way;
-use hex_roof;
+use hex_field::*;
+use hex_form::*;
+use hex_way::*;
+use hex_roof::*;
+use hex_grid::*;
 
 const EPS = 0.000000001;
 

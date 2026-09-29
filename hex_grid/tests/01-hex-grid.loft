@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // hexgrid: the hex lattice + the square local basis.
-use hex_grid;
+use hex_grid::*;
 
 fn main() {
   (x, y) = hex_grid::hex_to_px(3, 5);

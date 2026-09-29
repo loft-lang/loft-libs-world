@@ -15,7 +15,7 @@
 //
 // Headings live on `H₁₂`: twelve directions, 30° apart, counter-clockwise from due east.
 // EVEN headings step to an edge neighbour, ODD ones point at a vertex.
-use hex_form;
+use hex_form::*;
 
 fn main() {
   // Six sides, turning two twelfths (60°) at each — a hexagon.

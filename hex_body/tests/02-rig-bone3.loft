@@ -13,7 +13,7 @@
 // bit-identical in f64 and a single bone can.  That boundary is measured here
 // rather than asserted, and it is the reason the implementation carries a
 // matrix and not a quaternion.
-use hex_body;
+use hex_body::*;
 
 fn fabs3(x: float) -> float { if x < 0.0 { 0.0 - x } else { x } }
 

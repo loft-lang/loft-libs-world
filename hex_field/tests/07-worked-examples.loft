@@ -22,7 +22,7 @@
 //
 // The fixtures are written BY HAND and are as small as the claim allows: one
 // hex, two hexes, a ring of six.  A shrunken real thing would not be readable.
-use hex_field;
+use hex_field::*;
 
 // Names a scratch file AND clears any leftover from a run that died before its own
 // cleanup.  `file(path)` opens an existing file to APPEND, so without this a crashed

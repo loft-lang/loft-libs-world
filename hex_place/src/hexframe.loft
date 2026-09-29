@@ -17,7 +17,7 @@
 //
 // This is the one place `hexframe` is float, on purpose.  Everything the pose acts on is otherwise
 // integer/exact (X1–X52), so `ε_seam` is the entire error budget of the stack.
-use hex_form;
+use hex_form::*;
 
 // A pose: a rotation (given as its cos/sin, so a Pythagorean angle can be represented EXACTLY) then
 // a translation.  Stored as cos/sin rather than θ so a gate can build a rational rotation and check

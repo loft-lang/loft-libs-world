@@ -24,9 +24,9 @@
 // chain of hex edges lying ALONG the wall (the boundary between the half-planes it divides,
 // `wall_separates`) and stores nothing else.  No direction, no offset, no triangles: recovering
 // the line from the marks is `rebuild`'s job, not storage's.
-use hex_field;
-use hex_grid;
-use hex_form;
+use hex_field::*;
+use hex_grid::*;
+use hex_form::*;
 
 // The wall is one triangle thick.  Triangle side = 1/3 hex edge, so the height — and the
 // wall's width — is sqrt(3)/6 world units = 1/4 m exactly.  (DESIGN.md §10.7.)

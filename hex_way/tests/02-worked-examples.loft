@@ -25,9 +25,9 @@
 // part by part covers the same cells as one stamped correctly.  In each case the
 // number that can tell them apart is NOT the one a caller reaches for first, and
 // naming that number is what these examples are for.
-use hex_way;
-use hex_field;
-use hex_edge;
+use hex_way::*;
+use hex_field::*;
+use hex_edge::*;
 
 const Q0 = -6;
 const R0 = -6;

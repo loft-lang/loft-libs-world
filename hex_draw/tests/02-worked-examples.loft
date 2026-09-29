@@ -21,13 +21,13 @@
 // So a wall's DIRECTION is exact and its POSITION is a rational the plan cannot
 // name; a door is an integer material and never a hole; a feature's `t` is an
 // exact rational and never a float you chose.  Each of those is worked below.
-use hex_draw;
-use hex_field;
-use hex_form;
-use hex_grid;
-use hex_shape;
-use hex_way;
-use hex_roof;
+use hex_draw::*;
+use hex_field::*;
+use hex_form::*;
+use hex_grid::*;
+use hex_shape::*;
+use hex_way::*;
+use hex_roof::*;
 
 const W  = 41;
 const H  = 41;

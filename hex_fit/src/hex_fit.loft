@@ -8,5 +8,5 @@
 // residual. Also the `Draft` — a form carrying an embedded wall run.
 //
 // Entry point: re-exports `hexfit`, `hexdraft`.
-use hexfit;
-use hexdraft;
+pub use hexfit::*;
+pub use hexdraft::*;

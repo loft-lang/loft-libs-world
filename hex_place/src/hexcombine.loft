@@ -28,8 +28,8 @@
 // stencil, so no distance and no float enter.  This is the κ ≤ 2 case; N stencils are the same
 // construction (union all, cut once, nearest source).  Different LEVELS never contend at all
 // (crawler's bridge guarantee) — that axis waits on the layer machinery and is not gated here.
-use hex_field;
-use hex_form;
+use hex_field::*;
+use hex_form::*;
 
 // The union footprint of two stencils sharing `a`'s chunk — a fresh HexSet, `a ∪ b`.
 pub fn field_union(a: HexSet, b: HexSet) -> HexSet {

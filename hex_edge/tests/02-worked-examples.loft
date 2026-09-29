@@ -23,8 +23,8 @@
 // The fixtures are written BY HAND and are as small as the claim allows: one wall,
 // one straight, two cells.  Distances are in the lattice's own world units, in
 // which a hex has circumradius 1 and one hex STEP is sqrt(3) ~ 1.7320508.
-use hex_edge;
-use hex_field;
+use hex_edge::*;
+use hex_field::*;
 
 const SQ3_2 = 0.8660254037844386;
 

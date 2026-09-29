@@ -10,9 +10,9 @@
 // ⚠ `roof_match` takes a TOLERANCE and is an R2 fit by design — recovering a profile from an
 // arbitrary height field, not from one we authored.  That is licensed; it is not an `ε` smuggled
 // into an exact path.
-use hex_roof;
-use hex_way;
-use hex_field;
+use hex_roof::*;
+use hex_way::*;
+use hex_field::*;
 
 const W = 9;
 const H = 9;

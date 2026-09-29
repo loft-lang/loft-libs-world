@@ -11,7 +11,7 @@
 // what a read of an absent region means, when a region starts existing, and when
 // it stops — and none of the three is visible in a signature that says
 // `get_cell(self, q, r) -> Cell`.
-use hex_world;
+use hex_world::*;
 
 // @HXW-001 — `get_cell` cannot tell you "there is no chunk here".  It answers
 // `cell_empty()` both for a cell that was never written and for a chunk that

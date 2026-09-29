@@ -26,8 +26,8 @@
 // must be **returned and flagged — never silently absorbed**.  Which height to seat at (lowest,
 // mean, highest) is a **policy**; it changes the residual and changes nothing about recoverability —
 // the same split `A6` found between `Sep` (recoverability) and `X7` (a choice policy).
-use hex_field;
-use hex_form;
+use hex_field::*;
+use hex_form::*;
 
 pub const SEAT_LOW  = 0;    // seat at the lowest ground under the footprint — the building perches
 pub const SEAT_MEAN = 1;    // seat at the mean — the residual is smallest, split above and below

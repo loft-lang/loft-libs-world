@@ -6,7 +6,7 @@
 // a NEGATIVE extent origin, labels past u8 (301), and heights that are both
 // negative and fractional (-3.5) — the three things moros#1 measured the dense
 // model could not express.
-use hex_field;
+use hex_field::*;
 
 // Relative paths resolve from the TEST FILEs directory under `loft test`,
 // not the package root — a doubled `tests/` is the classic way to get this wrong.

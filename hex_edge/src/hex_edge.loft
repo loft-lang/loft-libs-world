@@ -71,7 +71,7 @@
 // `Junctions` and `Features` hang extra detail off the same edges — a corner post, a door,
 // a window — for consumers that draw or simulate rather than just collide.
 
-use hex_field;
+use hex_field::*;
 
 // The surfaces a collision can reference.  Small and flat on purpose: a normal must be
 // cheap to evaluate at contact time.
