@@ -4,8 +4,8 @@
 // round-trip, with a named reason, an offer, and a residual.
 //
 // Contract only; the exhaustive measurement is hexbody's `tests/fit.loft`.
-use hex_fit;
-use hex_field;
+use hex_fit::*;
+use hex_field::*;
 
 
 fn main() {

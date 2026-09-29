@@ -6,7 +6,7 @@
 // editor) is entitled to rely on. They are deliberately self-contained: crawler keeps
 // its own golden-JSON diff against the Python oracle, because that is a CONSUMER's
 // check of this package, not this package's check of itself.
-use hex_field;
+use hex_field::*;
 
 fn main() {
   s = hexset_new(16);

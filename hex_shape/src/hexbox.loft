@@ -51,9 +51,9 @@
 //
 // Worked examples: `tests/` alongside this file.
 
-use hex_field;
-use hex_grid;
-use hex_form;
+use hex_field::*;
+use hex_grid::*;
+use hex_form::*;
 
 pub const BOX_ROT = 12;
 

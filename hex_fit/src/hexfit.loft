@@ -38,10 +38,11 @@
 // The `*_at` twins take the scale explicitly, for a consumer working at a scale other than
 // the default; the short names are those twins at `HEIGHT_SCALE`.
 
-use hex_field;
-use hex_draw;
-use hex_shape;
-use hexdraft;
+use hex_field::*;
+use hex_draw::*;
+use hex_shape::*;
+use hexdraft::*;
+use hex_form::*;
 
 // Continuing `hexdraft`'s codes (0..6), so one `fit_reason` covers the whole doorstep.
 pub const FIT_NO_SIDE    = 7;    // the side index is not a side, or carries no edges

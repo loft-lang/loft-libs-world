@@ -22,8 +22,8 @@
 // integers only, fixed order, reduced forms, fixed layout, defaults omitted.
 // Every one of them is a way a HAND-WRITTEN form parses and means something
 // else, so every one of them is worked below.
-use hex_form;
-use hex_field;
+use hex_form::*;
+use hex_field::*;
 
 // A patch of lattice big enough to hold every shape here, well clear of its edges:
 // `form_fill` counts only cells inside the patch, so a patch that clipped the shape

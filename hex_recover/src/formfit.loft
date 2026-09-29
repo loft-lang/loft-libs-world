@@ -15,9 +15,9 @@
 // WHEN NOTHING MATCHES, IT SAYS SO. A footprint that no grammar form draws is **R2** — arbitrary
 // cell-authored content, no `𝕋` behind it — and the one thing `rebuild` must never do is return a
 // confident R1 answer for it. It reports the regime and a residual instead.
-use hex_field;
-use hex_form;
-use formcensus;
+use hex_field::*;
+use hex_form::*;
+use formcensus::*;
 
 // ── THE WINDOW EVERY REDRAW GOES INTO — SIZED FROM THE FORM, NOT FROM A GUESS ─
 //

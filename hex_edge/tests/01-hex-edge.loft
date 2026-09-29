@@ -6,8 +6,8 @@
 // lives in hexbody's gates (`tests/wall.loft`, `tests/arb.loft`, `tests/line.loft`), which print
 // their evidence and carry a control that must fire.  This file is what a consumer reads to see
 // the package is exercised, and what CI runs under `LOFT_DENY_WARNINGS=1`.
-use hex_edge;
-use hex_field;
+use hex_edge::*;
+use hex_field::*;
 
 fn main() {
   s = surfaces_new();

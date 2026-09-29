@@ -3,9 +3,10 @@
 // hex_shape — the conformance tests: the box in 12 directions, and the arc whose radius is a shell.
 //
 // Contract only; the exhaustive measurement is hexbody's `tests/box.loft` and `tests/arc.loft`.
-use hex_shape;
-use hex_form;
-use hex_field;
+use hex_shape::*;
+use hex_form::*;
+use hex_field::*;
+use hex_grid::*;
 
 fn main() {
   b = box_new(0, 0, 5, 4, 0, false);

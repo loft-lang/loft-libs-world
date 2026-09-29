@@ -21,13 +21,13 @@
 //   the grid is READ OFF THE FIELD    never computed from a formula — the field
 //                                     owns the answer, and a private copy of it
 //                                     has already been wrong once (see @HXI-005)
-use hex_fit;
-use hex_field;
-use hex_form;
-use hex_draw;
-use hex_grid;
-use hex_shape;
-use hex_recover;
+use hex_fit::*;
+use hex_field::*;
+use hex_form::*;
+use hex_draw::*;
+use hex_grid::*;
+use hex_shape::*;
+use hex_recover::*;
 
 const W  = 41;
 const H  = 41;

@@ -7,5 +7,5 @@
 // and the canonical text a form is written to and read back from — byte-for-byte.
 //
 // Entry point: re-exports `hexform` (the lattice and the form) and `formtext` (the text).
-use hexform;
-use formtext;
+pub use hexform::*;
+pub use formtext::*;

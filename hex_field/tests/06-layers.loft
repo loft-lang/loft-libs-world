@@ -1,7 +1,7 @@
 // Named integer layers.  The library holds "a named integer field over the
 // chunk"; WHICH layers exist is the consumer's vocabulary — moros carries an
 // item and its rotation, another game would carry something else.
-use hex_field;
+use hex_field::*;
 
 fn test_layers_are_independent_and_named() {
   ls = layers_new(0, 0, 4, 4);

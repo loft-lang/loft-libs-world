@@ -3,9 +3,9 @@
 // hex_recover — the conformance tests: rebuild a model from the field, exactly or with a residual.
 //
 // Contract only; the exhaustive measurement is hexbody's `tests/census.loft` and `tests/trip.loft`.
-use hex_recover;
-use hex_form;
-use hex_field;
+use hex_recover::*;
+use hex_form::*;
+use hex_field::*;
 
 // REGIME_R1 / REGIME_R2 are exported by the library.
 

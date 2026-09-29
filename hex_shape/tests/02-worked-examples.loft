@@ -25,10 +25,10 @@
 // a connectivity check that passes on a wall you can walk straight through
 // (`@HXS-007`).  Both are the package's own checks, and both needed a second
 // number beside them.
-use hex_shape;
-use hex_field;
-use hex_form;
-use hex_grid;
+use hex_shape::*;
+use hex_field::*;
+use hex_form::*;
+use hex_grid::*;
 
 const Q0 = -12;
 const R0 = -12;

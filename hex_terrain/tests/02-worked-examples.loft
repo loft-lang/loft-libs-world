@@ -22,8 +22,8 @@
 // The fixture below is a hand-authored ramp: `h(c, r) = 100c + 10r` with a sea
 // column at `c = 0`, 500 m tiles, so every number in these tests is arithmetic
 // you can redo on paper.
-use hex_terrain;
-use hex_grid;
+use hex_terrain::*;
+use hex_grid::*;
 
 TILE = 500.0;
 SEED = 7;

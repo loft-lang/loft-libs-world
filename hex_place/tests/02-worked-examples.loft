@@ -19,8 +19,8 @@
 // the wrong one.  The nearby call is what each example shows beside the right
 // one, because a demonstration of only the good half teaches nothing about
 // which half you are in.
-use hex_place;
-use hex_field;
+use hex_place::*;
+use hex_field::*;
 
 // A 3x3 block of cells, its left column at `off`, in a chunk with room around it.
 fn box3(off: integer) -> HexSet {

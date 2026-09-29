@@ -1,6 +1,6 @@
 // The stencil contract.  Every assertion here is exact — no tolerance appears in
 // this file, because the whole claim is that the lattice makes rotation exact.
-use hex_field;
+use hex_field::*;
 
 // An L-shape: handed, so a mirror is distinguishable from a rotation.
 fn ell() -> Stencil {

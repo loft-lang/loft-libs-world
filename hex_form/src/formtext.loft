@@ -26,7 +26,7 @@
 // only by `h0` are different authorings that law **I** makes interchangeable at USE time — that is
 // placement's job, not the text's. After corner-canonicalisation the only multiplicity left among
 // the S5 forms is exactly `h0`, which is the clean decomposition.
-use hexform;
+use hexform::*;
 
 // ── C2/C4: the layout ──────────────────────────────────────────────────────
 //

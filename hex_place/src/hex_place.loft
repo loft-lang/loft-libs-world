@@ -7,6 +7,6 @@
 // is SEATED on terrain by writing the height slot alone, so its footprint is untouched.
 //
 // Entry point: re-exports `hexframe`, `hexseat`, `hexcombine`.
-use hexframe;
-use hexseat;
-use hexcombine;
+pub use hexframe::*;
+pub use hexseat::*;
+pub use hexcombine::*;

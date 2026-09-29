@@ -20,8 +20,8 @@
 // `(k·√3/2, m/2)`, so its squared distance from the origin is `(3k² + m²)/4` — and `3k² + m²` is
 // `hexform::vec_n2_4`, already in the tree.  A shell is therefore an integer `N`, the radius it
 // stands for is `√N / 2` world units, and "inside the disk" is the integer test `N' ≤ N`.
-use hex_field;
-use hex_form;
+use hex_field::*;
+use hex_form::*;
 
 // Fill the disk of shell `n24` about (cq, cr): every cell whose 4·squared-distance is at most
 // `n24`.  Entirely integer — the comparison that decides membership never touches a float.

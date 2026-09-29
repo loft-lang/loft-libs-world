@@ -15,7 +15,7 @@
 //
 // Every threshold here is dimensionless — hex steps and lattice units. The package never
 // states a metre; a consumer picks metres-per-hex and converts once, at its own edge.
-use hex_field;
+use hex_field::*;
 
 fn main() {
   s = hex_field::hexset_chunk(0, 0, 5, 5);

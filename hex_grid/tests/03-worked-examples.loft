@@ -21,7 +21,7 @@
 //
 // Nothing below needs a fixture or a window; they are the cheapest tests in the
 // repo and they pin the traps that cost the most to find.
-use hex_grid;
+use hex_grid::*;
 
 // Float comparison for world coordinates: the library reaches a point through an
 // expression tree a caller will not reproduce exactly, so an exact `==` on a

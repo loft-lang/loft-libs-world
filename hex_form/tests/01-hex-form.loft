@@ -5,8 +5,8 @@
 // These assert the library's CONTRACT.  The exhaustive measurement lives in hexbody's gates
 // (`tests/form.loft`, `tests/text.loft`), which print their evidence and carry a control that must
 // fire.  This is what CI runs under `LOFT_DENY_WARNINGS=1`.
-use hex_form;
-use hex_field;
+use hex_form::*;
+use hex_field::*;
 
 fn main() {
   f = form_new(0, [1, 1, 1], [4, 4, 4]);            // an equilateral triangle

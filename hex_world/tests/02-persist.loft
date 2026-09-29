@@ -18,7 +18,7 @@
 // gitignored.  Each test re-creates its tmp file, so leftover
 // artefacts from a previous run are harmless.
 
-use hex_world;
+use hex_world::*;
 
 // ── chunk addressing ─────────────────────────────────────────────
 

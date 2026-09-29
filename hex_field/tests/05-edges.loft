@@ -1,7 +1,7 @@
 // Walls in stencils.  An edge's identity is the doubled midpoint of its two cell
 // centres, so it survives rotation and translation for the same reason a cell
 // does — exactly, on the integer lattice.
-use hex_field;
+use hex_field::*;
 
 // A room: a 3x3 block with a wall on one specific edge.
 fn walled() -> Stencil {

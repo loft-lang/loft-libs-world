@@ -21,7 +21,7 @@
 // — a parity drift is a drift of 1 in k, and 1 is visible with no epsilon.
 // The float step is checked separately below, where a tolerance is honest
 // because the claim there is about SCALE, not about the lattice.
-use hex_grid;
+use hex_grid::*;
 
 // Relative paths resolve from the TEST FILE's directory under `loft test`,
 // not the package root — a doubled `tests/` is the classic way to get this wrong.

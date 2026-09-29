@@ -4,7 +4,7 @@
 // world: smoke test for the sparse 32x32-chunk World data model.
 // Validates that get/set round-trips, chunks are created on demand,
 // and the floor-division addressing handles negative coordinates.
-use hex_world;
+use hex_world::*;
 
 fn main() {
   // Empty world has no chunks.

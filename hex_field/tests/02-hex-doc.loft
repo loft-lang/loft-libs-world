@@ -1,6 +1,6 @@
 // The document format's contract.  `load(save(x)) == x` is the interface
 // between consumers, so it is gated here, in the package, not in either game.
-use hex_field;
+use hex_field::*;
 
 // Clears any leftover before naming the path: `file()` APPENDS to an existing file,
 // so a run that fails before its `delete` would poison the next one's header.

@@ -22,7 +22,7 @@
 //
 // The rigs below are two and three bones at quarter turns, so every world
 // position in these tests is one you can work out on paper.
-use hex_body;
+use hex_body::*;
 
 const W = 0.5;                 // the half-width every proxy example uses
 

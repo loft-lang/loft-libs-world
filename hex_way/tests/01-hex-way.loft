@@ -6,9 +6,9 @@
 // These assert the library's CONTRACT, not its depth.  The exhaustive measurement lives in
 // hexbody's gates (`tests/line.loft`, `tests/arb.loft`), which print their evidence and carry a
 // control that must fire.  This file is what CI runs under `LOFT_DENY_WARNINGS=1`.
-use hex_way;
-use hex_edge;
-use hex_field;
+use hex_way::*;
+use hex_edge::*;
+use hex_field::*;
 
 fn main() {
   t = track_new();

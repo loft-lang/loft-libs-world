@@ -20,8 +20,8 @@
 // surface of a solid, an arch the lower surface of an opening. That is why they share
 // everything but the sign of the profile's curvature, and why a cell wants a floor height
 // AND a soffit height rather than a single z.
-use hex_field;
-use hex_way;
+use hex_field::*;
+use hex_way::*;
 
 fn cellx(q: integer, r: integer) -> float {
   ((lattice_k(q, r)) as float) * 0.8660254037844386

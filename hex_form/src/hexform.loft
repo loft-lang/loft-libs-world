@@ -43,8 +43,8 @@
 //
 // Worked examples: `tests/02-worked-examples.loft` (@HXF-001 …).
 
-use hex_field;
-use hex_grid;
+use hex_field::*;
+use hex_grid::*;
 
 pub const HEAD_N = 12;
 

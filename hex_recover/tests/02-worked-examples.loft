@@ -26,9 +26,9 @@
 // three-cell triangle, a four-cell wedge, a ring of six.  Where a claim needs a
 // LARGE shape it is still hand-written — `form_new(h, [n,n,n], [4,4,4])` is three
 // numbers, and its cell count is `(n+1)(n+2)/2`, checked in the test.
-use hex_recover;
-use hex_form;
-use hex_field;
+use hex_recover::*;
+use hex_form::*;
+use hex_field::*;
 
 // A chunk big enough for anything this file draws, for the times a test wants to
 // see a redraw WITHOUT the library's own window logic in the way.

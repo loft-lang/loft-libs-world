@@ -3,7 +3,7 @@
 // hex_terrain: hydrology, relief compounding, river attachment + meander,
 // carving, and THE window-independence invariant (samples re-derived from a
 // rebuilt world are identical).
-use hex_terrain;
+use hex_terrain::*;
 
 // Indices into the test's type table.
 SEA = 0;

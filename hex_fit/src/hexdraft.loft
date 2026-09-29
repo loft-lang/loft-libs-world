@@ -36,12 +36,12 @@
 // `diff` stops meaning *the model changed*.  The form half has had that since `form_canon`; the
 // run half had nothing, and a run has two spellings that mark the identical edges.  `draft_canon`
 // closes it by asking the field which one it answers with.
-use hex_field;
-use hex_grid;
-use hex_form;
-use hex_recover;
-use hex_draw;
-use hex_shape;
+use hex_field::*;
+use hex_grid::*;
+use hex_form::*;
+use hex_recover::*;
+use hex_draw::*;
+use hex_shape::*;
 
 pub struct Draft {
   df_form: Form,

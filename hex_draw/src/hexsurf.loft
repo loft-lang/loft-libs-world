@@ -19,9 +19,9 @@
 // LIVES IN ITS OWN MODULE, not in `hexform` as `STEPS.md` proposed: the derivation needs
 // `housedraw`'s `Plan` and `SideRun`, and `hexform` sits below `housedraw`. Putting it there would
 // have inverted the dependency for no gain.
-use hex_field;
-use hex_grid;
-use hex_form;
+use hex_field::*;
+use hex_grid::*;
+use hex_form::*;
 
 // ── the exact band constants (`ROUNDTRIP` §6.2), in world units ────────────
 //

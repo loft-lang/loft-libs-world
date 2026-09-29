@@ -22,8 +22,8 @@
 // EXACT, NOT HASHED. The digest is the sorted cell list itself, compared element by element — no
 // modular hash anywhere. A hash collision in a census would look exactly like a law F violation,
 // which is the one mistake this file exists to detect.
-use hex_field;
-use hex_form;
+use hex_field::*;
+use hex_form::*;
 
 // A cell's position packed into one sortable integer. The span is wide enough for any census
 // shape (levels 1-3 stay inside a few dozen cells of the origin) and the offset keeps it positive.

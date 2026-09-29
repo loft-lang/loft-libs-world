@@ -5,8 +5,8 @@
 //
 // Contract only; the exhaustive measurement is hexbody's `tests/seam.loft`, `tests/combine.loft`
 // and `tests/level.loft`.
-use hex_place;
-use hex_field;
+use hex_place::*;
+use hex_field::*;
 
 fn twobox(off: integer) -> HexSet {
   s = hexset_chunk(-10, -10, 21, 21);

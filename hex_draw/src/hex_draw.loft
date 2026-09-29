@@ -7,5 +7,5 @@
 // stored edges, so a wall renders as one flat quad rather than a strip of them.
 //
 // Entry point: re-exports `housedraw`, `hexsurf`.
-use housedraw;
-use hexsurf;
+pub use housedraw::*;
+pub use hexsurf::*;

@@ -50,7 +50,7 @@
 // index writes for hot data; no struct-literal comprehensions (loft#319); no
 // capture-append-reassign on struct fields (loft#320).
 
-use hex_grid;
+use hex_grid::*;
 
 // ── Tuning records ─────────────────────────────────────────────────────────
 
