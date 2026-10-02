@@ -7,9 +7,9 @@
 // warning, never a downstream check. A refusal NAMES its restriction and offers the nearest fitting
 // alternative with its residual — never a silent snap, never a blank rejection."*
 //
-// `hexdraft::draft_fits` implements that for the turtle form and one embedded run (`X60`).  This
-// module completes it for the four that were measured but never refused — features, arcs, levels
-// and terrain — so `I-QUANT` (`X50`) has a doorstep everywhere it has a grid.
+// `hexdraft::draft_fits` implements that for the turtle form and one embedded run.  This module
+// covers the rest — features, arcs, levels, material ids and heights — so `I-QUANT` has a doorstep
+// everywhere it has a grid.
 //
 // THE RULE THIS MODULE IS BUILT ON, and it is not the obvious one: **the admissible set is READ OFF
 // THE FIELD, never computed from a formula.**  `X48` recorded a feature's grid as the edge centres
@@ -204,9 +204,9 @@ pub fn arc_snap_residual(n24: integer) -> integer { n24 - arc_snap_n(n24) }
 // nothing exists *between* two levels to be snapped to one of them.  Measured over the full range
 // an integer holds — the behaviour at ±10^6 is identical to the behaviour at 0.
 //
-// This returns `FIT_OK` unconditionally, and that is a RESULT, not an omission.  `tests/fit.loft`
-// keeps it honest the only way an always-true predicate can be kept honest: by showing that the
-// SAME doorstep refuses the other parameters, so "accepts every level" is not "accepts everything".
+// This returns `FIT_OK` unconditionally, and that is a RESULT, not an omission.  @HXI-008 keeps it
+// honest the only way an always-true predicate can be kept honest: by showing that the SAME
+// doorstep refuses the other parameters, so "accepts every level" is not "accepts everything".
 //
 // Example: @HXI-008
 pub fn level_fits(lv: integer) -> integer {
@@ -214,15 +214,12 @@ pub fn level_fits(lv: integer) -> integer {
   FIT_OK
 }
 
-// ── MATERIAL IDS — hexbody's OWN slot is narrower than moros's ──────────────
+// ── MATERIAL IDS — the edge slot is one byte ─────────────────────────────────
 //
-// moros's `h_wall_n/ne/se` are full integers.  hexbody's `EdgeSet.eg_mat` is a **`u8`**, and the
-// HXF `EDGE` section is one byte per slot — so a wall material of 256 does not merely quantise, it
-// becomes **0, which means NO WALL**.  Measured: `edge_set_mat(e, .., 256)` reads back `0` in
-// memory, before storage is involved at all.  Silent deletion, not a snap.
-//
-// Being NARROWER than moros is allowed — the rule is never to carry MORE world information than the
-// voxel holds — but silently dropping a wall is not, so the doorstep names the bound.
+// `hex_field`'s `EdgeSet.eg_mat` is a **`u8`**, and the HXF `EDGE` section is one byte per slot —
+// so a wall material of 256 does not merely quantise, it becomes **0, which means NO WALL**:
+// `edge_set_mat(e, .., 256)` reads back `0`.  Silent deletion, not a snap, so the doorstep names
+// the bound.
 pub const MAT_MAX = 255;
 
 // ⚠ NO OFFER, AND THAT IS THE POINT.  `K-FIT` says a refusal offers *the nearest fitting
@@ -238,41 +235,17 @@ pub fn mat_fits(m: integer) -> integer {
   FIT_OK
 }
 
-// ── TERRAIN — THE GRID moros FIXES, and the fork it closes ──────────────────
+// ── TERRAIN — HEIGHTS ON THE VOXEL'S GRID ───────────────────────────────────
 //
-// **THE FORK IS CLOSED** (user, 2026-07-24): *"I will never want to add more world information than
-// in the limited moros voxels."*  So moros's `Hex` is the storage of record, and there
-// `h_height` is an **integer** — hexbody's f64 is the wider slot, and the narrower one binds.
+// A voxel stores height as an **integer** number of units, and the world says how big one unit
+// is.  A height off that grid would truncate in storage, so the doorstep refuses it.
 //
-// moros already fixes the unit, so this is not a choice hexbody gets to make:
-// `moros_render::HEIGHT_SCALE = 0.25` world units per height unit, used as
-// `h_height as float * HEIGHT_SCALE` in `moros_sim::collide`.  With `SPEC` **L8** (1 wu = 0.866 m)
-// that is **0.2165 m** per unit, and moros's own comment puts a storey at 12 units = 3.0 wu.
-//
-// ⚠ **TIER.** The *mechanism* below is T1 — gated in `tests/fit.loft`, where a height off the grid
-// is shown NOT to survive a voxel round trip while an on-grid one does.  The *value* `0.25` is
-// **T4**: it is moros's constant, read off untested code.  hexbody cannot verify it is the right
-// quantum, only that it is the one moros uses — so it lives here, named once, and a change to it is
-// a one-line change with a gate behind it.
+// `HEIGHT_SCALE` is moros's default unit (0.25 world units per height unit).  It is only a
+// default: a world carries its own unit (moros's `VoxelWorld.w_unit` is 0.25, 0.125 or 1.0), and
+// testing a height against a grid the world does not have gives the wrong verdict.  So every
+// height call has an `_at` form taking the unit; the short names are those forms at
+// `HEIGHT_SCALE`.
 pub const HEIGHT_SCALE = 0.25;
-
-// ── ⛔ AND THE QUANTUM IS THE CALLER'S, NOT THIS PACKAGE'S ──────────────────
-//
-// **THE CONSTANT ABOVE CANNOT SERVE A DOORSTEP, AND THAT WAS MEASURED IN A CONSUMER.** A world
-// carries its own height unit — moros's `VoxelWorld.w_unit` — and its editor says so in bold:
-// *"`w.w_unit` IS THE HEIGHT SCALE AND IT IS THE RIGHT ONE."*  Measured over that tree: **176
-// worlds at 0.25, 2 at 0.125 and 6 at 1.0**, and `seat_fits` gives the WRONG VERDICT on 40 of 81
-// sampled heights at 0.125 and 30 of 81 at 1.0 (moros `probe/b7`).
-//
-// ⚠ **A DOORSTEP THAT IS WRONG ABOUT THE GRID IS WORSE THAN NONE** — `X66`'s own sentence, and
-// this is the case it did not cover: not *refusing more than the field distinguishes*, but
-// testing against a grid the field does not have.  `X67` closed the FORK (the integer slot
-// binds); what stayed open is that the STEP is a property of the world.
-//
-// ⚠ **THE TIER NOTE ABOVE ANTICIPATED A CHANGE OF THE VALUE** — *"a change to it is a one-line
-// change with a gate behind it"* — and the measurement says the value is not the shape of the
-// problem.  `HEIGHT_SCALE` stays as moros's default, so every existing caller is unaffected;
-// the `_at` forms are what a world carrying its own unit must use.
 
 // The voxel's own value for a height, at a given quantum: what `h_height` would hold.
 pub fn height_units_at(z: float, scale: float) -> integer {
@@ -326,5 +299,5 @@ pub fn seat_fit_z(z: float) -> float { seat_fit_z_at(z, HEIGHT_SCALE) }
 // How far off that seating height the value was; 0.0 means it already fitted.
 pub fn seat_fit_residual(z: float) -> float { seat_fit_residual_at(z, HEIGHT_SCALE) }
 
-// Kept from before the fork closed, now meaning exactly "on the voxel's grid".
+// True when `z` lies on the voxel's grid at `HEIGHT_SCALE`.
 pub fn seat_is_integral(z: float) -> boolean { seat_fits(z) == FIT_OK }

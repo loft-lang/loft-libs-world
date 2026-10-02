@@ -6,7 +6,8 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 # Using `hex_fit`
 
 > **The tests are the documentation that cannot rot.** Every claim here is a passing assertion in
-> [`tests/01-hex-fit.loft`](tests/01-hex-fit.loft); read that file for the exact, compiling form. This page is the map.
+> [`tests/`](tests/); read those files for the exact, compiling form. This page is the map.  A guide
+> that walks the doorstep in order: [`docs/01-getting-started.loft`](docs/01-getting-started.loft).
 
 ## What it does
 
@@ -17,9 +18,14 @@ no, never a silent correction.
 
 ## The things you will reach for
 
-- **is this arc radius realisable?** — `arc_fits · arc_fit_n · arc_fit_residual`
-- **why was it refused, and what is offered instead?** — `fit_reason · the offer + residual`
-- **what has nothing to refuse, and why that is a result** — `level_fits (X66)`
+- **is this arc radius realisable?** — `arc_fits · arc_fit_n · arc_fit_residual`, and
+  `arc_snap_n` for what an unchecked call would draw
+- **will this height survive the voxel?** — `seat_fits_at · seat_fit_z_at · seat_fit_residual_at`
+- **can a door sit here on this side?** — `feature_fits · feature_fit_t · feature_fit_residual`
+- **is this material id storable?** — `mat_fits` (no offer: an id is a name)
+- **does this embedded wall run fit its form?** — `draft_fits · draft_fit_p`
+- **why was it refused?** — `fit_reason(code)`, one table for every code
+- **what has nothing to refuse, and why that is a result** — `level_fits`
 
 ## The worked examples, in the tests
 
@@ -62,11 +68,9 @@ if seat_fits_at(z, w_unit) != FIT_OK {
 `seat_fits` / `seat_fit_z` / `seat_fit_residual` / `height_units` / `height_from_units` are the
 same five at `HEIGHT_SCALE`, unchanged for every existing caller.
 
-⚠ **WHY IT IS A PARAMETER, MEASURED IN A CONSUMER RATHER THAN ARGUED HERE.** moros builds worlds
-at **0.25 (176), 0.125 (2) and 1.0 (6)**, and the constant form gives the **wrong verdict** on 40
-of 81 sampled heights at 0.125 and 30 of 81 at 1.0 (`probe/b7`). `X66` says a doorstep that
-refuses more than the field distinguishes is worse than none; this is the case it did not
-cover — testing against a grid the field does not have.
+⚠ **WHY IT IS A PARAMETER.** A world carries its own height unit (moros builds worlds at 0.25,
+0.125 and 1.0), and testing a height against a grid the world does not have gives the wrong
+verdict: 0.125 is half a unit at 0.25 and a whole one at 0.125.
 
 ⚠ **A NON-POSITIVE QUANTUM IS `FIT_BAD_SCALE`, NOT A DIVISION.** loft's `÷0` yields null and keeps
 running, so an unchecked `z / scale` discharges to `0.0` and the doorstep would answer *on the
@@ -74,12 +78,12 @@ grid* for `z = 0` and *off it* for everything else — a wrong verdict dressed a
 
 ## The rules that bite
 
-- **Discover the API from source or `loft api hex_fit` once published** — not from memory. Even the
-  authors mis-recall signatures; the tests exist because guessing is unreliable.
-- **A refusal is data, not an error.** Where a map can decline (the doorstep, recovery), it returns
-  a *reason* and an *offer*, and your editor should show them rather than treating the call as failed.
-- **No `ε` in an R1 comparison.** For content you authored, recovery is exact; a tolerance there is
-  a defect, not a knob (`SPEC` **P4**).
+- **Discover the API from source or `loft api hex_fit`** — not from memory.
+- **A refusal is data, not an error.** Every `*_fits` answers a code with a reason (`fit_reason`),
+  and the ordinal ones have an offer and a residual; show them rather than treating the call as
+  failed.
+- **No `ε` in a fit.** `feature_fits` compares `t` with an edge centre exactly; a tolerance there
+  is a defect, not a knob (`SPEC` **P4**).
 - **A round trip diffs against `draft_canon_text`, never against `draft_write`.** A stencil's form has
   one canonical corner and its embedded run has one canonical direction, and neither is fixed by the
   model you authored — write the wall from its other end and a byte diff reports *the model changed*

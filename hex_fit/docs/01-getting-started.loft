@@ -1,0 +1,116 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @NAME: Getting Started
+// @TITLE: Ask before you store: will this radius, height or wall survive the hex field — and if not, what will?
+//
+// An author picks continuous values — an arc's radius, a height, how long a wall runs — and the
+// hex field stores only some of them.  A value between two that the field can hold is SNAPPED
+// to one of them, silently, and the model reads back as something nobody wrote.  `hex_fit` is
+// the doorstep that asks first.  Each `*_fits` call answers an integer code: `FIT_OK`, or the
+// reason it does not fit.  `fit_reason` turns the code into a sentence for the author, and a
+// `*_fit_*` twin offers the nearest value that does fit, with the residual to show beside it.
+//
+// It does not change anything you pass it, and it does not draw.  The cells come from
+// `hex_field`, the forms from `hex_form`, and the drawing from `hex_draw` / `hex_shape`.
+use hex_fit::*;
+use hex_form::*;
+use hex_field::*;
+
+fn main() {
+  code = arc_fits(35);
+  println("radius 35: {fit_reason(code)}");
+  println("  offer {arc_fit_n(35)} ({arc_fit_residual(35)} away); unrefused it draws {arc_snap_n(35)} ({arc_snap_residual(35)} away)");
+  assert(arc_fits(36) == FIT_OK && code == FIT_BAD_SHELL, "36 is a shell and 35 is not");
+  assert(arc_fit_n(35) == 36 && arc_fit_residual(35) == 1, "the nearest shell is above it");
+  assert(arc_snap_n(35) == 12 && arc_snap_residual(35) == 23, "the silent snap goes down");
+
+  // Every section below is a function, and `main` calls each one: a section nothing calls
+  // still compiles, but its assertions never run.
+  a_height_is_the_worlds_grid();
+  a_material_is_a_name();
+  a_level_has_nothing_to_refuse();
+  a_wall_must_stay_inside();
+}
+
+// That prints:
+//
+//     radius 35: that radius is not a realisable shell; the disk would be the next shell down
+//       offer 36 (1 away); unrefused it draws 12 (23 away)
+//
+// An arc's radius comes in SHELLS: up to 64 they are 0, 12, 36 and 48.  The offer is the
+// NEAREST shell, which can be larger than what was asked; the snap an unchecked call makes is
+// always the shell BELOW.  Show the author both, because they are not close.
+//
+// ## A height is the world's grid
+//
+// A voxel stores height as a whole number of units, and the size of one unit belongs to the
+// WORLD.  So the height doorstep takes it: `seat_fits_at(z, unit)`.  The same height can be whole
+// in one world and half a unit in another.  `seat_fits` and its siblings without `_at` use
+// `HEIGHT_SCALE` (0.25).  A unit that is zero or negative is no grid at all, and is refused by
+// its own code rather than divided by.
+
+fn a_height_is_the_worlds_grid() {
+  assert(seat_fits_at(0.75, 0.25) == FIT_OK && height_units_at(0.75, 0.25) == 3, "three quarters");
+  assert(seat_fits_at(0.75, 1.0) == FIT_BAD_HEIGHT, "not a whole unit of 1.0");
+  assert(seat_fit_z_at(0.75, 1.0) == 1.0 && seat_fit_residual_at(0.75, 1.0) == 0.25, "the offer");
+  assert(seat_fit_z_at(0.7, 0.25) == 0.75, "2.8 units rounds to 3");
+  assert(seat_fits_at(0.75, 0.0) == FIT_BAD_SCALE, "no grid to test against");
+  println("height  : 0.75 is 3 units at 0.25, refused at 1.0 (offer 1, residual 0.25)");
+}
+
+// ## A material is a name
+//
+// A wall's material id is stored in one byte, so the doorstep admits 1 to `MAT_MAX` (255).  It
+// refuses 0, which means "no wall", and anything above 255, which would wrap to a different id or
+// erase the wall.  There is no offer here: 255 is a different material from 256, not "nearly"
+// it, so the author has to pick one.
+
+fn a_material_is_a_name() {
+  assert(mat_fits(255) == FIT_OK && mat_fits(256) == FIT_BAD_MAT && mat_fits(0) == FIT_BAD_MAT, "1..255");
+  println("material: 255 fits, 256 and 0 do not, and nothing is offered");
+}
+
+// ## A level has nothing to refuse
+//
+// A level is an integer, and nothing exists between two levels to be snapped.  So `level_fits`
+// answers `FIT_OK` for every level.  That is a measured answer, not a missing check: the same
+// doorstep still refuses the radius and the height above.
+
+fn a_level_has_nothing_to_refuse() {
+  assert(level_fits(0 - 5) == FIT_OK && level_fits(1000000) == FIT_OK, "every level");
+  println("level   : every level fits");
+}
+
+// ## A wall must stay inside
+//
+// A `Draft` is a form plus one wall run inside it: a direction (one of 24), an anchor on a hex
+// vertex in triangle coordinates, and a number of periods.  `draft_fits` checks the run against
+// the form's own cells, and refuses a run that leaves them — a wall that pokes out would land on
+// the outline.  `draft_fit_p` offers the longest run from the same anchor that stays inside, so
+// the offer fits and one period more does not.
+
+fn hexagon() -> Form {
+  form_read("stencil h h0 0\nside 0 len 6 turn 2\nside 1 len 6 turn 2\nside 2 len 6 turn 2"
+            + "\nside 3 len 6 turn 2\nside 4 len 6 turn 2\nside 5 len 6 turn 2")
+}
+
+fn a_wall_must_stay_inside() {
+  f = hexagon();
+  cells = hexset_chunk(0 - 20, 0 - 20, 41, 41);
+  form_fill(f, 0, 0, cells);
+  assert(draft_fits(draft_new(f, 3, 0 - 6, 9, 1), cells) == FIT_OK, "one period fits");
+  long_run = draft_new(f, 3, 0 - 6, 9, 9);
+  assert(draft_fits(long_run, cells) == FIT_OUTSIDE, "nine periods leave the hexagon");
+  p = draft_fit_p(long_run, cells);
+  assert(p >= 1 && p < 9, "the offer is shorter than what was asked");
+  assert(draft_fits(draft_new(f, 3, 0 - 6, 9, p), cells) == FIT_OK, "the offer fits");
+  assert(draft_fits(draft_new(f, 3, 0 - 6, 9, p + 1), cells) == FIT_OUTSIDE, "one more does not");
+  println("wall    : 9 periods leave the hexagon; {p} is the longest that stays inside");
+}
+
+// ## Where to go next
+//
+// - `tests/02-worked-examples.loft` — `@HXI-001` … `@HXI-008`: a draft's one canonical text, a
+//   round trip that notices a dropped wall, a door position read off the field (`feature_fits`),
+//   and both candidates of an off-shell radius.
+// - `hex_recover` — reading a form back from the cells a draft draws.
