@@ -1,0 +1,183 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// bench — the performance pass: the package's hot doors, timed on a fixed workload, with a
+// hash of what they produced.
+//
+//     loft --interpret bench/bench.loft [--n N]         the interpreter
+//     loft --native-release bench/bench.loft [--n N]    compiled
+//     rustc -O --edition=2021 bench/bench.rs -o bench/.build/stats_rs   the Rust twin
+//
+// One tab-separated line per routine: name, iterations, total µs, ns per op, items one op
+// processes (proposals, candidates or cells), ns per item, and an FNV-1a-32 hash of one
+// canonical op's output.  The interpreter, the native build and the pure-Rust twin in
+// bench/bench.rs must print the same hash for a row, or one of them is not computing the
+// routine it claims to.
+//
+// Every op starts from the repetition number `r`: `r & 1` picks the candidate set forward
+// or reversed, or the triangle drawn one column over — the values, never the amount of
+// work — so no backend can hoist an op out of the repetition loop.  `forms_upto` has no
+// input but its level, so its repetitions differ in nothing; the Rust twin `black_box`es
+// the level instead.  Each op's result is folded into `sink`.
+use hex_field::*;
+use hex_form::*;
+use hex_recover::*;
+
+/// One measured routine.
+struct Row {
+  name: text = "",
+  iters: integer = 0,
+  us: integer = 0,
+  px: integer = 0,
+  hash: integer = 0,
+  sink: integer = 0,
+}
+
+const FNV_OFFSET = 2166136261;
+const FNV_PRIME = 16777619;
+
+const UPTO = 2;
+const PROPOSALS = 11616;   // 2^3 lengths x 12 headings x 11 x 11 turn pairs
+const CAND_SIDES = 4;
+const CAND_LEN = 3;
+const TRI = 23;
+const DIGESTS = 4;
+
+/// FNV-1a-32 over the low 32 bits of each integer, high byte first.
+fn fnv(h0: integer, v: const vector<integer>) -> integer {
+  fv_h = h0;
+  for x in v {
+    fv_w = x & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ ((fv_w >> 24) & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ ((fv_w >> 16) & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ ((fv_w >> 8) & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ (fv_w & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+  }
+  fv_h
+}
+
+/// FNV-1a-32 over every byte of a text.
+fn fnv_text(h0: integer, t: text) -> integer {
+  ft_h = h0;
+  for ft_i in 0..size(t) {
+    ft_h = ((ft_h ^ t.byte_at(ft_i)) * FNV_PRIME) & 0xFFFFFFFF;
+  }
+  ft_h
+}
+
+/// A form flattened: h0, side count, the lengths, the turns.
+fn form_ints(f: Form) -> vector<integer> {
+  fi_v: vector<integer> = [f.fm_h0, len(f.fm_len)];
+  for fi_l in f.fm_len { fi_v += [fi_l]; }
+  for fi_t in f.fm_turn { fi_v += [fi_t]; }
+  fi_v
+}
+
+fn print_row(r: const Row) {
+  pr_ns = ((r.us * 1000) / r.iters) ?? 0;
+  pr_px = if r.px > 0 { (((r.us * 1000) as float) / ((r.iters * r.px) as float)) ?? 0.0 }
+          else { 0.0 };
+  println("{r.name}\t{r.iters}\t{r.us}\t{pr_ns}\t{r.px}\t{pr_px:.3}\t{r.hash:x}");
+}
+
+// ── forms_upto: the level-2 enumeration, one call ───────────────────
+
+fn upto_hash(fs: vector<Form>) -> integer {
+  uh_h = fnv(FNV_OFFSET, [len(fs)]);
+  for uh_f in fs { uh_h = fnv(uh_h, form_ints(uh_f)); }
+  uh_h
+}
+
+fn bench_upto(n: integer) -> Row {
+  bu_t0 = ticks();
+  bu_sink = 0;
+  for _r in 0..n { bu_sink += len(forms_upto(UPTO)); }
+  bu_us = ticks() - bu_t0;
+  Row { name: "forms_upto", iters: n, us: bu_us, px: PROPOSALS,
+        hash: upto_hash(forms_upto(UPTO)), sink: bu_sink }
+}
+
+// ── index_build: every candidate drawn once and keyed on its digest ─
+
+fn reversed(fs: vector<Form>) -> vector<Form> {
+  rv_out: vector<Form> = [];
+  for rv_i in 0..len(fs) { rv_out += [fs[len(fs) - 1 - rv_i]?]; }
+  rv_out
+}
+
+/// Order-free over the map: a sum of per-entry hashes, then the three counters.
+fn index_hash(idx: RecoveryIndex) -> integer {
+  ih_sum = 0;
+  for ih_e in idx.ri_map {
+    ih_sum += fnv(fnv_text(FNV_OFFSET, ih_e.ix_digest), form_ints(ih_e.ix_form));
+  }
+  fnv(FNV_OFFSET, [idx.ri_count, idx.ri_collisions, idx.ri_fills, ih_sum & 0xFFFFFFFF])
+}
+
+fn bench_index(n: integer) -> Row {
+  bi_fwd = forms_sides(CAND_SIDES, CAND_LEN);
+  bi_rev = reversed(bi_fwd);
+  bi_t0 = ticks();
+  bi_sink = 0;
+  for r in 0..n {
+    if (r & 1) == 0 { bi_sink += index_build(bi_fwd).ri_count; }
+    else { bi_sink += index_build(bi_rev).ri_count; }
+  }
+  bi_us = ticks() - bi_t0;
+  Row { name: "index_build", iters: n, us: bi_us, px: len(bi_fwd),
+        hash: index_hash(index_build(bi_fwd)), sink: bi_sink }
+}
+
+// ── field_digest: the 12-orientation canonical digest of 300 cells ──
+
+/// DIGESTS digests of one cell set; the answer is the same every time, the work too.
+fn digest_op(s: HexSet) -> integer {
+  do_n = 0;
+  for _d in 0..DIGESTS { do_n += field_digest(s)[0]?; }
+  do_n
+}
+
+/// The side-TRI triangle, 300 cells, drawn at the origin or one column over.
+fn triangle(shift: integer) -> HexSet {
+  tr_f = form_new(0, [TRI, TRI, TRI], [4, 4, 4]);
+  tr_c = fit_chunk(tr_f);
+  tr_s = hexset_chunk(hexset_q0(tr_c) + shift, hexset_r0(tr_c), hexset_w(tr_c), hexset_h(tr_c));
+  form_fill(tr_f, shift, 0, tr_s);
+  tr_s
+}
+
+fn bench_digest(n: integer) -> Row {
+  bd_s0 = triangle(0);
+  bd_s1 = triangle(1);
+  bd_t0 = ticks();
+  bd_sink = 0;
+  for r in 0..n {
+    if (r & 1) == 0 { bd_sink += digest_op(bd_s0); } else { bd_sink += digest_op(bd_s1); }
+  }
+  bd_us = ticks() - bd_t0;
+  Row { name: "field_digest", iters: n, us: bd_us, px: DIGESTS * hexset_count(bd_s0),
+        hash: fnv(FNV_OFFSET, field_digest(bd_s0)), sink: bd_sink }
+}
+
+fn main() {
+  mn_n = 20;
+  mn_args = arguments();
+  mn_i = 0;
+  while mn_i < len(mn_args) {
+    if mn_args[mn_i]? == "--n" && mn_i + 1 < len(mn_args) {
+      mn_n = (mn_args[mn_i + 1]? as integer?)?;
+      mn_i += 1;
+    }
+    mn_i += 1;
+  }
+  if mn_n < 1 { mn_n = 1; }
+  mn_t0 = ticks();
+  println("routine\titers\tus\tns_op\tpx\tns_px\thash");
+  mn_rows: vector<Row> = [bench_upto(mn_n), bench_index(mn_n), bench_digest(mn_n)];
+  mn_sink = 0;
+  for row in mn_rows {
+    print_row(row);
+    mn_sink += row.sink;
+  }
+  println("time: {(ticks() - mn_t0) / 1000}ms sink={mn_sink}");
+}

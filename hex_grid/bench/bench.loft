@@ -1,0 +1,130 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// bench — the performance pass: the package's hot doors, timed on a fixed workload, with a
+// hash of what they produced.
+//
+//     loft --interpret bench/bench.loft [--n N]         the interpreter
+//     loft --native-release bench/bench.loft [--n N]    compiled
+//     rustc -O --edition=2021 bench/bench.rs -o bench/.build/stats_rs   the Rust twin
+//
+// One tab-separated line per routine: name, iterations, total µs, ns per op, calls one op
+// makes, ns per call, and an FNV-1a-32 hash of one canonical op's output.  The interpreter,
+// the native build and the pure-Rust twin in bench/bench.rs must print the same hash for a
+// row, or one of them is not computing the routine it claims to.
+//
+// Every op starts from the repetition number `r`: `r & 1` moves a start cell or shifts
+// every point by a quarter unit — the values, never the amount of work — so no backend can
+// hoist an op out of the repetition loop.  Each op's result is folded into `sink`.
+use hex_grid::*;
+
+/// One measured routine.
+struct Row {
+  name: text = "",
+  iters: integer = 0,
+  us: integer = 0,
+  px: integer = 0,
+  hash: integer = 0,
+  sink: integer = 0,
+}
+
+const FNV_OFFSET = 2166136261;
+const FNV_PRIME = 16777619;
+
+const STEPS = 10000000;
+const POINTS = 2000000;
+
+/// FNV-1a-32 over the low 32 bits of each integer, high byte first.
+fn fnv(h0: integer, v: const vector<integer>) -> integer {
+  fv_h = h0;
+  for x in v {
+    fv_w = x & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ ((fv_w >> 24) & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ ((fv_w >> 16) & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ ((fv_w >> 8) & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ (fv_w & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+  }
+  fv_h
+}
+
+fn print_row(r: const Row) {
+  pr_ns = ((r.us * 1000) / r.iters) ?? 0;
+  pr_px = if r.px > 0 { (((r.us * 1000) as float) / ((r.iters * r.px) as float)) ?? 0.0 }
+          else { 0.0 };
+  println("{r.name}\t{r.iters}\t{r.us}\t{pr_ns}\t{r.px}\t{pr_px:.3}\t{r.hash:x}");
+}
+
+// ── The neighbour step: the innermost callee of every 6-direction sweep ─
+
+/// A walk of STEPS neighbour steps; each direction depends on where the walk stands, so
+/// every call waits on the previous one.
+fn neighbor_op(r: integer) -> vector<integer> {
+  no_q = r & 1;
+  no_r = 0;
+  no_acc = 0;
+  for i in 0..STEPS {
+    no_d = (i + (no_q & 7) + (no_r & 3)) % 6;
+    (no_q, no_r) = hex_neighbor(no_q, no_r, no_d);
+    no_acc += no_q * 3 + no_r;
+  }
+  [no_q, no_r, no_acc]
+}
+
+fn bench_neighbor(n: integer) -> Row {
+  bn_t0 = ticks();
+  bn_sink = 0;
+  for r in 0..n { bn_sink += neighbor_op(r)[2]?; }
+  bn_us = ticks() - bn_t0;
+  Row { name: "hex_neighbor", iters: n, us: bn_us, px: STEPS,
+        hash: fnv(FNV_OFFSET, neighbor_op(0)), sink: bn_sink }
+}
+
+// ── The world-to-hex inverse: two divides, a cube round, an offset convert ─
+
+/// POINTS scattered over a 350 x 300 world rectangle around the origin (negative rows and
+/// columns included, where the odd-r convert rounds).
+fn px_op(r: integer) -> vector<integer> {
+  po_salt = ((r & 1) as float) * 0.25;
+  po_acc = 0;
+  po_c = 0;
+  po_rw = 0;
+  for i in 0..POINTS {
+    po_x = ((i * 7919) % 20011) as float * 0.0173 - 150.0 + po_salt;
+    po_y = ((i * 104729) % 19997) as float * 0.0151 - 140.0;
+    (po_c, po_rw) = px_to_hex(po_x, po_y);
+    po_acc += po_c * 1000 + po_rw;
+  }
+  [po_c, po_rw, po_acc]
+}
+
+fn bench_px(n: integer) -> Row {
+  bp_t0 = ticks();
+  bp_sink = 0;
+  for r in 0..n { bp_sink += px_op(r)[2]?; }
+  bp_us = ticks() - bp_t0;
+  Row { name: "px_to_hex", iters: n, us: bp_us, px: POINTS,
+        hash: fnv(FNV_OFFSET, px_op(0)), sink: bp_sink }
+}
+
+fn main() {
+  mn_n = 20;
+  mn_args = arguments();
+  mn_i = 0;
+  while mn_i < len(mn_args) {
+    if mn_args[mn_i]? == "--n" && mn_i + 1 < len(mn_args) {
+      mn_n = (mn_args[mn_i + 1]? as integer?)?;
+      mn_i += 1;
+    }
+    mn_i += 1;
+  }
+  if mn_n < 1 { mn_n = 1; }
+  mn_t0 = ticks();
+  println("routine\titers\tus\tns_op\tpx\tns_px\thash");
+  mn_rows: vector<Row> = [bench_neighbor(mn_n), bench_px(mn_n)];
+  mn_sink = 0;
+  for row in mn_rows {
+    print_row(row);
+    mn_sink += row.sink;
+  }
+  println("time: {(ticks() - mn_t0) / 1000}ms sink={mn_sink}");
+}

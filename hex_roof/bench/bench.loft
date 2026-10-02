@@ -1,0 +1,167 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// bench — the performance pass: the package's hot doors, timed on a fixed workload, with a
+// hash of what they produced.
+//
+//     loft --interpret bench/bench.loft [--n N]         the interpreter
+//     loft --native-release bench/bench.loft [--n N]    compiled
+//     rustc -O --edition=2021 bench/bench.rs -o bench/.build/stats_rs   the Rust twin
+//
+// One tab-separated line per routine: name, iterations, total µs, ns per op, items one op
+// processes (footprint cells swept by one fit, or window cells written), ns per item, and
+// an FNV-1a-32 hash of one canonical op's output.  The interpreter, the native build and
+// the pure-Rust twin in bench/bench.rs must print the same hash for a row, or one of them
+// is not computing the routine it claims to.
+//
+// `roof_match` recovers the analytic form of a hip roof: a plane fit, then a cone, a dome
+// and a ridge, each a hill-climb whose every candidate sweeps the whole footprint with a
+// sqrt per cell.  `roof_cone` is the cleanest one-op-per-cell float lane: per cell a sqrt
+// and two accessor calls.  Every op reads an input chosen by `r & 1` — a roof with its
+// eave a quarter higher, a cone centre a quarter to the right — which moves the values and
+// never the amount of work.
+use hex_field::*;
+use hex_way::*;
+use hex_roof::*;
+
+/// One measured routine.
+struct Row {
+  name: text = "",
+  iters: integer = 0,
+  us: integer = 0,
+  px: integer = 0,
+  hash: integer = 0,
+  sink: integer = 0,
+}
+
+const FNV_OFFSET = 2166136261;
+const FNV_PRIME = 16777619;
+
+const HIP_W = 30;
+const HIP_N = 12;
+const CONE_W = 128;
+const CONES = 100;
+
+/// FNV-1a-32 over the low 32 bits of each integer, high byte first.
+fn fnv(h0: integer, v: const vector<integer>) -> integer {
+  fv_h = h0;
+  for x in v {
+    fv_w = x & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ ((fv_w >> 24) & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ ((fv_w >> 16) & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ ((fv_w >> 8) & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ (fv_w & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+  }
+  fv_h
+}
+
+fn print_row(r: const Row) {
+  pr_ns = ((r.us * 1000) / r.iters) ?? 0;
+  pr_px = if r.px > 0 { (((r.us * 1000) as float) / ((r.iters * r.px) as float)) ?? 0.0 }
+          else { 0.0 };
+  println("{r.name}\t{r.iters}\t{r.us}\t{pr_ns}\t{r.px}\t{pr_px:.3}\t{r.hash:x}");
+}
+
+/// A float as the integer its millionths truncate to — how every float enters a hash.
+fn micro(x: float) -> integer { (x * 1000000.0) as integer }
+
+// ── Recovering the form: four fits of a hip roof ────────────────────
+
+/// A 30 x 30 window holding a radius-12 hex disk (469 cells), roofed by `roof_hip`.
+fn hip_disk() -> HexSet {
+  hd_s = hexset_chunk(0, 0, HIP_W, HIP_W);
+  hexdisk_into(hd_s, 15, 15, HIP_N);
+  hd_s
+}
+
+fn hip_heights(s: HexSet, eave: float) -> Heights {
+  hh_f = heights_new(0, 0, HIP_W, HIP_W);
+  roof_hip(s, hh_f, eave, 0.5);
+  hh_f
+}
+
+/// One recovery, at a tolerance no fit reaches, so all four fits run every time.
+fn match_op(s: HexSet, f: Heights) -> vector<integer> {
+  mo_fit = roof_match(s, f, 0.000001);
+  [mo_fit.rf_kind, micro(mo_fit.rf_x), micro(mo_fit.rf_y), micro(mo_fit.rf_z),
+   micro(mo_fit.rf_slope), micro(mo_fit.rf_res), micro(mo_fit.rf_x2), micro(mo_fit.rf_y2)]
+}
+
+fn bench_match(n: integer) -> Row {
+  bm_s = hip_disk();
+  bm_f0 = hip_heights(bm_s, 3.0);
+  bm_f1 = hip_heights(bm_s, 3.25);
+  bm_t0 = ticks();
+  bm_sink = 0;
+  for r in 0..n {
+    if (r & 1) == 0 { bm_sink += match_op(bm_s, bm_f0)[5]?; }
+    else { bm_sink += match_op(bm_s, bm_f1)[5]?; }
+  }
+  bm_us = ticks() - bm_t0;
+  Row { name: "roof_match", iters: n, us: bm_us, px: hexset_count(bm_s),
+        hash: fnv(FNV_OFFSET, match_op(bm_s, bm_f0)), sink: bm_sink }
+}
+
+// ── The cone: one sqrt per cell ─────────────────────────────────────
+
+/// A fully occupied 128 x 128 window.
+fn full_window() -> HexSet {
+  fw_s = hexset_chunk(0, 0, CONE_W, CONE_W);
+  for fw_r in 0..CONE_W {
+    for fw_q in 0..CONE_W { hexset_set(fw_s, fw_q, fw_r, true); }
+  }
+  fw_s
+}
+
+/// CONES cones written over the whole window, the centre moved per cone; the last one's
+/// heights are what the hash reads.
+fn cone_op(s: HexSet, f: Heights, r: integer) -> integer {
+  co_salt = ((r & 1) as float) * 0.25;
+  for c in 0..CONES {
+    roof_cone(s, f, 100.0 + co_salt + (c as float) * 0.5, 96.0, 20.0, 0.3, 60.0);
+  }
+  micro(height_get(f, 0, 0)) + micro(height_get(f, CONE_W - 1, CONE_W - 1))
+}
+
+fn cone_hash(f: Heights) -> integer {
+  ch_v: vector<integer> = [];
+  for ch_r in 0..CONE_W {
+    for ch_q in 0..CONE_W { ch_v += [micro(height_get(f, ch_q, ch_r))]; }
+  }
+  fnv(FNV_OFFSET, ch_v)
+}
+
+fn bench_cone(n: integer) -> Row {
+  bc_s = full_window();
+  bc_f = heights_new(0, 0, CONE_W, CONE_W);
+  bc_t0 = ticks();
+  bc_sink = 0;
+  for r in 0..n { bc_sink += cone_op(bc_s, bc_f, r); }
+  bc_us = ticks() - bc_t0;
+  cone_op(bc_s, bc_f, 0);
+  Row { name: "roof_cone", iters: n, us: bc_us, px: CONES * CONE_W * CONE_W,
+        hash: cone_hash(bc_f), sink: bc_sink }
+}
+
+fn main() {
+  mn_n = 20;
+  mn_args = arguments();
+  mn_i = 0;
+  while mn_i < len(mn_args) {
+    if mn_args[mn_i]? == "--n" && mn_i + 1 < len(mn_args) {
+      mn_n = (mn_args[mn_i + 1]? as integer?)?;
+      mn_i += 1;
+    }
+    mn_i += 1;
+  }
+  if mn_n < 1 { mn_n = 1; }
+  mn_t0 = ticks();
+  println("routine\titers\tus\tns_op\tpx\tns_px\thash");
+  mn_rows: vector<Row> = [bench_match(mn_n), bench_cone(mn_n)];
+  mn_sink = 0;
+  for row in mn_rows {
+    print_row(row);
+    mn_sink += row.sink;
+  }
+  println("time: {(ticks() - mn_t0) / 1000}ms sink={mn_sink}");
+}

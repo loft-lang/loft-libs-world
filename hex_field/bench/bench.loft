@@ -1,0 +1,328 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// bench — the performance pass: the package's hot doors, timed on a fixed workload, with a
+// hash of what they produced.
+//
+//     loft --interpret bench/bench.loft [--n N]         the interpreter
+//     loft --native-release bench/bench.loft [--n N]    compiled
+//     rustc -O --edition=2021 bench/bench.rs -o bench/.build/stats_rs   the Rust twin
+//
+// One tab-separated line per routine: name, iterations, total µs, ns per op, items one op
+// processes (edge slots counted, or boundary edges traced), ns per item, and an FNV-1a-32
+// hash of one canonical op's output.  The interpreter, the native build and the pure-Rust
+// twin in bench/bench.rs must print the same hash for a row, or one of them is not
+// computing the routine it claims to.
+//
+// Every op reads an input chosen by the repetition number `r`: `r & 1` picks one of two
+// prebuilt inputs that differ in VALUE (other materials, a disk one column over) and never
+// in the amount of work, so no backend can hoist an op out of the repetition loop.  Each
+// op's result is folded into `sink`.
+//
+// `stencil_rotate` turns a 33 x 33 stencil carrying heights, labels, one named layer and
+// walls through all six turns: two passes over its cells through four accessor families,
+// then a pass over the halo grid of three edge slots per cell.  `doc_read` loads a
+// 128 x 128 document written once beforehand — occupancy, heights and labels, one
+// file-read builtin crossing per cell per section.  The two documents it alternates between
+// differ only in their heights.  Both files live in bench/.build/, resolved against the
+// working directory (`#cwd`), where the bench is run from the package root.
+#cwd
+use hex_field::*;
+
+/// One measured routine.
+struct Row {
+  name: text = "",
+  iters: integer = 0,
+  us: integer = 0,
+  px: integer = 0,
+  hash: integer = 0,
+  sink: integer = 0,
+}
+
+const FNV_OFFSET = 2166136261;
+const FNV_PRIME = 16777619;
+
+const FIELD = 64;
+const COUNTS = 100;
+const TRACES = 50;
+const STENCIL_R = 16;
+const ROTATIONS = 10;
+const DOC_W = 128;
+const DOCS = 3;
+
+/// FNV-1a-32 over the low 32 bits of each integer, high byte first.
+fn fnv(h0: integer, v: const vector<integer>) -> integer {
+  fv_h = h0;
+  for x in v {
+    fv_w = x & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ ((fv_w >> 24) & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ ((fv_w >> 16) & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ ((fv_w >> 8) & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ (fv_w & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+  }
+  fv_h
+}
+
+fn print_row(r: const Row) {
+  pr_ns = ((r.us * 1000) / r.iters) ?? 0;
+  pr_px = if r.px > 0 { (((r.us * 1000) as float) / ((r.iters * r.px) as float)) ?? 0.0 }
+          else { 0.0 };
+  println("{r.name}\t{r.iters}\t{r.us}\t{pr_ns}\t{r.px}\t{pr_px:.3}\t{r.hash:x}");
+}
+
+// ── Counting the edge layer: three accessor calls per slot ──────────
+
+/// A 64 x 64 edge layer whose three canonical edges per cell carry a material in 0..4
+/// (zero, open, for about a fifth of them), shifted by `salt`.
+fn material_field(salt: integer) -> EdgeSet {
+  mf_e = edgeset_new(0, 0, FIELD, FIELD);
+  for mf_r in 0..FIELD {
+    for mf_q in 0..FIELD {
+      for mf_s in 0..3 {
+        mf_d = 0;
+        if mf_s == 1 { mf_d = 2; }
+        if mf_s == 2 { mf_d = 3; }
+        mf_m = (mf_q * 7 + mf_r * 3 + mf_d + salt) % 5;
+        edge_set_mat(mf_e, mf_q, mf_r, nb_q(mf_q, mf_r, mf_d), nb_r(mf_q, mf_r, mf_d), mf_m);
+      }
+    }
+  }
+  mf_e
+}
+
+fn count_op(e: EdgeSet) -> vector<integer> {
+  ct_sum = 0;
+  ct_last = 0;
+  for _c in 0..COUNTS {
+    ct_last = edgeset_count(e);
+    ct_sum += ct_last;
+  }
+  [ct_last, ct_sum]
+}
+
+fn bench_count(n: integer) -> Row {
+  bc_e0 = material_field(0);
+  bc_e1 = material_field(1);
+  bc_t0 = ticks();
+  bc_sink = 0;
+  for r in 0..n {
+    if (r & 1) == 0 { bc_sink += count_op(bc_e0)[0]?; } else { bc_sink += count_op(bc_e1)[0]?; }
+  }
+  bc_us = ticks() - bc_t0;
+  Row { name: "edgeset_count", iters: n, us: bc_us, px: COUNTS * FIELD * FIELD * 3,
+        hash: fnv(FNV_OFFSET, count_op(bc_e0)), sink: bc_sink }
+}
+
+// ── The loop stitcher: every boundary edge found by a scan of all of them ─
+
+/// A radius-26 window holding a hex disk of radius 24 (1,801 cells, 294 boundary edges).
+fn disk(cq: integer) -> HexSet {
+  dk_s = hexset_new(26);
+  hexdisk_into(dk_s, cq, 0, 24);
+  dk_s
+}
+
+/// The traced loops of the disk, TRACES times over; the last one's vertices hashed.
+fn trace_op(s: HexSet) -> vector<integer> {
+  to_ints: vector<integer> = [];
+  to_verts = 0;
+  for tj in 0..TRACES {
+    to_v = trace(s);
+    to_verts += len(to_v.vm_k);
+    if tj == TRACES - 1 {
+      to_ints = [to_v.vm_loops, len(to_v.vm_k)];
+      for k in to_v.vm_k { to_ints += [k]; }
+      for m in to_v.vm_m { to_ints += [m]; }
+      for st in to_v.vm_start { to_ints += [st]; }
+    }
+  }
+  to_ints += [to_verts];
+  to_ints
+}
+
+fn bench_trace(n: integer) -> Row {
+  bt_s0 = disk(0);
+  bt_s1 = disk(1);
+  bt_t0 = ticks();
+  bt_sink = 0;
+  for r in 0..n {
+    if (r & 1) == 0 { bt_sink += trace_op(bt_s0)[1]?; } else { bt_sink += trace_op(bt_s1)[1]?; }
+  }
+  bt_us = ticks() - bt_t0;
+  bt_one = trace_op(bt_s0);
+  Row { name: "trace", iters: n, us: bt_us, px: TRACES * (bt_one[1] ?? 0),
+        hash: fnv(FNV_OFFSET, bt_one), sink: bt_sink }
+}
+
+/// A float as the integer its millionths truncate to — how every float enters a hash.
+fn micro(x: float) -> integer { (x * 1000000.0) as integer }
+
+// ── Stencil rotation: every payload carried through six turns ───────
+
+/// A radius-16 hex disk in a 33 x 33 window centred on the origin, carrying a height, a
+/// label and an "item" layer value per cell, and a wall with a surface and a material on
+/// the canonical edges of every third cell; `salt` moves the values, never which cells or
+/// edges carry them.
+fn stencil(salt: integer) -> Stencil {
+  sn_s = hexset_new(STENCIL_R);
+  hexdisk_into(sn_s, 0, 0, STENCIL_R);
+  sn_q0 = 0 - STENCIL_R;
+  sn_w = 2 * STENCIL_R + 1;
+  sn_hz = heights_new(sn_q0, sn_q0, sn_w, sn_w);
+  sn_lb = labels_new(sn_q0, sn_q0, sn_w, sn_w);
+  sn_eg = edgeset_new(sn_q0, sn_q0, sn_w, sn_w);
+  for sn_r in sn_q0..sn_q0 + sn_w {
+    for sn_q in sn_q0..sn_q0 + sn_w {
+      if hexset_get(sn_s, sn_q, sn_r) {
+        sn_a = sn_q + STENCIL_R;
+        sn_b = sn_r + STENCIL_R;
+        height_set(sn_hz, sn_q, sn_r, ((sn_a * 7 + sn_b * 13 + salt) % 50) as float * 0.25);
+        label_set(sn_lb, sn_q, sn_r, (sn_a * 3 + sn_b * 5 + salt) % 9);
+        if (sn_a + sn_b) % 3 == 0 {
+          for sn_sl in 0..3 {
+            sn_d = 0;
+            if sn_sl == 1 { sn_d = 2; }
+            if sn_sl == 2 { sn_d = 3; }
+            edge_set_both(sn_eg, sn_q, sn_r, nb_q(sn_q, sn_r, sn_d), nb_r(sn_q, sn_r, sn_d),
+                          1 + (sn_a + sn_d) % 7, 1 + (sn_b + sn_d + salt) % 4);
+          }
+        }
+      }
+    }
+  }
+  sn_st = stencil_with_edges(sn_s, sn_hz, sn_lb, sn_eg, true, true);
+  sn_li = layer_add(sn_st.sn_layers, "item");
+  for sn_r2 in sn_q0..sn_q0 + sn_w {
+    for sn_q2 in sn_q0..sn_q0 + sn_w {
+      if hexset_get(sn_s, sn_q2, sn_r2) {
+        layer_set_at(sn_st.sn_layers, sn_li, sn_q2, sn_r2, (sn_q2 + 2 * sn_r2 + 100 + salt) % 17);
+      }
+    }
+  }
+  sn_st
+}
+
+/// What a rotated stencil holds, summed: its extent, its cells, every payload and both
+/// edge slots.
+fn stencil_digest(st: Stencil) -> vector<integer> {
+  sd_q0 = hexset_q0(st.sn_cells); sd_r0 = hexset_r0(st.sn_cells);
+  sd_w = hexset_w(st.sn_cells); sd_h = hexset_h(st.sn_cells);
+  sd_hs = 0.0;
+  sd_ls = 0;
+  sd_ys = 0;
+  for sd_r in sd_r0..sd_r0 + sd_h {
+    for sd_q in sd_q0..sd_q0 + sd_w {
+      sd_hs += height_get(st.sn_heights, sd_q, sd_r);
+      sd_ls += label_get(st.sn_labels, sd_q, sd_r);
+      sd_ys += layer_get_at(st.sn_layers, 0, sd_q, sd_r);
+    }
+  }
+  [sd_q0, sd_r0, sd_w, sd_h, hexset_count(st.sn_cells), micro(sd_hs), sd_ls, sd_ys,
+   edgeset_digest(st.sn_edges), edgeset_surf_count(st.sn_edges), edgeset_refused(st.sn_edges)]
+}
+
+/// ROTATIONS rounds of all six turns; the one-turn result is what the hash reads.
+fn rotate_op(st: Stencil) -> vector<integer> {
+  ro_cells = 0;
+  for _k in 0..ROTATIONS {
+    for ro_n in 1..7 {
+      ro_out = stencil_rotate(st, ro_n);
+      ro_cells += hexset_count(ro_out.sn_cells);
+    }
+  }
+  ro_v = stencil_digest(stencil_rotate(st, 1));
+  ro_v += [ro_cells];
+  ro_v
+}
+
+fn bench_rotate(n: integer) -> Row {
+  bo_s0 = stencil(0);
+  bo_s1 = stencil(1);
+  bo_t0 = ticks();
+  bo_sink = 0;
+  for r in 0..n {
+    if (r & 1) == 0 { bo_sink += rotate_op(bo_s0)[4]?; } else { bo_sink += rotate_op(bo_s1)[4]?; }
+  }
+  bo_us = ticks() - bo_t0;
+  Row { name: "stencil_rotate", iters: n, us: bo_us, px: ROTATIONS * 6 * hexset_count(bo_s0.sn_cells),
+        hash: fnv(FNV_OFFSET, rotate_op(bo_s0)), sink: bo_sink }
+}
+
+// ── Reading a document: one builtin crossing per cell per section ───
+
+/// Write a DOC_W-square document of a filled disk, heights and labels to `path`.
+fn write_doc(path: text, salt: integer) {
+  delete(path);
+  wd_s = hexset_chunk(0, 0, DOC_W, DOC_W);
+  hexdisk_into(wd_s, 64, 64, 60);
+  wd_hz = heights_new(0, 0, DOC_W, DOC_W);
+  wd_lb = labels_new(0, 0, DOC_W, DOC_W);
+  for wd_r in 0..DOC_W {
+    for wd_q in 0..DOC_W {
+      height_set(wd_hz, wd_q, wd_r, ((wd_q * 5 + wd_r * 11 + salt) % 64) as float * 0.125);
+      label_set(wd_lb, wd_q, wd_r, (wd_q + wd_r * 3) % 13);
+    }
+  }
+  doc_write(path, wd_s, wd_hz, wd_lb, true, true);
+}
+
+/// DOCS loads; the last one's refusal code, cells, heights and labels, summed.
+fn doc_op(path: text) -> vector<integer> {
+  do_cells = 0;
+  do_d = doc_read(path);
+  for _k in 1..DOCS {
+    do_d = doc_read(path);
+    do_cells += hexset_count(do_d.doc_cells);
+  }
+  do_hs = 0.0;
+  do_ls = 0;
+  for do_r in 0..DOC_W {
+    for do_q in 0..DOC_W {
+      do_hs += height_get(do_d.doc_heights, do_q, do_r);
+      do_ls += label_get(do_d.doc_labels, do_q, do_r);
+    }
+  }
+  [do_d.doc_code, hexset_count(do_d.doc_cells), micro(do_hs), do_ls,
+   if do_d.doc_has_h { 1 } else { 0 }, if do_d.doc_has_l { 1 } else { 0 },
+   if do_d.doc_has_e { 1 } else { 0 }, do_d.doc_skipped, do_cells]
+}
+
+fn bench_doc(n: integer) -> Row {
+  mkdir("bench/.build");
+  bd_p0 = "bench/.build/hexdoc0.hxf";
+  bd_p1 = "bench/.build/hexdoc1.hxf";
+  write_doc(bd_p0, 0);
+  write_doc(bd_p1, 1);
+  bd_t0 = ticks();
+  bd_sink = 0;
+  for r in 0..n {
+    if (r & 1) == 0 { bd_sink += doc_op(bd_p0)[1]?; } else { bd_sink += doc_op(bd_p1)[1]?; }
+  }
+  bd_us = ticks() - bd_t0;
+  Row { name: "doc_read", iters: n, us: bd_us, px: DOCS * DOC_W * DOC_W * 3,
+        hash: fnv(FNV_OFFSET, doc_op(bd_p0)), sink: bd_sink }
+}
+
+fn main() {
+  mn_n = 20;
+  mn_args = arguments();
+  mn_i = 0;
+  while mn_i < len(mn_args) {
+    if mn_args[mn_i]? == "--n" && mn_i + 1 < len(mn_args) {
+      mn_n = (mn_args[mn_i + 1]? as integer?)?;
+      mn_i += 1;
+    }
+    mn_i += 1;
+  }
+  if mn_n < 1 { mn_n = 1; }
+  mn_t0 = ticks();
+  println("routine\titers\tus\tns_op\tpx\tns_px\thash");
+  mn_rows: vector<Row> = [bench_count(mn_n), bench_trace(mn_n), bench_rotate(mn_n),
+                          bench_doc(mn_n)];
+  mn_sink = 0;
+  for row in mn_rows {
+    print_row(row);
+    mn_sink += row.sink;
+  }
+  println("time: {(ticks() - mn_t0) / 1000}ms sink={mn_sink}");
+}

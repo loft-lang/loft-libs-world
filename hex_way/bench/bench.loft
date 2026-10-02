@@ -1,0 +1,175 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// bench — the performance pass: the package's hot door, timed on a fixed workload, with a
+// hash of what it produced.
+//
+//     loft --interpret bench/bench.loft [--n N]         the interpreter
+//     loft --native-release bench/bench.loft [--n N]    compiled
+//     rustc -O --edition=2021 bench/bench.rs -o bench/.build/stats_rs   the Rust twin
+//
+// One tab-separated line per routine: name, iterations, total µs, ns per op, point queries
+// one op makes, ns per query, and an FNV-1a-32 hash of one canonical op's output.  The
+// interpreter, the native build and the pure-Rust twin in bench/bench.rs must print the
+// same hash for a row, or one of them is not computing the routine it claims to.
+//
+// `track_distance` is the innermost float primitive of hex_way AND hex_roof: per segment a
+// clamp and a sqrt for a straight, a sqrt, an atan2 and an angle wrap for an arc — and for
+// a point off the arc's span, both end points through cos / sin.  Every op shifts its
+// query points by `(r & 1) * 0.25`, which moves the values and never the work.
+//
+// `way_stamp` is the one-pass build: a sweep of the whole window asking `track_distance`
+// per cell centre, then a sweep of the footprint asking `nearest_seg` per boundary edge
+// and writing the edge.  Its op reads one of two roads chosen by `r & 1`, the second one
+// cell column to the right — a lattice translation, so the values move and the footprint,
+// and with it the work, does not.
+use hex_field::*;
+use hex_edge::*;
+use hex_way::*;
+
+/// One measured routine.
+struct Row {
+  name: text = "",
+  iters: integer = 0,
+  us: integer = 0,
+  px: integer = 0,
+  hash: integer = 0,
+  sink: integer = 0,
+}
+
+const FNV_OFFSET = 2166136261;
+const FNV_PRIME = 16777619;
+
+const QUERIES = 100000;
+const WIN = 96;
+const STAMPS = 4;
+
+/// FNV-1a-32 over the low 32 bits of each integer, high byte first.
+fn fnv(h0: integer, v: const vector<integer>) -> integer {
+  fv_h = h0;
+  for x in v {
+    fv_w = x & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ ((fv_w >> 24) & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ ((fv_w >> 16) & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ ((fv_w >> 8) & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ (fv_w & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+  }
+  fv_h
+}
+
+fn print_row(r: const Row) {
+  pr_ns = ((r.us * 1000) / r.iters) ?? 0;
+  pr_px = if r.px > 0 { (((r.us * 1000) as float) / ((r.iters * r.px) as float)) ?? 0.0 }
+          else { 0.0 };
+  println("{r.name}\t{r.iters}\t{r.us}\t{pr_ns}\t{r.px}\t{pr_px:.3}\t{r.hash:x}");
+}
+
+/// A winding road of 16 segments: eight straights, each followed by an arc.  Odd arcs run
+/// clockwise (a1 < a0) and the last starts below -2pi, so both sweep directions and both
+/// wraps of the angle test are live.
+fn road() -> Track {
+  rd_t = track_new();
+  for k in 0..8 {
+    rd_x = (k as float) * 20.0;
+    track_straight(rd_t, rd_x, 0.0, rd_x + 10.0, 5.0);
+    if (k & 1) == 0 {
+      track_arc(rd_t, rd_x + 14.0, 10.0, 6.0, -1.2, 1.9);
+    } else if k == 7 {
+      track_arc(rd_t, rd_x + 14.0, 10.0, 6.0, -6.9, -9.4);
+    } else {
+      track_arc(rd_t, rd_x + 14.0, 10.0, 6.0, 2.6, -0.4);
+    }
+  }
+  rd_t
+}
+
+// ── The distance query ──────────────────────────────────────────────
+
+/// QUERIES points over a 180 x 50 rectangle around the road; the sum of their distances
+/// and how many lie within one unit of the centreline.
+fn distance_op(t: Track, r: integer) -> vector<integer> {
+  do_salt = ((r & 1) as float) * 0.25;
+  do_sum = 0.0;
+  do_near = 0;
+  for i in 0..QUERIES {
+    do_x = ((i * 7919) % 20011) as float * 0.009 - 10.0 + do_salt;
+    do_y = ((i * 104729) % 19997) as float * 0.0025 - 15.0;
+    do_d = track_distance(t, do_x, do_y);
+    do_sum += do_d;
+    if do_d < 1.0 { do_near += 1; }
+  }
+  [(do_sum * 1000000.0) as integer, do_near]
+}
+
+fn bench_distance(n: integer) -> Row {
+  bd_t = road();
+  bd_t0 = ticks();
+  bd_sink = 0;
+  for r in 0..n { bd_sink += distance_op(bd_t, r)[1]?; }
+  bd_us = ticks() - bd_t0;
+  Row { name: "track_distance", iters: n, us: bd_us, px: QUERIES,
+        hash: fnv(FNV_OFFSET, distance_op(bd_t, 0)), sink: bd_sink }
+}
+
+// ── The one-pass build: cells, edges and surface ids ────────────────
+
+/// A 12-segment road across a 96 x 96 window: six straights, each followed by an arc, the
+/// whole of it moved `dx` to the right.
+fn stamp_road(dx: float) -> Track {
+  sr_t = track_new();
+  for k in 0..6 {
+    sr_x = (k as float) * 20.0 + 10.0 + dx;
+    track_straight(sr_t, sr_x, 40.0, sr_x + 10.0, 45.0);
+    if (k & 1) == 0 {
+      track_arc(sr_t, sr_x + 14.0, 50.0, 6.0, -1.2, 1.9);
+    } else {
+      track_arc(sr_t, sr_x + 14.0, 50.0, 6.0, 2.6, -0.4);
+    }
+  }
+  sr_t
+}
+
+/// STAMPS stamps of the road into a fresh window: the first writes the cells and edges, the
+/// rest find them already set — every stamp sweeps the window and the footprint.
+fn stamp_op(t: Track) -> vector<integer> {
+  st_s = hexset_chunk(0, 0, WIN, WIN);
+  st_e = edgeset_new(0, 0, WIN, WIN);
+  for _k in 0..STAMPS { way_stamp(t, 2.5, st_s, st_e, 1, 3); }
+  [hexset_count(st_s), edgeset_surf_count(st_e), edgeset_refused(st_e), edgeset_digest(st_e)]
+}
+
+fn bench_stamp(n: integer) -> Row {
+  bs_t0r = stamp_road(0.0);
+  bs_t1r = stamp_road(1.7320508075688772);
+  bs_t0 = ticks();
+  bs_sink = 0;
+  for r in 0..n {
+    if (r & 1) == 0 { bs_sink += stamp_op(bs_t0r)[1]?; } else { bs_sink += stamp_op(bs_t1r)[1]?; }
+  }
+  bs_us = ticks() - bs_t0;
+  Row { name: "way_stamp", iters: n, us: bs_us, px: STAMPS * WIN * WIN,
+        hash: fnv(FNV_OFFSET, stamp_op(bs_t0r)), sink: bs_sink }
+}
+
+fn main() {
+  mn_n = 20;
+  mn_args = arguments();
+  mn_i = 0;
+  while mn_i < len(mn_args) {
+    if mn_args[mn_i]? == "--n" && mn_i + 1 < len(mn_args) {
+      mn_n = (mn_args[mn_i + 1]? as integer?)?;
+      mn_i += 1;
+    }
+    mn_i += 1;
+  }
+  if mn_n < 1 { mn_n = 1; }
+  mn_t0 = ticks();
+  println("routine\titers\tus\tns_op\tpx\tns_px\thash");
+  mn_rows: vector<Row> = [bench_distance(mn_n), bench_stamp(mn_n)];
+  mn_sink = 0;
+  for row in mn_rows {
+    print_row(row);
+    mn_sink += row.sink;
+  }
+  println("time: {(ticks() - mn_t0) / 1000}ms sink={mn_sink}");
+}

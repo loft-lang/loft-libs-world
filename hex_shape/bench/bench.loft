@@ -1,0 +1,129 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// bench — the performance pass: the package's hot door, timed on a fixed workload, with a
+// hash of what it produced.
+//
+//     loft --interpret bench/bench.loft [--n N]         the interpreter
+//     loft --native-release bench/bench.loft [--n N]    compiled
+//     rustc -O --edition=2021 bench/bench.rs -o bench/.build/stats_rs   the Rust twin
+//
+// One tab-separated line per routine: name, iterations, total µs, ns per op, items one op
+// processes (marked edges walked), ns per item, and an FNV-1a-32 hash of one canonical op's
+// output.  The interpreter, the native build and the pure-Rust twin in bench/bench.rs must
+// print the same hash for a row, or one of them is not computing the routine it claims to.
+//
+// `wall_chain_walk` orders a wall's marked edges into the chain a walk meets: it scans the
+// window's edge layer for the marks, then rescans their endpoint table — once per vertex
+// for its degree, once per step for the way ahead.  Every op reads one of two edge layers
+// chosen by `r & 1`, the same wall one cell column apart: the values move, the amount of
+// work does not.
+use hex_field::*;
+use hex_grid::*;
+use hex_form::*;
+use hex_shape::*;
+
+/// One measured routine.
+struct Row {
+  name: text = "",
+  iters: integer = 0,
+  us: integer = 0,
+  px: integer = 0,
+  hash: integer = 0,
+  sink: integer = 0,
+}
+
+const FNV_OFFSET = 2166136261;
+const FNV_PRIME = 16777619;
+
+const FIELD = 48;
+const WALL_DIR = 2;
+const PERIODS = 60;
+const WALKS = 100;
+
+/// FNV-1a-32 over the low 32 bits of each integer, high byte first.
+fn fnv(h0: integer, v: const vector<integer>) -> integer {
+  fv_h = h0;
+  for x in v {
+    fv_w = x & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ ((fv_w >> 24) & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ ((fv_w >> 16) & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ ((fv_w >> 8) & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ (fv_w & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+  }
+  fv_h
+}
+
+fn print_row(r: const Row) {
+  pr_ns = ((r.us * 1000) / r.iters) ?? 0;
+  pr_px = if r.px > 0 { (((r.us * 1000) as float) / ((r.iters * r.px) as float)) ?? 0.0 }
+          else { 0.0 };
+  println("{r.name}\t{r.iters}\t{r.us}\t{pr_ns}\t{r.px}\t{pr_px:.3}\t{r.hash:x}");
+}
+
+// ── The wall chain, in walking order ────────────────────────────────
+
+/// A 48 x 48 edge layer holding one 30-degree wall of PERIODS periods, anchored at corner 0
+/// of cell (cq, 4): 80 marked edges in one chain.
+fn walled(cq: integer) -> EdgeSet {
+  wl_e = edgeset_new(0, 0, FIELD, FIELD);
+  wl_a = hex_corner_tri_a(cq, 4, 0);
+  wl_b = hex_corner_tri_b(cq, 4, 0);
+  wl_w = wall_from_run(WALL_DIR, wl_a, wl_b, PERIODS, 1);
+  wall_write(wl_w, wl_e, 0, 0, FIELD, FIELD);
+  wl_e
+}
+
+/// WALKS walks of the layer's first chain; the last one's vertices, world points and marks
+/// are what the hash reads.
+fn walk_op(e: EdgeSet) -> vector<integer> {
+  wo_c = wall_chain_walk(e, 0, 0, FIELD, FIELD, 0);
+  for _w in 1..WALKS { wo_c = wall_chain_walk(e, 0, 0, FIELD, FIELD, 0); }
+  wo_v: vector<integer> = [if wo_c.wc_ok { 1 } else { 0 }, wo_c.wc_n, wo_c.wc_branch,
+                           if wo_c.wc_loop { 1 } else { 0 }, len(wo_c.wc_va), len(wo_c.wc_q)];
+  for a in wo_c.wc_va { wo_v += [a]; }
+  for b in wo_c.wc_vb { wo_v += [b]; }
+  for x in wo_c.wc_x { wo_v += [(x * 1000000.0) as integer]; }
+  for y in wo_c.wc_y { wo_v += [(y * 1000000.0) as integer]; }
+  for q in wo_c.wc_q { wo_v += [q]; }
+  for rr in wo_c.wc_r { wo_v += [rr]; }
+  for d in wo_c.wc_d { wo_v += [d]; }
+  wo_v
+}
+
+fn bench_walk(n: integer) -> Row {
+  bw_e0 = walled(4);
+  bw_e1 = walled(5);
+  bw_t0 = ticks();
+  bw_sink = 0;
+  for r in 0..n {
+    if (r & 1) == 0 { bw_sink += walk_op(bw_e0)[4]?; } else { bw_sink += walk_op(bw_e1)[4]?; }
+  }
+  bw_us = ticks() - bw_t0;
+  bw_one = walk_op(bw_e0);
+  Row { name: "wall_chain_walk", iters: n, us: bw_us, px: WALKS * (bw_one[5] ?? 0),
+        hash: fnv(FNV_OFFSET, bw_one), sink: bw_sink }
+}
+
+fn main() {
+  mn_n = 20;
+  mn_args = arguments();
+  mn_i = 0;
+  while mn_i < len(mn_args) {
+    if mn_args[mn_i]? == "--n" && mn_i + 1 < len(mn_args) {
+      mn_n = (mn_args[mn_i + 1]? as integer?)?;
+      mn_i += 1;
+    }
+    mn_i += 1;
+  }
+  if mn_n < 1 { mn_n = 1; }
+  mn_t0 = ticks();
+  println("routine\titers\tus\tns_op\tpx\tns_px\thash");
+  mn_rows: vector<Row> = [bench_walk(mn_n)];
+  mn_sink = 0;
+  for row in mn_rows {
+    print_row(row);
+    mn_sink += row.sink;
+  }
+  println("time: {(ticks() - mn_t0) / 1000}ms sink={mn_sink}");
+}
