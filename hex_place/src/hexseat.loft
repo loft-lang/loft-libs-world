@@ -1,12 +1,11 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
-// hexseat — SEATING A STENCIL ON TERRAIN (rung A8, `OD-4`'s open half).
+// hexseat — SEATING A STENCIL ON TERRAIN.
 //
-// `OD-4` came in two halves and only one was ever closed.  **Storage is settled**: terrain is the
-// foxel's `height` slot — *"same slot as roofs; the two were always one question"* (`DESIGN` §10).
-// What stayed open is **seating**: a stencil is authored flat in its own local frame, and the ground
-// it is placed on is not flat.  `SPEC` **G5** already names the shape of the answer — *"a building …
-// **seated on terrain**, residual flagged"*.
+// Terrain is stored in the `height` slot, the same slot as roofs.  Seating is the question of
+// where a stencil goes on it: a stencil is authored flat in its own local frame, and the ground
+// it is placed on is not flat.  The answer is *"a building … **seated on terrain**, residual
+// flagged"* (`SPEC` **G5**).
 //
 // THE CONSTRUCTION, AND WHY IT COSTS THE ROUND TRIP NOTHING:
 //
@@ -16,7 +15,7 @@
 // reads the CELLS — recovers the same text either way.  Terrain and stencil occupy **orthogonal
 // slots** in the foxel, so they compose without interacting at all.
 //
-// That is the third time this shape of answer has come up, and it is worth naming: a **door** is a
+// The same shape of answer recurs across the family: a **door** is a
 // material, not a hole (`X51`); a **level** is a filter before the cut, not an arbitration after it
 // (`X58`); **terrain** is a height, not a change of footprint.  Each time the round trip survives
 // because the new thing lands in a slot the recovery does not read.
