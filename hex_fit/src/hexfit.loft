@@ -134,6 +134,8 @@ pub fn feature_fit_residual(p: Plan, cells: HexSet, side: integer, t: float) -> 
 // the same disk as the shell BELOW it, so it round-trips as a different model with rho = 0 — the
 // exact `I-QUANT` failure this doorstep exists to prevent.
 
+// Does `n24` land on a shell — one of the realisable values of `3k^2 + m^2` — so an arc of
+// that radius round-trips as itself?
 pub fn arc_is_shell(n24: integer) -> boolean {
   if n24 < 0 { return false; }
   sh = arc_shells_upto(n24);
