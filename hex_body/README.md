@@ -21,16 +21,16 @@ that a generic animation rig does not carry.
   floats included, a malformed text refused not repaired.
 - `pose_of` — forward kinematics for one joint; `rig_world_seg` composes the whole tree.
 - **`rig_world_frame3` / `frame_point` / `rig_world_point3`** — a bone's world
-  **frame**: where its joint sits and how its own axes lie. This is what
-  `rig_world_seg3` used to compute and discard, and it is what posing a limb
-  needs — a limb is a cloud of points in a bone's frame, so hold the frame and
-  pose many, or use the one-shot `rig_world_point3` for one.
+  **frame**: where its joint sits and how its own axes lie. Posing a limb needs
+  it — a limb is a cloud of points in a bone's frame, so hold the frame and pose
+  many, or use the one-shot `rig_world_point3` for one.
 - **`rig_bone3` / `rig_world_seg3`** — the same rig in SPACE: an explicit revolute **axis** and an
   `oz`, the eight numbers `hex_part::Hinge` already carries. `rig_bone` is the planar special case
   (`oz = 0` about `(0,0,1)`) and its signature is unchanged. ⚠ The axis is stored **as given, not
   normalised**, and one of zero length is refused by `rig_admissible` — a joint with nothing to
-  turn about. ⚠ A planar rig's bytes are unchanged; a spatial bone writes its own record `bone3`,
-  so an older reader refuses it rather than silently reading its planar projection.
+  turn about. ⚠ A planar bone writes a `bone` record and a spatial
+  bone its own `bone3` record, so a reader that knows only `bone` refuses a spatial rig rather
+  than silently reading its planar projection.
 - `wheel_value` / `wheel_angle` / `wheel_skid` — a wheel is a joint whose value is *derived from
   travel*, so it rolls without slip **by construction**.
 - `joint_fits` / `joint_offer` — the joint doorstep: an out-of-limit value is refused with the
@@ -39,15 +39,13 @@ that a generic animation rig does not carry.
   geometry: each bone's OBB **contains** its capsule, with a stated overshoot bound.
 
 **Why `hex_body` and not `body`.** It is part of the `hex_*` world-building family and composes with
-the hex geometry — a body lives in, is seated on, and collides with a hex world, and interaction
-and seating (the next milestones) will couple it to the lattice. It carries **no lattice import
-today** (pure continuous-space kinematics — `sin`/`cos`/`sqrt` only); the prefix names its family
-and its trajectory, not a current dependency.
+the hex geometry — a body lives in, is seated on, and collides with a hex world. It carries **no
+lattice import** (pure continuous-space kinematics — `sin`/`cos`/`sqrt` only); the prefix names its
+family, not a dependency.
 
 The eight things a caller gets wrong — starting with the two that are silent, a values vector
 that defaults rather than refuses and a 2-D path that answers for a spatial rig anyway — are
 worked one by one in `tests/03-worked-examples.loft` (`@HXB-001..008`), cited from the functions
 they belong to.
 
-Produced by **hexbody**, the workshop. See its `plans/m1-moving-body/` for the design and the
-exhaustive gate.
+A guide: [docs/01-getting-started.loft](docs/01-getting-started.loft).
