@@ -221,8 +221,8 @@ pub fn turns_cyclic_eq(a: vector<integer>, b: vector<integer>) -> boolean {
 //
 // So the corpus `.f` uses THIS one: the field exactly as drawn, no orientation quotient and no
 // translation quotient (every entry is drawn at the same anchor, so position is part of the
-// answer). Using the census digest here reported 17 false law F failures on a 10-entry corpus
-// before the distinction was drawn.
+// answer). The census digest here would report a stencil and its turned copy as a law F
+// failure when nothing is wrong.
 // Example: @HXV-001
 pub fn field_exact(cells: HexSet) -> vector<integer> {
   raw: vector<integer> = [];
