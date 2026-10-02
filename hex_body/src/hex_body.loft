@@ -157,6 +157,9 @@ pub fn joint_residual(j: Joint, value: float) -> float {
 // ⚠ `rig_world_seg` IS UNCHANGED.  Re-expressing it through the 3-D path would
 // have moved every existing consumer's numbers by an ulp to buy nothing.
 
+// A bone rig: for each bone its parent (-1 for the root), its joint offset in the parent's
+// frame, its length along its own +x, its revolute axis and its joint limits.  `rig_new` and
+// `rig_read` make one.
 pub struct Rig {
   rg_parent: vector<integer>,   // parent bone index; -1 for the root
   rg_ox:     vector<float>,     // joint offset in the parent's frame (x)

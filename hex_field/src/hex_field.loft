@@ -1021,6 +1021,9 @@ pub fn cell_mirror(q: integer, r: integer) -> (integer, integer) {
   lattice_to_cell(0 - lattice_k(q, r), lattice_m(q, r))
 }
 
+// A stencil: a set of cells with optional heights, labels and edges (`sn_has_*` say which
+// are present) and its named layers.  `stencil_from` builds one; `stencil_rotate` and
+// `stencil_mirror` transform it.
 pub struct Stencil {
   sn_cells:   HexSet,
   sn_heights: Heights,
@@ -1745,6 +1748,8 @@ pub fn edgeset_count(e: EdgeSet) -> integer {
 // i*w*h + r*w + q.  Adding a layer appends w*h slots, so a stencil with one layer
 // costs one layer's worth of storage.
 
+// Named integer layers over a `ly_w × ly_h` window anchored at `(ly_q0, ly_r0)`: the layer
+// names, and every value in one flat vector, layer i and cell (q,r) at i*w*h + r*w + q.
 pub struct Layers {
   ly_q0:    integer,
   ly_r0:    integer,

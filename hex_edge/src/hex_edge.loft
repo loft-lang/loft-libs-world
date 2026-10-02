@@ -292,6 +292,8 @@ pub fn edge_block_arb(e: EdgeSet, sf: Surfaces, qa: integer, ra: integer,
 pub const JOIN_SMOOTH = 1;      // G1 intended — tangents must agree
 pub const JOIN_CORNER = 2;      // a deliberate angle — a corner on purpose
 
+// Where surfaces meet: for each junction, the two surfaces, the continuity intended there
+// (`JOIN_SMOOTH`, `JOIN_CORNER`) and its position.  `junctions_new` makes an empty set.
 pub struct Junctions {
   jn_a:    vector<integer>,
   jn_b:    vector<integer>,
@@ -362,6 +364,9 @@ pub const FEAT_DOOR     = 1;
 pub const FEAT_WINDOW   = 2;
 pub const FEAT_LOOPHOLE = 3;
 
+// The openings cut into surfaces — doors, windows, loopholes (`FEAT_*`): for each, its
+// surface, its interval along it, its vertical extent (sill to head), its kind and the
+// material inside it.  `features_new` makes an empty set.
 pub struct Features {
   fe_surf: vector<integer>,
   fe_s0:   vector<float>,     // interval along the surface parameter

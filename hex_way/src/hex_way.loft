@@ -25,6 +25,8 @@ use hex_edge::*;
 pub const WAY_STRAIGHT = 1;
 pub const WAY_ARC      = 2;
 
+// A track: straights and arcs (`WAY_STRAIGHT`, `WAY_ARC`) in order, six numbers per segment.
+// `track_new` makes an empty one.
 pub struct Track {
   tk_kind: vector<integer>,
   tk_p:    vector<float>,      // 6 per segment

@@ -36,6 +36,9 @@ use hex_recover::*;
 use hex_draw::*;
 use hex_shape::*;
 
+// A form plus an embedded run, written, read and drawn as one: the form, the run's direction
+// (`df_d`, -1 for none), its anchor `(df_a, df_b)` and its periods.  `draft_new`,
+// `draft_read` and `draft_canon` make one.
 pub struct Draft {
   df_form: Form,
   df_d:    integer,     // embedded run direction, or -1 for none

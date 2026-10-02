@@ -88,6 +88,8 @@ pub fn box_sin(n: integer) -> float {
 // Example: @HXS-006
 pub fn box_orbit(rot: integer) -> integer { (((rot % BOX_ROT) + BOX_ROT) % BOX_ROT) % 2 }
 
+// A rectangular footprint of hex cells: an anchor cell, a width and depth in hex steps along
+// its local axes, a rotation in thirty-degree steps (0..11) and a mirror flag.
 pub struct Box {
   bx_cq:  integer,     // anchor cell
   bx_cr:  integer,
