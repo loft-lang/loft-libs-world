@@ -81,7 +81,7 @@ fn test_surface_id_zero_is_reserved_and_still_answers() {
 //
 // SO THE NEXT CALL STARTS PAST THE WALL, with the wall behind it. It sees nothing in
 // the way and reports the whole segment travellable. The symptom a consumer reports is
-// "collision does not work" (moros#10); the truth is that it worked for exactly one
+// "collision does not work"; the truth is that it worked for exactly one
 // step, and the second step is the one that walks through.
 //
 // Nothing about this is float noise — the numbers below are exact halves.
@@ -172,7 +172,7 @@ fn test_threading_the_cell_needs_no_skin_and_a_skin_needs_a_constant_that_does_n
 
 // How many of the six directions still land on the far side after backing off `skin`
 // world units along the segment.  Nothing here is library code — it is the consumer-side
-// workaround from moros#10, written out so the test can measure it.
+// workaround, written out so the test can measure it.
 fn skin_failures(bq: integer, br: integer, skin: float) -> integer {
   bad = 0;
   for d in 0..6 {
@@ -314,8 +314,8 @@ fn test_two_parts_meeting_need_arbitration_not_stamping_order() {
 
 // @HXE-007 — "BLOCKED" AND "BOUNCEABLE" ARE TWO DIFFERENT ANSWERS.
 //
-// `edge_block` marks an edge with no recoverable geometry — `SURF_NONE`, which is 65535
-// rather than -1 because the slot is unsigned. `collide` on such an edge answers
+// `edge_block` marks an edge with no recoverable geometry — `SURF_NONE` (65535), an id
+// no surface table reaches. `collide` on such an edge answers
 // `(true, 0.0, 0.0)`: genuinely blocked, and with a normal that is a legal pair of
 // floats carrying no direction.
 //

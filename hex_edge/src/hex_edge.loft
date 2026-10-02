@@ -1,25 +1,14 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
-// hexedge — collision as an EDGE SET (plan #5, decision 2026-07-21).
+// hex_edge — collision as an EDGE SET.
 //
-// MERGED (2026-07-22): the storage is now `hex_field::EdgeSet` and this file no longer
-// owns any. For a while there were TWO — the library grew a material-only edge grid for
-// stencils that carry walls (the AUTHORING layer) while this was the COLLISION layer — and
-// they were briefly kept apart by a rename. That was never the answer: two structures with
-// the same edge key, the same canonical slot set {0,2,3} and the same type widths are one
-// structure with two consumers, and keeping them apart guaranteed they would drift.
-//
-// THE SPLIT THAT REPLACED THE RENAME: **the library owns the STORAGE; this file owns the
-// PHYSICS.** The dividing line is the WRITE POLICY. `edge_set_surf` writes what it is told;
-// deciding WHICH surface owns an edge where two parts meet is a physics question, and
-// baking it into storage would silently settle junctions for every consumer of the library.
-// So `Surfaces`, `Materials`, `Features`, `collide`, `sweep_path` and `sight_clear` stay
-// here, and every one of them takes an `EdgeSet` rather than owning one.
-//
-// That the two index maps were the SAME PERMUTATION was gated before anything moved —
-// `src/mergetest.loft`, over a chunk spanning the origin, halo included, with a negative
-// control that fires — because "they look identical" is exactly the kind of claim this
-// plan has been punished for three times.
+// THE SPLIT: **`hex_field` owns the STORAGE; this file owns the PHYSICS.** The edge grid
+// is `hex_field::EdgeSet`. The dividing line is the WRITE POLICY: `edge_set_surf` writes
+// what it is told, while deciding WHICH surface owns an edge where two parts meet is a
+// physics question, and baking it into storage would silently settle junctions for every
+// consumer of the storage. So `Surfaces`, `Materials`, `Features`, `collide`, `sweep_path`
+// and `sight_clear` live here, and every one of them takes an `EdgeSet` rather than owning
+// one.
 //
 // THE MODEL.  Collision is a set of blocked hex EDGES, not blocked cells.  Movement from
 // hex A to hex B is legal iff the edge they share is not blocked.  This was settled by
@@ -111,7 +100,7 @@ pub fn surf_arc(s: Surfaces, cx: float, cy: float, r: float) -> integer {
   s.sf_n - 1
 }
 
-// Distance from a world point to surface `id` — the ARBITRATION metric (P3).
+// Distance from a world point to surface `id` — the metric junction arbitration uses.
 pub fn surf_distance(s: Surfaces, id: integer, px: float, py: float) -> float {
   if id <= 0 || id >= s.sf_n { return 1000000.0; }
   kind = s.sf_kind[id] ?? 0;
@@ -180,11 +169,14 @@ pub fn material_add(m: Materials, solid: boolean, height: float, opacity: float,
   m.mt_n - 1
 }
 
-// A DYNAMIC material — a level-crossing barrier, a door, a portcullis.  Flipping the
-// table entry retargets every edge already carrying this id, so the geometry layer is not
-// touched at all: no edge writes, no surface change, and therefore NO L2 cache
-// invalidation (P6 keys the cache on the world version, which a material toggle does not
-// bump).  That is the whole reason material is a separate axis from surface.
+// Change whether a material counts as solid.  Flipping the table entry retargets every
+// edge already carrying this id, with no edge write and no surface change — that is why
+// material is a separate axis from surface.
+//
+// ⚠ It changes what `mat_solid` answers, and NOTHING in this package's movement:
+// `passable` and `sweep_path` read the edge's surface mark and no material.  To open a
+// gate, clear the mark (`edge_set_surf(e, …, 0)`); the material says what kind of gate it
+// was, for the consumer that reads it.
 // Example: @HXE-010
 pub fn material_set_solid(m: Materials, id: integer, solid: boolean) {
   if id <= 0 || id >= m.mt_n { return; }
@@ -224,27 +216,11 @@ pub fn mat_bounce(m: Materials, id: integer) -> float {
   m.mt_bounce[id] ?? 0.0
 }
 
-// P6 STORAGE — now `hex_field::EdgeSet` (the merge, 2026-07-22).
-//
-// The storage this file used to own moved into the library, because both halves had
-// independently arrived at the SAME structure: indexing by (cell, canonical direction)
-// rather than by the doubled-midpoint key, since only half that key's slots are legal
-// (parity) and the doubled lattice spans ~4x/6x the cell grid, so ~9 in 10 slots were air.
-// A hex has 6 edges in 3 opposite PAIRS, so exactly 3 slots per cell own every edge once,
-// and a one-cell halo covers boundary edges whose canonical owner sits outside the chunk.
-//
-// That the two were the same permutation was GATED before anything moved, not assumed —
-// `src/mergetest.loft`, over a chunk spanning the origin and including the halo, with a
-// negative control that fires. The type widths were crawler's finding and travelled with
-// it (LOFT-HANDOFF.md H3): u16/i16 cannot be index-assigned, u32 loses the write silently
-// through a struct parameter, so the surface id is i32 and the material u8.
-//
-// WHAT STAYED HERE, AND WHY. The library owns the STORAGE; this file keeps the PHYSICS.
-// The line is not arbitrary — it is the WRITE POLICY. `edge_set_surf` writes what it is
-// told; deciding WHICH surface owns an edge when two parts meet is a physics question
-// (`edge_block_arb`, nearest-surface with a deterministic tie-break), and baking it into
-// storage would silently settle junctions for every consumer. So: the library says where a
-// surface is kept, this file says which surface belongs there.
+// STORAGE is `hex_field::EdgeSet`, indexed by (cell, canonical direction): a hex has 6
+// edges in 3 opposite PAIRS, so 3 slots per cell own every edge once, and a one-cell halo
+// covers boundary edges whose canonical owner sits outside the chunk.  The surface id is
+// an i32 and the material a u8.  This file never indexes the storage itself; it goes
+// through `edge_surf` / `edge_set_surf` / `edge_mat` / `edge_set_mat`.
 
 // The canonical edge key: doubled midpoint of the two cell centres.  Kept as two integer
 // accessors rather than the library's tuple-shaped `edge_key`, because `edge_point` wants
@@ -281,11 +257,11 @@ pub fn edge_point(qa: integer, ra: integer, qb: integer, rb: integer) -> (float,
    (edge_m(qa, ra, qb, rb) as float) * 0.25)
 }
 
-// ── P3: JUNCTION ARBITRATION ─────────────────────────────────────────────────
+// ── JUNCTION ARBITRATION ─────────────────────────────────────────────────────
 //
-// When two parts meet, one edge is claimed by two surfaces. First-writer-wins made that
-// order-dependent — stamp the wall then the tower and you got a different world than the
-// other way round, which is exactly the class of bug that never shows up in a unit test.
+// When two parts meet, one edge is claimed by two surfaces. First-writer-wins is
+// order-dependent there — stamp the wall then the tower and you get a different world than
+// the other way round, which is the class of bug that never shows up in a unit test.
 //
 // THE RULE: the surface whose geometry is NEAREST the edge's contact point wins; ties
 // break to the LOWER surface id. Both halves matter — nearest is what a ball should
@@ -312,7 +288,7 @@ pub fn edge_block_arb(e: EdgeSet, sf: Surfaces, qa: integer, ra: integer,
 }
 
 // A junction records WHICH surfaces meet and what continuity was INTENDED there, so a
-// deliberate corner is never mistaken for an accidental kink (FORMS.md's junction policy).
+// deliberate corner is never mistaken for an accidental kink.
 pub const JOIN_SMOOTH = 1;      // G1 intended — tangents must agree
 pub const JOIN_CORNER = 2;      // a deliberate angle — a corner on purpose
 
@@ -367,7 +343,7 @@ pub fn junction_g0(j: Junctions, i: integer, sf: Surfaces, tol: float) -> boolea
   da <= tol && db <= tol
 }
 
-// ── P5: FEATURES — doors, windows, loopholes ────────────────────────────────
+// ── FEATURES — doors, windows, loopholes ────────────────────────────────────
 //
 // A feature is an INTERVAL ON THE SURFACE, never a hole cut in the cell outline. That is
 // forced by measurement: the traced boundary turns at every vertex, so an opening cut
@@ -476,8 +452,8 @@ pub fn edge_block_full(e: EdgeSet, qa: integer, ra: integer, qb: integer, rb: in
   edge_set_mat(e, qa, ra, qb, rb, mat);
 }
 
-// A bare blocker with no recoverable geometry.  u16 cannot hold -1, so the sentinel is
-// the top of the range: blocked, but collide() will report no usable normal.
+// A bare blocker with no recoverable geometry: an id no `Surfaces` table reaches, so the
+// edge is blocked but `collide` reports a (0,0) normal.
 pub const SURF_NONE = 65535;
 
 // Example: @HXE-007
@@ -508,7 +484,7 @@ pub fn passable(e: EdgeSet, qa: integer, ra: integer, qb: integer, rb: integer) 
   !edge_blocked(e, qa, ra, qb, rb)
 }
 
-// ── SWEPT MOVEMENT (plan #11 P2b — invariant I-CROSS) ────────────────────────
+// ── SWEPT MOVEMENT ───────────────────────────────────────────────────────────
 //
 // `passable` answers about one edge; this answers about a PATH. Walk the segment
 // (x0,y0) -> (x1,y1) across the lattice one edge at a time and stop at the first edge
@@ -528,12 +504,9 @@ pub fn passable(e: EdgeSet, qa: integer, ra: integer, qb: integer, rb: integer) 
 // Returns the fraction of the segment that may be travelled (1.0 = all of it), the cell
 // it stopped in, and the DIRECTION of the blocking edge — `dir < 0` meaning nothing
 // blocked. The signal is the direction and never a coordinate: hex coordinates are
-// signed, so a -1 sentinel in q or r collides with real cells in any chunk that spans
-// the origin. (It did: the first version reported "no hit" for every wall at q = -1.)
-// Feed (q, r, dir) to `nb_q`/`nb_r` and `collide` for the exact bounce normal.
-//
-// EXTRACTION: this belongs with `passable`/`collide` and travels with them when hexedge
-// is packaged — every consumer that moves a body over the field needs it.
+// signed, so a -1 sentinel in q or r would collide with real cells in any chunk that
+// spans the origin.  Feed (q, r, dir) to `nb_q`/`nb_r` and `collide` for the exact
+// bounce normal.
 // Example: @HXE-002
 // Example: @HXE-004
 // Example: @HXE-005
@@ -558,8 +531,8 @@ pub fn sweep_path(e: EdgeSet, x0: float, y0: float, x1: float, y1: float)
 // from one step to the next. Pressing on into the wall then answers `t = 0` in the cell you
 // are in, which is the honest answer, and sliding along the wall works from the same call.
 //
-// WHY NOT A SKIN. The consumer-side workaround is to come to rest a small distance short
-// (moros#10 used 1 cm at its scale), and it does work — but the smallest distance that works
+// WHY NOT A SKIN. The consumer-side workaround is to come to rest a small distance short,
+// and it does work — but the smallest distance that works
 // is not a constant. Measured: 1e-15 at the origin, 1e-11 about 1.7e3 world units out,
 // 1e-9 about 1.7e6 out. It is a float-resolution floor, not a geometric clearance, so a
 // constant chosen at one extent is silently wrong at another and the library has no better
@@ -739,7 +712,7 @@ pub fn sight_clear(e: EdgeSet, m: Materials, x0: float, y0: float, z0: float,
 // The inverse of surf_param: where along a surface does this parameter land?
 //
 // surf_param answers "where is this point on that surface"; derived placement needs the
-// other direction — a Feature states an INTERVAL in surface parameters (plan #5 P5), and
+// other direction — a Feature states an INTERVAL in surface parameters, and
 // putting a door there means turning that interval back into a position. Without this the
 // only way to place a door on an existing opening is to search for it.
 // Example: @HXE-008
