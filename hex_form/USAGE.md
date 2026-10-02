@@ -46,12 +46,13 @@ Run them yourself: `loft --interpret --tests tests` from the `hex_form/` directo
 
 ## The rules that bite
 
-- **Discover the API from source or `loft api hex_form` once published** — not from memory. Even the
+- **Discover the API from source or `loft api hex_form`** — not from memory. Even the
   authors mis-recall signatures; the tests exist because guessing is unreliable.
-- **A refusal is data, not an error.** Where a map can decline (the doorstep, recovery), it returns
-  a *reason* and an *offer*, and your editor should show them rather than treating the call as failed.
-- **No `ε` in an R1 comparison.** For content you authored, recovery is exact; a tolerance there is
-  a defect, not a knob (`SPEC` **P4**).
+- **A refusal is data, not an error.** Where a map in the family can decline (`hex_fit`'s
+  doorstep, `hex_recover`), it returns a *reason* and an *offer*, and your editor should show them
+  rather than treating the call as failed.
+- **No `ε` when comparing forms.** For content you authored, recovery is exact; a tolerance there
+  is a defect, not a knob.
 - **Hand-written text is refused, not repaired.** A trailing space, an extra field, a length that is
   not a number, an `h0` outside `0..11` — each yields a zero-sided form rather than a guess. Check
   `form_sides(f) == 0` after every `form_read`; the signature cannot tell you the parse failed
