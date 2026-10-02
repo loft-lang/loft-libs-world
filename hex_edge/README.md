@@ -15,17 +15,19 @@ Beside `hex_field` (cell sets and their outlines), `hex_way` (centrelines) and `
 
 - `Surfaces` — straights and arcs, with exact `surf_distance` / `surf_normal`.
   ⚠ **id 0 is reserved for "no surface"**, so a fresh set already holds one slot.
-- `Materials` — solidity, height, opacity, sound, permeability, bounce.
-- `collide` / `passable` / `sweep_path` — queries over the marked edges.
-- `edges_cut` / `edges_halfplane` — marking an edge set from a region or a half-plane.
+- `Materials` — solidity, height, opacity, sound, permeability, bounce.  `sight_clear`
+  reads opacity and height; **movement reads none of them** — `passable` and `sweep_path`
+  stop at any marked edge, so a gate opens by clearing its mark, not by
+  `material_set_solid`.
+- `collide` / `passable` / `sweep_path` / `sweep_path_from` — queries over the marked edges.
+- `edges_cut` / `edges_solid` / `edges_halfplane` — marking an edge set from a region or a
+  half-plane.
 
-Split out of `crawler`/`hexbody` on 2026-07-24, where it had been maintained as two
-byte-identical copies. `SPEC` **L11**: the library owns the shared table.
+A guide: [docs/01-getting-started.loft](docs/01-getting-started.loft).
 
 ## Moving a body: thread the cell, do not re-derive it
 
-Found while building lavition's editor on this package (moros#10, 2026-07-28), and now
-answered in the library — **use `sweep_path_from` in a movement loop**:
+**Use `sweep_path_from` in a movement loop**:
 
 ```
 (t, cq, cr, d) = sweep_path_from(e, cq, cr, x0, y0, x1, y1);
@@ -44,8 +46,8 @@ work"; the truth is that it worked for exactly one step. The `havep` exclusion h
 this *within* one call, but that memory does not survive the return — and the sweep
 already told you the cell, so hand it back.
 
-**Why not a skin.** Coming to rest a small distance short does work — moros used 1 cm at
-its scale — but the smallest distance that works is not a constant. Measured: `1e-15` at
+**Why not a skin.** Coming to rest a small distance short does work, but the smallest
+distance that works is not a constant. Measured: `1e-15` at
 the origin, `1e-11` about `1.7e3` world units out, `1e-9` about `1.7e6` out. It is a
 float-resolution floor rather than a geometric clearance, so a value calibrated where it
 was tested is silently wrong elsewhere in the same world, and the library has no better

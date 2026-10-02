@@ -1,0 +1,138 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @NAME: Getting Started
+// @TITLE: Write cells into a world that grows in any direction, step it, and save it to a file.
+//
+// `hex_world` is a sparse world of hex cells.  Each `Cell` is four bytes — a colour, a height
+// and an age — and cells live in 32×32 chunks that exist only where something was written, so a
+// world can grow in every direction without allocating the space in between.  A `tick_and_decay`
+// step ages the cells and empties the old ones, and `world_save` / `world_load` keep a world in a
+// compact binary file.
+//
+// Coordinates are AXIAL `(q, r)`.  That is not the odd-r offset pair `hex_grid` uses — reach for
+// `hex_grid` for neighbours, distances and layout on the lattice, and for `hex_field` when the
+// world is a set of occupied cells with outlines.  It is also not `hex_voxel`, the layered voxel
+// column store.
+use hex_world::*;
+
+fn colour(c: u8) -> Cell { Cell { c_color: c, c_height: 0, c_age: 0 } }
+
+fn main() {
+  w = world_empty();
+  set_cell(w, -1, 5, colour(3));
+  println("(-1, 5) is in chunk ({chunk_idx_32(-1)}, {chunk_idx_32(5)}), slot ({hex_idx_32(-1)}, {hex_idx_32(5)}): colour {get_cell(w, -1, 5).c_color}");
+  assert(get_cell(w, -1, 5).c_color == 3 && len(w.chunks) == 1, "one write, one chunk");
+  assert(chunk_idx_32(-1) == -1 && hex_idx_32(-1) == 31, "west of the origin is chunk -1, slot 31");
+  assert(-1 / 32 == 0 && -1 % 32 == -1, "plain `/` and `%` round toward zero, and get it wrong");
+
+  // Every section below is a function, and `main` calls each one: a section nothing calls
+  // still compiles, but its assertions never run.
+  reading_never_allocates();
+  colour_zero_is_empty();
+  six_axial_neighbours();
+  a_step_ages_and_empties();
+  a_world_on_disk();
+}
+
+// That prints:
+//
+//     (-1, 5) is in chunk (-1, 0), slot (31, 5): colour 3
+//
+// ## Reading never allocates
+//
+// `get_cell` on a chunk that does not exist answers `cell_empty()` and creates nothing, so a read
+// sweep over any region is free.  The price is that an absent chunk and an empty cell read the
+// same: ask `has_chunk` when the difference matters.
+
+fn reading_never_allocates() {
+  w = world_empty();
+  set_cell(w, 0, 0, colour(1));
+  far = get_cell(w, 1000, 1000);
+  assert(far.c_color == 0 && len(w.chunks) == 1, "an empty answer, and still one chunk");
+  assert(has_chunk(w, 31, 31) && !has_chunk(w, 32, 0), "(31, 31) shares chunk (0, 0); (32, 0) does not");
+  println("read    : (1000, 1000) reads empty and allocates nothing");
+}
+
+// ## Colour zero is empty
+//
+// `c_color == 0` is the empty sentinel, not a colour.  A colour-0 cell keeps its other fields,
+// but `cell_count`, `neighbour_count`, the decay step and `world_save` all skip it.  Start a
+// palette at 1.
+
+fn colour_zero_is_empty() {
+  w = world_empty();
+  set_cell(w, 2, 2, Cell { c_color: 0, c_height: 9, c_age: 0 });
+  set_cell(w, 3, 2, colour(1));
+  assert(get_cell(w, 2, 2).c_height == 9, "the height is stored");
+  assert(cell_count(w) == 1, "but only the coloured cell counts");
+  println("empty   : {cell_count(w)} cell counted of 2 written");
+}
+
+// ## Six axial neighbours
+//
+// The neighbours of `(q, r)` are `(q±1, r)`, `(q, r±1)`, `(q+1, r-1)` and `(q-1, r+1)`.
+// `(1, 1)` is not one of the six for `(0, 0)`, although it is diagonally close on paper.
+
+fn six_axial_neighbours() {
+  w = world_empty();
+  set_cell(w, 1, 0, colour(1));
+  set_cell(w, 0, 1, colour(1));
+  set_cell(w, -1, 1, colour(1));
+  set_cell(w, 1, 1, colour(1));
+  assert(neighbour_count(w, 0, 0) == 3, "three of the four are neighbours of (0, 0)");
+  println("around  : (0, 0) has {neighbour_count(w, 0, 0)} filled neighbours");
+}
+
+// ## A step ages and empties
+//
+// `tick_and_decay(w, base_lifetime, neighbour_lease, decay_window)` advances `w.tick`, ages every
+// filled cell by 1, and empties a cell whose new age reaches `base_lifetime + neighbour_lease ×
+// neighbours + decay_window`, counting neighbours before the step.  With 3, 2 and 0, a lone cell
+// lasts until age 3 and two cells side by side, each with one neighbour, until age 5.  The chunk
+// they emptied is NOT freed: that is the caller's to drop, or a save and load round trip.
+
+fn a_step_ages_and_empties() {
+  w = world_empty();
+  set_cell(w, 0, 0, colour(1));          // alone
+  set_cell(w, 10, 0, colour(1));         // a pair
+  set_cell(w, 11, 0, colour(1));
+  for _ in 0..3 { tick_and_decay(w, 3, 2, 0); }
+  assert(get_cell(w, 0, 0).c_color == 0 && cell_count(w) == 2, "after 3 steps the lone cell is gone");
+  assert(get_cell(w, 10, 0).c_age == 3, "and the pair has aged 3");
+  for _ in 0..2 { tick_and_decay(w, 3, 2, 0); }
+  assert(cell_count(w) == 0 && w.tick == 5, "after 5 the pair is gone too");
+  assert(len(w.chunks) == 1, "the empty chunk stays");
+  println("decay   : lone cell gone at tick 3, the pair at tick 5");
+}
+
+// ## A world on disk
+//
+// `world_save` writes only the non-empty chunks, each filled cell as 6 bytes, behind a 16-byte
+// header; `world_load` adds what it reads to a world and answers how many cells it loaded — 0
+// for a missing file, a wrong magic or an unknown version.  Two cells in one chunk make a file of
+// 16 + 12 + 2 × 6 = 40 bytes.
+
+fn a_world_on_disk() {
+  path = "_tmp_guide.bin";
+  w = world_empty();
+  set_cell(w, -1, 5, colour(3));
+  set_cell(w, -2, 5, colour(4));
+  w.tick = 7;
+  world_save(w, path);
+  size = file(path).size;
+  back = world_empty();
+  n = world_load(back, path);
+  assert(size == 40 && n == 2, "40 bytes, two cells");
+  assert(get_cell(back, -2, 5).c_color == 4 && back.tick == 7, "the cells and the tick come back");
+  none = world_empty();
+  assert(world_load(none, "_tmp_no_such_file.bin") == 0, "no file: 0, not an error");
+  delete(path);
+  println("disk    : {size} bytes for {n} cells, read back");
+}
+
+// ## Where to go next
+//
+// - `tests/worked-examples.loft` — `@HXW-001` … `@HXW-005`: an absent chunk is not a read error,
+//   the `(q, r)` here are axial, negative coordinates need the helpers, an emptied chunk stays,
+//   and colour 0 is the empty sentinel.
+// - `tests/02-persist.loft` — the file format's edge cases.

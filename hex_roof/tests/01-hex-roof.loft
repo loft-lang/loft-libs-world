@@ -120,6 +120,26 @@ fn test_a_hip_is_still_unknown_and_that_keeps_the_refusal_honest() {
   assert(roof_eval(m, 0.0, 0.0) == 0.0, "and an unknown roof draws nothing");
 }
 
+fn test_an_unknown_roof_reports_the_closest_ridge_whole() {
+  // When nothing fits and the ridge came closest, the answer must carry the ridge's segment —
+  // BOTH ends.  A gable over a 7 x 3 block with one cell dented 0.3 fits no shape within 0.01,
+  // and the ridge is the closest: its end on the far side of the block is what a caller needs
+  // to see which ridge nearly fitted.  An end of (0, 0) would read as a ridge to the origin.
+  s = hexset_new(4);
+  for r in -1..2 { for q in -3..4 { hexset_set(s, q, r, true); } }
+  full = track_new();
+  track_straight(full, -3.0 * 1.7320508075688772, 0.0, 3.0 * 1.7320508075688772, 0.0);
+  f = heights_new(-4, -4, 9, 9);
+  roof_ridge(s, f, full, 5.0, 1.0, 100.0);
+  height_set(f, 1, 0, height_get(f, 1, 0) - 0.3);
+  g = roof_ridge_fit(s, f);
+  m = roof_match(s, f, 0.01);
+  assert(m.rf_kind == ROOF_UNKNOWN && m.rf_res == g.rf_res, "the ridge is closest: {m.rf_res} vs {g.rf_res}");
+  assert(g.rf_x < 0.0 && g.rf_x2 > 0.0, "the fitted ridge spans the block: {g.rf_x} to {g.rf_x2}");
+  assert(m.rf_x == g.rf_x && m.rf_x2 == g.rf_x2 && m.rf_y2 == g.rf_y2,
+         "the unknown answer keeps the ridge's far end: ({m.rf_x2}, {m.rf_y2}) vs ({g.rf_x2}, {g.rf_y2})");
+}
+
 fn test_the_three_kinds_it_does_know_are_unaffected() {
   // ⚠ THE CONTROL, AND IT IS HALF THE POINT: a doorstep that answered UNKNOWN to everything
   // would pass both rows above. A cone this package drew must still come back a CONE, exactly.

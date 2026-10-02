@@ -10,9 +10,9 @@ off the field, enumerating nothing — every admitted form is convex, so the con
 filled cells IS the turtle polygon. An arbitrary blob that no grammar form draws lands in **R2**
 with a positive residual, never a false R1.
 
-Part of the `hex_*` family beside `hex_field` (cell sets), `hex_grid` (the lattice), `hex_edge`
-(collision), `hex_way` (linework) and `hex_roof` (height profiles). Produced by **hexbody**, the
-workshop that proves the family against an exact round trip.
+Part of the `hex_*` family beside `hex_field` (cell sets), `hex_form` (the turtle forms it
+recovers), `hex_grid` (the lattice), `hex_edge` (collision), `hex_way` (linework) and `hex_roof`
+(height profiles).
 
 **Two routines, two reaches.** `rebuild` matches the field against the ENUMERATED candidate set
 (three sides up to `LEVEL`, plus four to six sides at length 1), so its R2 means *"nothing in the
@@ -22,8 +22,9 @@ and both answers are correct.
 
 ## Using it
 
-Add the dependency, `use hex_recover;`, and call the maps below. **`USAGE.md` is the worked guide**, with
-every example pointed at a passing test in `tests/01-hex-recover.loft` — the tests are the executable documentation.
+Add the dependency and `use hex_recover;`.
 
-Split from `ROUNDTRIP.md`'s objects and maps (`SPEC` **I-EXTEND**: a library defines its primitives
-from its own semantics, for consumers it will never meet). See hexbody's `plans/lib-split/`.
+A guide: [docs/01-getting-started.loft](docs/01-getting-started.loft).
+
+[`USAGE.md`](USAGE.md) is the map of the surface, and `tests/02-worked-examples.loft` works each
+contract the signatures cannot state (`@HXV-001` … `@HXV-009`) as a running test.

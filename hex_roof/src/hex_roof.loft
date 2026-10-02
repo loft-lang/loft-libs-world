@@ -1,6 +1,6 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
-// hexroof — ROOFS, VAULTS AND ARCHES: one mechanism, several profiles.
+// hex_roof — ROOFS, VAULTS AND ARCHES: one mechanism, several profiles.
 //
 // Once a cell carries a height, every roof form anyone names is the same function of a
 // DISTANCE, and only the distance SOURCE changes:
@@ -32,7 +32,7 @@ fn celly(q: integer, r: integer) -> float {
 
 // z = peak - slope*d about a point.  Clamping d at dmax is not a detail: it is what makes
 // an eave LEVEL on a quantised footprint, where the boundary cells sit at a spread of true
-// radii (rooftest measures the difference).
+// radii (`eave_spread` measures the difference).
 //
 // AND THE CLAMP HAS ITS OWN COST, worth knowing before reaching for it: the cells it clamps
 // become a flat plateau, and an interior cell inside that plateau PONDS.  On a quantised
@@ -106,7 +106,7 @@ pub fn vault_arc(s: HexSet, f: Heights, t: Track, spring: float, radius: float) 
 // Driving it from the FOOTPRINT rather than from the ideal circle is also what makes the
 // eave level. Boundary cells are at ring 0 by definition, whatever their true radius. Drive
 // a cone from each cell's own radius instead and the eave inherits the footprint's
-// roundness deviation, wobbling by slope x that spread — rooftest measures both, because
+// roundness deviation, wobbling by slope x that spread — `eave_spread` measures it, because
 // the failure is invisible until you look at the eave rather than the apex.
 //
 // Multi-source BFS inward from the boundary, on the pre-allocated array + index-write
@@ -164,7 +164,7 @@ pub fn roof_hip(s: HexSet, f: Heights, eave: float, per_ring: float) -> integer 
 // harder object: a cone's slope is constant, a dome's diverges at the springing
 // (dz/dr = -r/sqrt(R^2-r^2)).  Past the 45-degree point r = R/sqrt(2) the surface is more
 // wall than roof and a per-cell height stops being able to carry it — which is exactly why
-// real domes sit on a vertical DRUM and only the cap is vaulted.  vaulttest measures it.
+// real domes sit on a vertical DRUM and only the cap is vaulted.
 pub fn dome(s: HexSet, f: Heights, cx: float, cy: float, base: float, radius: float) {
   for r in hexset_r0(s)..hexset_r0(s) + hexset_h(s) {
     for q in hexset_q0(s)..hexset_q0(s) + hexset_w(s) {
@@ -297,9 +297,9 @@ pub fn eave_spread(s: HexSet, f: Heights) -> float {
 
 // ── RECOVERING THE FORM: the inverse of everything above ────────────────────
 //
-// Cells are STORAGE; the analytic surface is the truth.  hexmatch already does this for a
-// traced 2D boundary (loop of lattice points -> straights + arcs).  A height field needs
-// the same service: read the per-cell z back, decide the profile, recover its exact
+// Cells are STORAGE; the analytic surface is the truth.  A height field is read back the
+// way a traced outline is matched to straights and arcs: read the per-cell z, decide the
+// profile, recover its exact
 // parameters, and hand the renderer a real cone — not a staircase of hexes wearing one.
 //
 // Nothing downstream should ever draw the quantised heights directly.  Once the form is
@@ -401,10 +401,7 @@ fn cone_at(s: HexSet, f: Heights, cx: float, cy: float) -> (float, float, float)
   (apex, 0.0 - grad, res)
 }
 
-// A cone: seed the centre at the highest cell, then refine.  The apex cell is only within
-// one circumradius of the true apex, so the seed alone is not good enough — the refinement
-// is what makes the recovery exact rather than approximately right.
-// ── ⛔ A RIDGE — the cone's own profile about a SEGMENT ────────────────────
+// ── A RIDGE — the cone's own profile about a SEGMENT ────────────────────
 //
 // `roof_ridge` draws `peak - slope * d` where `d` is the distance to a LINE SEGMENT, exactly
 // as `roof_cone` draws it about a point.  So the fit is `cone_at` with the radius replaced by
@@ -444,29 +441,19 @@ fn ridge_at(s: HexSet, f: Heights, ax: float, ay: float, bx: float, by: float)
   (apex, 0.0 - grad, res)
 }
 
-// ⛔ **FOUR SEEDS, AND ONLY ONE OF THEM IS ANY GOOD — THE OTHERS ARE KEPT AS CHEAP INSURANCE.**  0.1.2
-// started both ends at `roof_cone_fit`'s centre, reasoning that a cone is a ridge whose segment
-// has zero length.  It is — but the cone fit RUNS AWAY on ridge-like data: fitting a cone to a
-// gable puts its apex far outside the footprint (the same degeneracy that sends it to x = 9744
-// on a plane), and a local search started there never walks back.  Measured on a real roof — a
-// 27-cell gable, constant across the ridge — it returned a DEGENERATE segment 8 world units
-// clear of the roof with slope 0 and residual 1.185.
+// Fit a ridge — the gable / hip profile `roof_ridge` draws — to the heights over these cells.
 //
-// ✅ **So the climb is run from all three and the best is kept**: both ends at the highest cell,
-// both at the cone's centre, and one at each.  Each is cheap, and *take the better of two
-// starts* is not a threshold — it is the same answer either way when both converge.
+// FOUR SEEDS, AND THE BEST RESIDUAL WINS.  The one that works on a gable comes from the data:
+// the ridge is the LOCUS OF THE MAXIMUM, so the two highest cells furthest apart give its
+// direction, and the seed is that line extended across the whole footprint.  The climb then
+// SHORTENS it for a hipped roof, which is the direction it handles well.  The other three —
+// both ends at the highest cell, both at `roof_cone_fit`'s centre, one at each — are cheap
+// insurance: a climb grown out of a POINT can lower its residual by running the segment
+// ACROSS the ridge until the fit is "flat at the mean", and a cone fitted to a gable puts its
+// apex far outside the footprint.  Taking the better of several starts is not a threshold;
+// when they converge it is the same answer.
 //
-// ⚠ **A LOCAL SEARCH THAT HAS TO GROW A SEGMENT OUT OF A POINT IS THE FRAGILE PART**, not the
-// seed: from a degenerate start the residual can be flat in every direction the first step
-// tries.  Two starts that fail differently are what makes that visible.
-//
-// ⚠ **THE LIBRARY'S OWN FIXTURE DID NOT CATCH THIS** — a ridge drawn on a disc happened to give
-// a usable cone centre.  The consumer's roof did.  That is `probe/adopt`'s lesson in a library:
-// a suite written by the author cannot ask the questions the author does not have.
-//
-// ⚠ **EACH END IS CLIMBED IN THE EIGHT DIRECTIONS `roof_cone_fit` USES, ON THE SAME STEP
-// SCHEDULE.**  A second search rule here would be a second opinion about how this family
-// searches.
+// Each end is climbed in the eight directions `roof_cone_fit` uses, on the same step schedule.
 pub fn roof_ridge_fit(s: HexSet, f: Heights) -> RoofFit {
   // the two candidate anchors: the highest cell, which lies ON the ridge, and the cone fit's
   // centre, which is where a cone lands when asked to be a ridge
@@ -482,24 +469,16 @@ pub fn roof_ridge_fit(s: HexSet, f: Heights) -> RoofFit {
       }
     }
   }
-  // ⛔ **THE MAXIMUM IS ATTAINED TO WITHIN ROUNDING, NOT EXACTLY — measured on this package's
-  // OWN output.** 0.1.3 collected the locus with `z == hi`, which holds for a field read out of
-  // an integer store and FAILS for one `roof_ridge` drew: `track_distance` returns zero on the
-  // segment only up to rounding, so one cell wins the equality, the pair collapses to a point
-  // and the fit degenerates — residual 1.132 on a field this package had just produced.
+  // ⚠ **THE MAXIMUM IS ATTAINED TO WITHIN ROUNDING, NOT EXACTLY.** On a field `roof_ridge`
+  // drew, `track_distance` is zero on the segment only up to rounding, so `z == hi` would let
+  // one cell win, collapse the pair to a point and degenerate the fit.
   //
   // ⚠ **THE BAND IS THE FIELD'S OWN SPAN, NOT A TUNED EPSILON**: a millionth of `hi - lo` is
   // float equality made scale-aware, and it carries no units of its own.
   band = (hi - lo) * 0.000001;
   if band < 0.0 { band = 0.0 - band; }
-  // ⛔ **AND THE DIRECTION COMES FROM THE DATA, WHICH IS THE ONLY SEED THAT WORKS.** A climb
-  // grown out of a POINT can reduce its residual by running the segment ACROSS the ridge: a
-  // long segment through the middle makes every distance similar, the least-squares slope goes
-  // to zero and the fit becomes "flat at the mean" — measured at residual 1.20 on a five-row
-  // gable, with the segment perpendicular to the true ridge and eleven units long.
-  //
-  // ✅ **THE RIDGE IS THE LOCUS OF THE MAXIMUM**, so the cells attaining it ARE the ridge, and
-  // the two furthest apart are its extent.
+  // THE RIDGE IS THE LOCUS OF THE MAXIMUM, so the cells attaining it ARE the ridge, and the
+  // two furthest apart give its direction.
   ex1 = hx; ey1 = hy; ex2 = hx; ey2 = hy;
   far = 0.0 - 1.0;
   for r in hexset_r0(s)..hexset_r0(s) + hexset_h(s) {
@@ -522,13 +501,10 @@ pub fn roof_ridge_fit(s: HexSet, f: Heights) -> RoofFit {
       }
     }
   }
-  // ⛔ **AND THE SEED IS EXTENDED TO SPAN THE FOOTPRINT, BECAUSE GROWING IS WHAT FAILS.** The
-  // locus gives the right DIRECTION and too short a segment: every cell whose nearest point is
-  // past an end gets a clamped distance, so the fit is wrong there and the climb has to grow
-  // the ends outward — which it does badly, converging tilted and short at residual 0.128 on a
-  // ridge this package drew.  A gable's ridge runs the length of its roof, so the seed is the
-  // locus direction projected over every cell; a genuinely HIPPED roof is the case the climb
-  // then SHORTENS, and shortening is the direction it handles well.
+  // THE SEED IS EXTENDED TO SPAN THE FOOTPRINT, because growing is what the climb does badly:
+  // the locus gives the right direction and too short a segment, and every cell past an end
+  // would get a clamped distance.  A gable's ridge runs the length of its roof; a hipped roof
+  // is the case the climb then SHORTENS.
   pdx = ex2 - ex1;
   pdy = ey2 - ey1;
   plen = sqrt(pdx * pdx + pdy * pdy) ?? 0.0;
@@ -600,8 +576,10 @@ fn ridge_climb(s: HexSet, f: Heights, sax: float, say: float, sbx: float, sby: f
             rf_x2: bx, rf_y2: by }
 }
 
-// Fit a cone to the heights over these cells: apex, radius and how well it fits.  Ask both
-// this and `roof_dome_fit` and keep the better residual — the shapes suit different roofs.
+// Fit a cone to the heights over these cells: apex, slope and how well it fits.  The centre
+// is seeded at the highest cell and then refined — the apex cell is only within one
+// circumradius of the true apex, so the refinement is what makes the recovery exact.
+// `roof_match` asks this, the plane, the dome and the ridge, and keeps what fits.
 pub fn roof_cone_fit(s: HexSet, f: Heights) -> RoofFit {
   hi = -1000000.0;
   bx = 0.0; by = 0.0;
@@ -728,27 +706,15 @@ pub fn roof_dome_fit(s: HexSet, f: Heights) -> RoofFit {
 // fitted to a flat roof would put its apex somewhere arbitrary.
 //
 // Example: @HXR-006
-// ⛔ **AND WHEN NOTHING FITS, IT SAYS SO — `ROOF_UNKNOWN`.**  This returned the least-bad of
-// the three with `rf_kind` naming a shape the field is NOT, and the residual was the only
-// signal that it was a fallback rather than a recovery.  Measured on fields THIS PACKAGE
-// DRAWS: a `roof_ridge` gable comes back `ROOF_CONE` at residual **1.209**, with an apex of
-// 6.318 where the truth is 6.0 and a slope of 0.409 where it is 0.5; a `roof_hip` comes back
-// `ROOF_CONE` at **0.615**.  `roof_eval` then evaluates that cone into a surface that is not
-// the roof.
 //
-// ⚠ **THE BEST CANDIDATE'S PARAMETERS ARE KEPT**, because *which* shape came closest and by
-// how much is what a caller diagnoses with.  What changes is that `rf_kind` no longer CLAIMS
-// one — `roof_eval` draws nothing for `ROOF_UNKNOWN` — so a fallback can no longer be
-// mistaken for a recovery by a caller that reads the kind and trusts it.
+// It tries plane, cone, dome, then ridge, and answers the first whose worst residual is
+// within `tol`.  The ridge is LAST because a cone is a ridge whose segment has zero length:
+// trying it first would answer `ROOF_RIDGE` for a true cone, the less specific statement.
 //
-// ⚠ **NO EXISTING RECOVERY CHANGES.**  A candidate within `tol` returns exactly as before;
-// only the path where all three were already wrong is affected, which is precisely the
-// population that was being told the wrong thing.
-//
-// ⚠ **AND THE MISSING KIND IS NAMED RATHER THAN GUESSED AT**: this package DRAWS a ridge, a
-// hip and three vaults, and fits a plane, a cone and a dome.  A ridge is the cone's own
-// profile about a SEGMENT instead of a point, so `roof_ridge_fit` is a well-specified
-// addition — until it exists, a gable is honestly unknown rather than dishonestly a cone.
+// ⛔ **WHEN NOTHING FITS, IT SAYS SO — `ROOF_UNKNOWN`**, never the least-bad shape under a
+// kind it is not; `roof_eval` draws nothing for it.  Every other field is the closest
+// candidate's — a ridge's both ends included — because which shape came closest and by how
+// much is what a caller diagnoses with.
 pub fn roof_match(s: HexSet, f: Heights, tol: float) -> RoofFit {
   p = roof_plane_fit(s, f);
   if p.rf_res <= tol { return p; }
@@ -756,9 +722,6 @@ pub fn roof_match(s: HexSet, f: Heights, tol: float) -> RoofFit {
   if c.rf_res <= tol { return c; }
   d = roof_dome_fit(s, f);
   if d.rf_res <= tol { return d; }
-  // ⚠ **LAST, SO NO EXISTING VERDICT MOVES.** A cone is a ridge whose segment has zero
-  // length, so trying the ridge first would answer `ROOF_RIDGE` for a true cone — the less
-  // specific statement, which is the same reason a plane wins ties above.
   g = roof_ridge_fit(s, f);
   if g.rf_res <= tol { return g; }
   best = p;
@@ -766,7 +729,7 @@ pub fn roof_match(s: HexSet, f: Heights, tol: float) -> RoofFit {
   if d.rf_res < best.rf_res { best = d; }
   if g.rf_res < best.rf_res { best = g; }
   RoofFit { rf_kind: ROOF_UNKNOWN, rf_x: best.rf_x, rf_y: best.rf_y, rf_z: best.rf_z,
-            rf_slope: best.rf_slope, rf_res: best.rf_res }
+            rf_slope: best.rf_slope, rf_res: best.rf_res, rf_x2: best.rf_x2, rf_y2: best.rf_y2 }
 }
 
 // The recovered ANALYTIC surface — what a renderer should draw, at any resolution, instead

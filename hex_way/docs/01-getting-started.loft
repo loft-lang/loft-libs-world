@@ -1,0 +1,142 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @NAME: Getting Started
+// @TITLE: Lay a road as an exact centreline, offset its rails, and stamp it onto the hex grid.
+//
+// `hex_way` is the linework of the hex world: roads, rails and paths.  A way is a `Track` —
+// a sequence of straight and arc segments in world space — and that centreline is the
+// truth.  Everything parallel to it (a rail, a kerb, a lane marking) is an exact OFFSET of
+// the centreline, and the cells a way covers are a RASTERISATION of its band, computed
+// last and never offset again.
+//
+// It is not collision — `hex_edge` owns walls and surfaces, and `way_stamp` writes into
+// them.  It is not the cell set either: that is `hex_field`.  Reach for `hex_way` when the
+// shape is a line with a width rather than a region.
+//
+// World units: a hex has circumradius 1, so neighbouring centres are √3 apart along a row
+// and rows are 1.5 apart.
+use hex_way::*;
+use hex_field::*;
+use hex_edge::*;
+
+const HALF_PI = 1.5707963267948966;
+
+// Ten units east, then a quarter turn to the left around (10, 5).
+fn l_track() -> Track {
+  t = track_new();
+  track_straight(t, 0.0, 0.0, 10.0, 0.0);
+  track_arc(t, 10.0, 5.0, 5.0, 0.0 - HALF_PI, 0.0);
+  t
+}
+
+fn near(a: float, b: float) -> boolean { abs(a - b) < 0.000000001 }
+
+fn main() {
+  t = l_track();
+  (ex, ey) = seg_point(t, 1, seg_len(t, 1));
+  println("length {track_len(t):.4}, turn curvature {seg_curvature(t, 1)}, ends at ({ex:.1}, {ey:.1})");
+  assert(near(track_len(t), 10.0 + 5.0 * HALF_PI), "10 straight plus a quarter of a radius-5 circle");
+  assert(seg_curvature(t, 0) == 0.0 && seg_curvature(t, 1) == 0.2, "straight, then 1/R turning left");
+  assert(near(ex, 15.0) && near(ey, 5.0), "a quarter turn from (10, 0) around (10, 5)");
+
+  // Every section below is a function, and `main` calls each one: a section nothing calls
+  // still compiles, but its assertions never run.
+  rails_are_offsets();
+  cells_are_a_rasterisation();
+  stamping_walls();
+  the_milepost();
+}
+
+// That prints:
+//
+//     length 17.8540, turn curvature 0.2, ends at (15.0, 5.0)
+//
+// ## Rails are offsets
+//
+// `track_offset(t, d)` is the parallel track at distance `d`, positive to the LEFT of travel.
+// An offset straight is a straight, an offset arc is a concentric arc, so the offset is exact.
+// On a left turn the left rail is the INSIDE one: its radius shrinks by `d`.  And it must
+// still JOIN where the centreline joins — the gap at the joint is the check that matters.
+//
+// `offset_legal(t, d)` asks whether a way may be that wide: on the tightest turn the inner
+// rail collapses once |d| reaches the radius.
+
+fn rails_are_offsets() {
+  t = l_track();
+  left = track_offset(t, 1.0);
+  assert(near(track_len(left), 10.0 + 4.0 * HALF_PI), "the inner rail turns on radius 4");
+  (sx, sy) = seg_point(left, 0, seg_len(left, 0));
+  (ax, ay) = seg_point(left, 1, 0.0);
+  gap = sqrt((sx - ax) * (sx - ax) + (sy - ay) * (sy - ay)) ?? 1.0;
+  assert(near(sx, 10.0) && near(sy, 1.0) && gap < 0.000000001, "straight and arc meet at (10, 1)");
+  (mx, my) = seg_point(left, 1, 2.0);
+  assert(near(track_distance(t, mx, my), 1.0), "every point of the rail is 1 from the centreline");
+  assert(offset_legal(t, 4.9) && !offset_legal(t, 5.0) && !offset_legal(t, -5.0), "|d| < R = 5");
+  println("offset  : inner rail {track_len(left):.4} long, joint gap {gap}, widest legal |d| < 5");
+}
+
+// ## Cells are a rasterisation
+//
+// `way_mark(t, halfwidth, s)` fills every cell whose CENTRE lies within `halfwidth` of the
+// centreline.  Centres come in rings, so the footprint quantises: along a row the next
+// rows of centres are 1.5 away, and every half-width below that gives the same cells.  An
+// offset has no such floor — keep the centreline, and rasterise last.
+
+fn cells_are_a_rasterisation() {
+  road = track_new();
+  track_straight(road, -5.0, 0.0, 5.0, 0.0);
+  narrow = hexset_new(8);
+  way_mark(road, 0.5, narrow);
+  wider = hexset_new(8);
+  way_mark(road, 1.4, wider);
+  wide = hexset_new(8);
+  way_mark(road, 1.6, wide);
+  assert(hexset_count(narrow) == 7 && hexset_count(wider) == 7, "q = -3..3 on row 0, nothing else");
+  assert(hexset_count(wide) == 19, "plus six cells on each of rows -1 and 1");
+  println("cells   : half-width 0.5 and 1.4 -> {hexset_count(narrow)} cells, 1.6 -> {hexset_count(wide)}");
+}
+
+// ## Stamping walls
+//
+// `way_surfaces(t, sf)` registers each segment as a `hex_edge` surface and answers the first
+// id; segment `i` is `first + i`.  `way_stamp` then marks the cells AND blocks every boundary
+// edge with the surface of its nearest segment, in one pass — so a body that hits the side of
+// the road learns which segment it hit with no lookup.  Stamp a way that is built from
+// several parts with `way_mark` for each part and one `cut_arb` at the end instead: cutting
+// part by part leaves walls inside the finished footprint.
+
+fn stamping_walls() {
+  road = track_new();
+  track_straight(road, -5.0, 0.0, 5.0, 0.0);
+  sf = surfaces_new();
+  first = way_surfaces(road, sf);
+  cells = hexset_new(8);
+  e = edgeset_new(-8, -8, 17, 17);
+  way_stamp(road, 0.5, cells, e, first, 1);
+  // 7 cells in a row: 42 edges, of which 6 pairs are shared inside the road
+  assert(first == 1 && edgeset_surf_count(e) == 30, "the outline of a 7-cell row");
+  assert(edge_surf(e, 0, 0, 0, 1) == first && passable(e, 0, 0, 1, 0), "a side wall, an open lane");
+  println("stamp   : {edgeset_surf_count(e)} boundary edges, each on surface {first}");
+}
+
+// ## The milepost
+//
+// `way_param(t, x, y)` is the arc length from the start of the way to the point on it
+// nearest (x, y) — the parameter stations, signals and steps are stated in.  A point before
+// the start reads 0, and a point at the end reads the whole length.
+
+fn the_milepost() {
+  t = l_track();
+  assert(near(way_param(t, 4.0, 0.3), 4.0), "4 units along the straight");
+  assert(way_param(t, -2.0, 0.0) == 0.0, "before the start");
+  assert(near(way_param(t, 15.0, 5.0), track_len(t)), "the end of the turn");
+  println("param   : (4, 0.3) is at {way_param(t, 4.0, 0.3)}, the end at {way_param(t, 15.0, 5.0):.4}");
+}
+
+// ## Where to go next
+//
+// - `tests/02-worked-examples.loft` — `@HXY-001` … `@HXY-007`: an offset that must join,
+//   the band's floor, `offset_legal` as a width test, mark-then-cut for a multi-part way, a
+//   milepost near the start of a turn, the shortest safe stair tread per heading
+//   (`way_steps`), and an arc authored a full turn lower.
+// - `hex_edge` — what the stamped walls do: `collide`, `sweep_path`, materials.

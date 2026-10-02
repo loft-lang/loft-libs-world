@@ -5,8 +5,7 @@
 //
 // A coarse overland hex lattice (one cell ~ hundreds of meters, the moros
 // convention via hex_grid) is the terrain AUTHORITY; the fine, walked world is
-// derived from it by pure functions.  Ported from the user-tuned Python
-// blueprint (crawler: OVERLAND.md + tools/overland_blueprint.py).  The model:
+// derived from it by pure functions.  The model:
 //
 //  * CELLS carry height / material / moisture / water-flow direction +
 //    accumulation / relief — the same record shape at every scale.
@@ -47,8 +46,7 @@
 // a unit of generation.
 //
 // Style: globally-unique pub names (terrain_*); pre-allocated vectors with
-// index writes for hot data; no struct-literal comprehensions (loft#319); no
-// capture-append-reassign on struct fields (loft#320).
+// index writes for hot data.
 
 use hex_grid::*;
 

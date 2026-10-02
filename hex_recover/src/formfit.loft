@@ -19,30 +19,21 @@ use hex_field::*;
 use hex_form::*;
 use formcensus::*;
 
-// ── THE WINDOW EVERY REDRAW GOES INTO — SIZED FROM THE FORM, NOT FROM A GUESS ─
-//
-// Recovery draws a candidate and compares it with the field. That redraw needs a chunk, and the
-// chunk used to be a constant 25x25 around the anchor -- "a compact window: every level-1 shape
-// is a handful of cells around the anchor", which was true of the enumeration and FALSE of the
-// thing that replaced it. `form_fill` clips to the chunk silently, so an oversized form redrew
-// SHORT and the comparison then reported the exact answer it had just computed as R2 content.
-// An equilateral triangle of side 13 came back "R2, residual 2" with `rb_form` exactly right;
-// at an odd (vertex-direction) heading the refusal started at side 7 -- an 85-cell shape refused
-// while a 105-cell one passed, because the limit was never a size, it was a DISTANCE from the
-// anchor and the two headings cover it at different rates.
-//
-// So the window is derived. `form_fill` sets exactly the cells whose lattice centre `(2q + (r&1),
-// 3r)` lies on or inside the turtle polygon, and `form_poly_k`/`form_poly_m` give that polygon's
-// corners; its bounding box therefore bounds the drawing. Every `head_step` moves `m` by a
-// multiple of 3, so `r` is bounded exactly; `k` gives `q` within one, and a one-cell pad on every
-// side absorbs that. Costs nothing -- for the shipped candidate set the derived window is far
-// SMALLER than the old constant, so the census got faster as well as correct.
 fn fdiv(a: integer, b: integer) -> integer {
   q = (a / b) ?? 0;
   if a < 0 && q * b != a { return q - 1; }
   q
 }
 
+// ── THE WINDOW EVERY REDRAW GOES INTO — SIZED FROM THE FORM, NOT FROM A GUESS ─
+//
+// Recovery draws a candidate and compares it with the field, so the redraw needs a chunk big
+// enough for the whole form: `form_fill` clips to its chunk silently, and a clipped redraw would
+// report an exact answer as R2.  The window is therefore derived from the form, never a constant.
+// `form_fill` sets exactly the cells whose lattice centre `(2q + (r&1), 3r)` lies on or inside the
+// turtle polygon, and `form_poly_k`/`form_poly_m` give that polygon's corners, so their bounding
+// box bounds the drawing.  Every `head_step` moves `m` by a multiple of 3, so `r` is bounded
+// exactly; `k` gives `q` within one, and a one-cell pad on every side absorbs that.
 // Example: @HXV-003
 pub fn fit_chunk(f: Form) -> HexSet {
   vk = form_poly_k(f);
@@ -80,10 +71,9 @@ pub struct Rebuilt {
 
 // ── the admitted set — the candidate space `rebuild` matches against ───────
 //
-// `LEVEL` is how far up the ladder recovery is claimed to work. It must be raised in step with the
-// corpus: a corpus entry whose form is above this level would find NO candidate and be reported as
-// R2 — a silent loss of an exact answer. `tests/trip.loft` covers every committed level, so that
-// mismatch fails the gate rather than passing quietly.
+// `LEVEL` is how far up the ladder the enumeration reaches.  A field drawn from a form above it
+// finds NO candidate and `rebuild` reports it as R2 — "nothing in the admitted set draws this",
+// not "no stencil draws this".  `rebuild_construct` is the route for those (@HXV-004).
 pub const LEVEL = 2;
 
 // The candidate space: A1/A2 (3 sides, len <= LEVEL) plus A3 (side counts 4..6 at len 1).
@@ -192,23 +182,20 @@ pub fn rebuild_text(cells: HexSet, name: text) -> text {
 // ── INDEXED RECOVERY — draw the candidates ONCE, then look up ──────────────
 //
 // `rebuild_with` re-DRAWS every candidate on every lookup: O(N) fills per field, O(N^2) over a
-// corpus — 14161 fills for the 119 entries we hold. Nothing about that is necessary. A candidate's
-// field never changes, so its digest can be computed once and put in a map keyed by the digest.
-// Recovery then becomes a single probe.
+// corpus.  A candidate's field never changes, so its digest can be computed once and put in a map
+// keyed by the digest; recovery then becomes a single probe.
 //
-// WHAT THIS DOES AND DOES NOT BUY, stated plainly because the A3 write-up overstated it:
+// WHAT THIS DOES AND DOES NOT BUY:
 //
 //   IT FIXES   the per-lookup cost — O(N) fills to build the index, O(1) per recovery afterwards.
 //   IT DOES NOT FIX   the cost of ENUMERATING the candidate space. Building the index still walks
-//                     every admissible form once, so the 4-sided house's class (~1.2M proposals,
-//                     `X43`) is exactly as far out of reach as before. Reaching THAT needs
-//                     CONSTRUCTIVE recovery — reading (h0, lens, turns) off the field's own
-//                     geometry — which is a different piece of work, not a faster table.
+//                     every admissible form once, so a form class too large to enumerate (the
+//                     4-sided house, ~1.2M proposals) stays out of reach.  Reaching it needs
+//                     CONSTRUCTIVE recovery — `rebuild_construct`, below.
 //
-// LAW F IS CHECKED AT BUILD TIME, ONCE, INSTEAD OF ASSUMED PER LOOKUP. Two candidates sharing a
-// digest would silently overwrite each other in the map, so the build COUNTS such clashes and the
-// gate asserts zero. That is strictly better than the old per-lookup `rb_matches` count: it is
-// checked once, over the whole space, rather than only where a corpus entry happened to look.
+// LAW F IS CHECKED AT BUILD TIME, ONCE, OVER THE WHOLE SPACE. Two candidates sharing a digest
+// would silently overwrite each other in the map, so the build COUNTS such clashes in
+// `ri_collisions`, and zero is the answer law F promises (@HXV-002).
 pub struct IdxEntry {
   ix_digest: text,      // `field_norm_text` of the form's drawn field — NOT named `key`
   ix_form:   Form,
@@ -267,10 +254,9 @@ pub fn rebuild_indexed_text(idx: RecoveryIndex, cand: vector<Form>,
 
 // ── CONSTRUCTIVE RECOVERY — read the form off the field, no enumeration ────
 //
-// Indexed recovery removed the per-lookup cost but is BUILT BY the enumeration, so it left the
-// 4-sided house (~1.2M proposals, `X43`) exactly as far away. This does not enumerate at all: it
-// reads `(h0, lens, turns)` off the field's own geometry, in O(cells), independent of how large
-// the admissible space is.
+// Indexed recovery is BUILT BY the enumeration, so it reaches no further than `rebuild`.  This
+// does not enumerate at all: it reads `(h0, lens, turns)` off the field's own geometry, in
+// O(cells), independent of how large the admissible space is.
 //
 // THE CONSTRUCTION, and why it is exact rather than a fit:
 //

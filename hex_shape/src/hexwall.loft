@@ -7,14 +7,13 @@
 // A house is four of them; a fence is one.
 //
 // THE 24 DIRECTIONS, AND WHY ONLY 12 ARE FOR HOUSES.  A direction is `d24`, in
-// fifteenths-of-a-revolution steps (24 of them, 15 degrees apart):
+// twenty-fourths of a revolution (24 of them, 15 degrees apart):
 //
 //   EVEN d24 — the 12 headings of H12, each an EXACT lattice step (hexform).  These are the
 //              only directions a STENCIL may use: a house is built from them.
-//   ODD  d24 — the 12 in-between directions, made by wobbling between the two adjacent
-//              headings.  THEY ARE NOT EXACT.  The two headings differ in length by sqrt(3)
-//              (edge class vs vertex class), so one step of each does not bisect the angle —
-//              it lands 4.11 degrees off the nominal.  We use them anyway, and that is
+//   ODD  d24 — the 12 in-between directions.  THEY ARE NOT EXACT: no lattice vector points
+//              at an odd multiple of 15 degrees, so each uses the vector `(7, 3)` turned, and
+//              lands 1.1021 degrees off the nominal.  We use them anyway, and that is
 //              precisely why HOUSES ARE NEVER DRAWN WITH AN IN-BETWEEN ANGLE: they belong to
 //              world linework (roads, fences, cliffs — SPEC domain B), where the offset does
 //              not have to close a shape or meet a corner.
@@ -50,11 +49,10 @@ pub struct Wall {
 //
 // ── THE IN-BETWEEN VECTOR (odd `d24`) — `N = 39`, the vector `(7,−2)` ──────
 //
-// This used to be the SUM of the two adjacent headings — `(5,3)` here, `(5,−1)` reduced, `N = 21` —
-// which put every in-between direction **4.1066°** off its nominal angle.  `N = 39` is **3.7× more
-// accurate (1.1021°)** and is one of only two vectors in the whole neighbourhood that keeps
-// **`δ = 0`**.  Changed while domain B still had **no stored content** (the corpus is all `H₁₂`
-// stencils), so it cost nothing; once linework exists it would be unmigratable (law `A₂`).
+// `N = 39` puts every in-between direction **1.1021°** off its nominal angle, against 4.1066° for
+// the sum of the two adjacent headings (`N = 21`), and is one of only two vectors in the whole
+// neighbourhood that keeps **`δ = 0`**.  Changing it would change which edges an in-between wall
+// marks, so stored linework would no longer read back: it is fixed (law `A₂`).
 //
 // **`δ = (tri_a − tri_b) mod 3` is the axis that decides LINKING**, and it is why `N = 39` and not
 // the finer-looking `N = 13`.  A run of `p` periods from a vertex of class `c` ends on class
@@ -147,7 +145,7 @@ pub fn wall_new(d24: integer, ox: float, oy: float, half: float, mat: integer) -
 
 // The nominal angle of `d24` in degrees, and the angle its step actually points at.  The two
 // are EQUAL on every even d24 and differ by 1.1021 degrees on every odd one — the gate prints
-// both rather than hiding it.  (4.11 degrees was the pre-`N = 39` in-between; see the table.)
+// both rather than hiding it.
 pub fn wall_angle_nominal(d24: integer) -> float {
   ((((d24 % D24) + D24) % D24) as float) * 15.0
 }
@@ -162,11 +160,9 @@ pub fn wall_angle_actual(d24: integer) -> float {
 
 // ── writing into the foxel — ALONG the wall, not ACROSS it (OD-12) ─────────
 //
-// THE FIRST TRY MARKED THE WRONG EDGES.  The band model asked "does the wall's thin
-// rectangle overlap this hex edge?" — and the edges a thin band overlaps are the ones lying
-// ACROSS it, roughly perpendicular.  A due-east wall came out as a comb of vertical pickets
-// (`X28`), because a hex has edges on only three lines (30/90/150) and none runs east, so a
-// wall going east cannot BE a run of hex edges pointing east.
+// NOT THE EDGES A THIN BAND OVERLAPS.  Those lie ACROSS the wall, roughly perpendicular: a
+// due-east wall would come out as a comb of vertical pickets (`X28`), because a hex has edges on
+// only three lines (30/90/150) and none runs east.
 //
 // THE WALL IS A BOUNDARY, NOT A BAND.  A straight line divides the plane into two
 // half-planes.  The hex edges that lie ALONG the line are exactly the ones that SEPARATE a
@@ -196,10 +192,8 @@ fn wall_along(w: Wall, px: float, py: float) -> float {
 // side of them rather than through them.
 //
 // ⚠ THE COMPARISON MUST TREAT A MATHEMATICAL ZERO AS ZERO — that is what `WALL_EPS` is doing here.
-// This comment used to claim a VERTEX-anchored wall never puts a cell centre on the line, so the
-// tie-break could never fire.  **That is false**, and `tests/flip.loft` caught it: the `N = 1`
-// family (30/90/150…) at `p = 3` does — e.g. `d = 2` from vertex `(3,0)` puts cell `(1,1)` exactly
-// on the line.  Its offset is mathematically 0, but in FLOAT it comes out as `−1.39e-16` in one
+// A VERTEX-anchored wall can put a cell centre on the line too: the `N = 1` family (30/90/150…)
+// at `p = 3` does — e.g. `d = 2` from vertex `(3,0)` puts cell `(1,1)` exactly on the line.  Its offset is mathematically 0, but in FLOAT it comes out as `−1.39e-16` in one
 // orientation and as a clean `0` in the rotation of the same wall.  A bare `oc >= 0.0` then sorts
 // that one cell onto opposite sides in the two orientations, and the rasterisation stops being
 // rotation-covariant — 18 cases, exactly the ones with a centre on the line.

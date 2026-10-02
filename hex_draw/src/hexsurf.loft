@@ -15,10 +15,6 @@
 // This is what makes domain-A straight-wall recovery **R1**.  Least squares would introduce a
 // residual to threshold; an average of exact rationals IS the answer.  `P4` therefore holds all
 // the way through the presentation layer — there is no `ε` anywhere between `𝕋` and the drawn wall.
-//
-// LIVES IN ITS OWN MODULE, not in `hexform` as `STEPS.md` proposed: the derivation needs
-// `housedraw`'s `Plan` and `SideRun`, and `hexform` sits below `housedraw`. Putting it there would
-// have inverted the dependency for no gain.
 use hex_field::*;
 use hex_grid::*;
 use hex_form::*;
@@ -82,9 +78,8 @@ pub fn surface_of(p: Plan, cells: HexSet, side: integer) -> WallSurface {
 // as an integer multiple of a heading step.  Any other value would mean the average had drifted
 // off the lattice, which is what a fit would do and an average must not.
 //
-// PARALLEL, not an integer multiple, and not "one component is zero".  This check was written
-// wrong twice before it was written right, and both wrong versions failed on geometry that was
-// never in doubt:
+// PARALLEL, not an integer multiple, and not "one component is zero".  Both of those tests
+// reject geometry that is exact:
 //
 //   "one component is zero"   only 4 of the 12 headings have one — a side running NE is `(1,3)`,
 //                             both components non-zero and perfectly exact.  Failed 16 of 24.

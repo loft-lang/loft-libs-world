@@ -1,8 +1,8 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
-// hexway — P1: WAYS as exact curves, and the one pass that rasterises them.
+// hex_way — WAYS as exact curves, and the one pass that rasterises them.
 //
-// The loft port of plans/5-geometry/ways.py.  A way is authored as ONE exact centreline;
+// A way is authored as ONE exact centreline;
 // every other line — rails, ruts, lane markings, bed edges — is an OFFSET of it.  That is
 // what escapes the hex quantisation floor: rasterising a band bottoms out, while an offset
 // is equidistant by construction.
@@ -12,9 +12,8 @@
 // between two such rings every requested width gives the identical footprint.  0.5 hex
 // widths is the best case, not the case.
 //
-// The load-bearing part for the rest of plan #5 is the LAST function: `way_stamp` walks
-// the centreline once and writes the cells, the blocked edges AND the surface ids in a
-// single pass.  The surface id is attached where it is known — at derivation time — which
+// The load-bearing function is `way_stamp`: it walks the centreline once and writes the
+// cells, the blocked edges AND the surface ids in a single pass.  The surface id is attached where it is known — at derivation time — which
 // is why no separate index is ever needed to answer "which wall segment did I hit?".
 //
 // Segment record: 6 floats, uniform for both kinds (flat arrays, no vector<vector<>>).
@@ -63,12 +62,9 @@ fn pv(t: Track, i: integer, j: integer) -> float { t.tk_p[i * 6 + j] ?? 0.0 }
 //
 // Example: @HXY-007
 //
-// ⚠ **BOTH DIRECTIONS, AND THE FILE USED TO HAVE ONE OF EACH.** `seg_param` has always
-// wrapped up AND down; `seg_distance` wrapped only up — `while aa < lo { aa += 2pi }`
-// with no companion — so an arc authored below -2pi answered that points lying ON it
-// were a radius away. One curve, two footprints: the same quarter arc marked 5 cells
-// authored at [0, pi/2] and 1 at [-2pi, -2pi+pi/2]. A guard that works in one direction
-// reads exactly like a guard.
+// ⚠ **BOTH DIRECTIONS.** A wrap that only adds 2pi leaves an arc authored below -2pi
+// answering that points lying ON it are a radius away: one curve, two footprints.  Every
+// angle comparison in this file goes through this one wrap.
 fn ang_wrap(d: float) -> float {
   v = d;
   while v < 0.0 { v = v + 6.283185307179586; }
@@ -170,12 +166,11 @@ pub fn offset_legal(t: Track, d: float) -> boolean {
 // offset is again a straight / a concentric arc, so equidistance is EXACT here — the
 // only cost anywhere is flattening, err ~ c^2/(8R).
 //
-// EQUIDISTANCE DOES NOT PICK A SIDE, and that is the trap this function fell into.  A
-// left offset of a turn moves TOWARDS the centre, so its radius SHRINKS by d; only a
-// right offset grows.  Reading the sweep direction the other way up puts every arc on
-// the far side of the way from its straights — still exactly d from the centreline,
-// still passing an equidistance gate, and no longer JOINED.  The number that sees it is
-// the gap at a joint, not the distance to the line.
+// EQUIDISTANCE DOES NOT PICK A SIDE.  A left offset of a counter-clockwise turn moves
+// TOWARDS the centre, so its radius SHRINKS by d; only a right offset grows.  Reading the
+// sweep direction the other way up would put every arc on the far side of the way from
+// its straights — still exactly d from the centreline, still passing an equidistance
+// gate, and no longer JOINED.  The number that sees it is the gap at a joint.
 //
 // Example: @HXY-001
 pub fn track_offset(t: Track, d: float) -> Track {
@@ -273,8 +268,8 @@ pub fn way_surfaces(t: Track, sf: Surfaces) -> integer {
   first
 }
 
-// Which segment of the track is nearest this point?  This is the P3 arbitration rule in
-// embryo: nearest-surface-wins, ties to the lower index — deterministic, order-free.
+// Which segment of the track is nearest this point?  Nearest wins, ties to the lower
+// index — deterministic and order-free, the same rule `cut_arb` applies to surfaces.
 pub fn nearest_seg(t: Track, px: float, py: float) -> integer {
   best = -1;
   bd = 1000000.0;
@@ -287,7 +282,7 @@ pub fn nearest_seg(t: Track, px: float, py: float) -> integer {
 
 // MARK ONLY — phase 1 of the two-phase build.
 //
-// P3 lesson: marking cells and cutting edges must NOT be interleaved per part. If each
+// Marking cells and cutting edges must NOT be interleaved per part. If each
 // part cuts its own boundary as it lands, a later part can turn an already-blocked edge
 // into an interior one — and that stale edge is never cleared, so the result depends on
 // which part ran first. Mark every part, THEN cut once.
@@ -408,7 +403,7 @@ pub fn seg_param(t: Track, i: integer, px: float, py: float) -> float {
   // Outside the span, snap to the NEARER end.  Clamping blindly to the far end is the
   // trap: a point sitting just BEFORE the start wraps to nearly 2pi, and clamping that
   // to `span` hands the first cell of a flight the height of the last one — a full-flight
-  // riser between two neighbouring cells.  Found by stairtest, not by inspection.
+  // riser between two neighbouring cells.
   if tp > span {
     if tp - span < 6.283185307179586 - tp { tp = span; } else { tp = 0.0; }
   }

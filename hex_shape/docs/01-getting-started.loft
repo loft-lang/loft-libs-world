@@ -1,0 +1,128 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @NAME: Getting Started
+// @TITLE: Fill a round tower and get its centre back, select a box, check that a wall holds, and pick a wall direction.
+//
+// `hex_shape` is the shape vocabulary of the hex lattice beyond the turtle form: the ARC (a round
+// tower), the BOX (a rectangle selected as cells, in twelve rotations) and the WALL (a straight
+// line written as hex edges, in 24 directions).  Each takes a continuous parameter — a radius,
+// an angle, a length — that the lattice can only hold on a grid, so each answer comes back split
+// into the part that is exact and the part that was snapped.
+//
+// It is not the cell set and not the side-by-side shape.  `hex_field` holds the cells and edges
+// (`HexSet`, `EdgeSet`); `hex_form` describes a closed shape by its sides; `hex_place` combines
+// stencils.  Reach for `hex_shape` to draw a tower, a box or a wall into a `HexSet`/`EdgeSet`.
+//
+// Coordinates are `hex_field`'s: odd-r offset `(q, r)`.
+use hex_shape::*;
+use hex_field::*;
+
+fn room() -> HexSet { hexset_chunk(-10, -10, 21, 21) }
+
+fn main() {
+  tower = room();
+  n = arc_fill(3, 2, 12, tower);          // every cell within shell 12 of (3, 2)
+  (cq, cr, found) = arc_recover_centre(tower);
+  println("tower: {n} cells, centre found {found} at ({cq}, {cr})");
+  assert(n == 7 && found && cq == 3 && cr == 2, "a centre cell and its six neighbours; the centre comes back");
+
+  // Every section below is a function, and `main` calls each one: a section nothing calls
+  // still compiles, but its assertions never run.
+  a_radius_is_a_shell();
+  a_box_is_a_selection();
+  connected_is_not_closed();
+  twelve_directions_are_exact();
+}
+
+// That prints:
+//
+//     tower: 7 cells, centre found true at (3, 2)
+//
+// ## A radius is a shell
+//
+// A disk on the lattice is measured in SHELLS, not radii: `N = 3k² + m²` for the offset between
+// two cell centres in doubled coordinates, which is four times the squared distance.  The first
+// shells are 0, 12, 36 and 48 — the centre, then each ring of neighbours.  A value between two
+// shells draws the shell below it and says nothing, so snap to `arc_shells_upto` first.
+// `arc_shell_max` reads back the shell that was actually drawn.
+
+fn a_radius_is_a_shell() {
+  shells = arc_shells_upto(50);
+  assert("{shells}" == "[0,12,36,48]", "the shells out to 50");
+
+  asked = room();
+  n = arc_fill(0, 0, 40, asked);          // 40 is not a shell
+  assert(n == 13 && arc_shell_max(asked, 0, 0) == 36, "40 draws shell 36: 13 cells");
+  println("shells : {shells}; asking for 40 draws 36");
+}
+
+// ## A box is a selection
+//
+// A `Box` is the rectangle an editor selects: a centre cell, a width and depth in hex steps,
+// one of twelve rotations 30° apart, and a mirror flag.  `box_fill` sets every cell whose centre
+// lies in it, edges included.  The twelve rotations are two FAMILIES (`box_orbit`): the even ones
+// are lattice rotations of each other, the odd ones are a second family no exact map relates to
+// the first — so measure a box at an odd rotation separately rather than assume it matches.
+
+fn a_box_is_a_selection() {
+  b = box_new(0, 0, 4, 2, 0, false);      // 4 steps wide, 2 deep, no rotation
+  cells = room();
+  n = box_fill(b, cells);
+  assert(n == 13, "5 cells on row 0, 4 on each of rows -1 and 1");
+  assert(box_orbit(0) == 0 && box_orbit(1) == 1 && box_orbit(4) == 0, "even and odd rotations");
+  println("box    : 4 x 2 selects {n} cells");
+}
+
+// ## Connected is not closed
+//
+// A thick wall is a ring of cells: `box_ring_out` takes the cells just outside a selection —
+// it works on any `HexSet`, so here it rings a tower.  To know whether a ring HOLDS, try to walk
+// in: `flood_outside` floods from the border of the window, and `leak_count` says how many inner
+// cells it reached.  `set_connected` is not that test — a ring with one cell missing is still one
+// connected chain.
+
+fn connected_is_not_closed() {
+  inner = room();
+  arc_fill(0, 0, 12, inner);              // 7 cells
+  ring = room();
+  assert(box_ring_out(inner, ring) == 12, "the ring around a 7-cell tower is 12 cells");
+
+  out = room();
+  flood_outside(ring, out);
+  assert(leak_count(inner, out) == 0, "a whole ring holds");
+
+  hexset_set(ring, 2, 0, false);          // take one cell out of the ring
+  assert(set_connected(ring), "the 11 cells left are still one chain");
+  out2 = room();
+  flood_outside(ring, out2);
+  leaks = leak_count(inner, out2);
+  assert(leaks == 7, "and the outside reaches all 7 inner cells");
+  println("ring   : 12 cells hold; with one gone, connected but {leaks} cells leak");
+}
+
+// ## Twelve directions are exact
+//
+// A wall runs in one of 24 directions (`d24`), 15° apart.  The even ones point along exact
+// lattice steps; the odd ones are in-betweens that no lattice step hits exactly, and each is
+// 1.1021° off its nominal angle.  Build a house from even directions; use the odd ones for
+// linework that does not have to close a shape — a road, a fence.
+
+fn twelve_directions_are_exact() {
+  exact = 0;
+  for d in 0..24 { if wall_is_exact(d) { exact += 1; } }
+  assert(exact == 12, "half of the 24");
+
+  nominal = wall_angle_nominal(1);
+  actual = wall_angle_actual(1);          // the step (7, 3): atan(3 / (7 * sqrt 3))
+  assert(nominal == 15.0 && abs(actual - 13.8979) < 0.0001, "15 nominal, 13.8979 actual");
+  assert(abs(wall_angle_actual(2) - 30.0) < 0.000000001, "an even direction is exact");
+  println("walls  : {exact} exact directions; d24 1 points at {actual:.4} for a nominal {nominal}");
+}
+
+// ## Where to go next
+//
+// - `tests/02-worked-examples.loft` — `@HXS-001` … `@HXS-009`: the shell grid, the twelve exact
+//   directions, legal run lengths, reading a wall back, the two box families, connected against
+//   closed, the three snaps between a mouse and storage, and a door on a tower.
+// - `USAGE.md` — the map of the package, including `wall_chain_walk` for reading a marking back
+//   in order.

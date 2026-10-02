@@ -617,20 +617,13 @@ pub fn form_admissible(f: Form) -> boolean {
 
 // ── THE PLAN, AND THE LATTICE→WORLD MAP ─────────────────────────────────────
 //
-// Moved here from `housedraw` on 2026-07-24 (`plans/lib-split/` phase 1).  `OD-11` resolved
-// *"what IS a house?"* to **`Plan`, not the turtle cycle** — so `Plan` is a member of `𝕄*`, an
-// OBJECT, and it had been living inside the `draw` map's module.  With it went `cell_x`/`cell_y`
-// (the lattice→world map), `HEX_LEN`, and `side_edges` (which READS the field for a Plan's side
-// and is used by the surface fitter, not only by the drawer).
-//
-// Measured before moving: `hexbox` used only `HEX_LEN`/`cell_x`/`cell_y` from `housedraw`, and
-// `hexsurf` only `Plan`/`SideRun`/`side_run_len`/`side_edges` — every other apparent use was a
-// COMMENT.  So this removes both `shape → draw` edges outright rather than softening them.
-// ⚠ `HEX_LEN` IS NOT DECLARED HERE — it is `hex_grid`'s (`= SQRT3 * HEX_SIZE`, one hex step,
-// 1.5 m by `SPEC` L8).  `housedraw` carried a private copy of the identical value, and the
-// duplicate was INVISIBLE while `housedraw` did not import `hex_grid`; moving the constant into
-// this module, which does, made the compiler refuse it.  That is `SPEC` **L11** — the library owns
-// the shared table — and it is `X26`'s class of defect, found by a move rather than by a gate.
+// A house is a `Plan` — the rectangle it rasterises from — not a turtle cycle, so `Plan` is a
+// model object and lives here beside `Form`.  With it: `cell_x`/`cell_y` (the lattice→world map)
+// and `side_edges`, which READS the field for a Plan's side and serves the surface fitter as
+// well as the drawer.
+// ⚠ `HEX_LEN` is NOT declared here — it is `hex_grid`'s (`= SQRT3 * HEX_SIZE`, one hex step).
+// The library that owns a shared value is the only place it is written; a private copy would
+// be refused by the compiler the moment both are imported.
 const SQ3_2 = 0.8660254037844386;         // sqrt(3)/2 — half a hex step; also metres per wu
 const EPS = 0.000000001;                  // a float sign-test guard, not a P4 tolerance
 // A cell centre's world x.  The one place the exact lattice becomes a float, and it is

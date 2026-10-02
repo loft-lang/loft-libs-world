@@ -9,45 +9,35 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 loft install hex_world
 ```
 
-Sparse 32×32-chunk world data model — the addressing primitive for
-hex-grid games built on the [lavition](https://github.com/lavition)
-engine and the loft library ecosystem.
+A sparse hex-grid world of single-layer cells, stored in 32×32 chunks that exist only where
+something was written.  Pure loft, no dependencies.
+
+A guide: [docs/01-getting-started.loft](docs/01-getting-started.loft).
 
 ## What's in it
 
-- `Cell` — 4-byte packed (`c_color: u8`, `c_height: u8`, `c_age: u16`).
-- `Chunk` — fixed 32×32 grid of cells, allocated lazily.
-- `World` — sparse map of chunks indexed by chunk-relative `(q, r)`.
-- Addressing — `chunk_idx_32(v)` / `hex_idx_32(v)` (floor-divide
-  for negative coords), `get_cell` / `set_cell` /
-  `ensure_chunk` / `has_chunk` / `cell_count` / `neighbour_count`.
-- I/O — `world_save(w, path)` / `world_load(w, path)` (4-byte cell
-  + tick + sparse-chunk binary format with magic header).
+- `Cell` — 4 bytes: `c_color: u8`, `c_height: u8`, `c_age: u16`.  `c_color == 0` is the
+  EMPTY sentinel, not a colour: start a palette at 1.
+- `Chunk` — a 32×32 grid of cells; `World` — the chunks that exist, plus a `tick`.
+- Addressing — global AXIAL `(q, r)`; `chunk_idx_32(v)` / `hex_idx_32(v)` floor-divide and
+  wrap correctly for negative coordinates, where `v / 32` and `v % 32` do not.
+- Cells — `get_cell` (an absent chunk reads as `cell_empty()`, and reading never allocates),
+  `set_cell` (creates the chunk), `has_chunk`, `ensure_chunk`, `cell_count`,
+  `neighbour_count` (filled axial neighbours, 0..6).
+- `tick_and_decay(w, base_lifetime, neighbour_lease, decay_window)` — one world step: every
+  filled cell ages by 1, and a cell whose age reaches `base_lifetime + neighbour_lease ×
+  neighbours + decay_window` (neighbours counted before the step) is emptied.
+- I/O — `world_save(w, path)` / `world_load(w, path)`: a little-endian file with a `'WRLD'`
+  magic and version, the tick, and each non-empty chunk's filled cells (6 bytes each).
+  `world_load` answers 0 for a missing file, a wrong magic or an unknown version.
 
-## Why this package exists
+Nothing in the library frees a chunk: one emptied by `set_cell` or `tick_and_decay` stays until
+the caller drops it, or until a `world_save` / `world_load` round trip, which writes non-empty
+chunks only.
 
-`hex_world` is consumed by:
-
-- TTT v5 (`game_protocol/examples/v5_*`) — the canonical multiplayer
-  smoke test reuses `Cell` for X/O marks.
-- The audience-generative-art demo
-  ([plans/future/36](https://github.com/jjstwerff/loft/tree/main/doc/claude/plans/future/36-audience-generative-art))
-  — projector + phone clients share the same chunked binary surface.
-- Future hex_walls / hex_terrain / hex_items packages — they place
-  features *within* the hex_world addressing space.
-
-⚠ **The lavition editor is NOT a consumer**, though this list used to say it
-was. It authors hex maps against a different lineage — moros's voxel column
-store, published as `hex_voxel` — which shares neither this package's cell model
-(one `Cell` per hex) nor its file format (`'WRLD'`, 4-byte cells, versus
-`'WTTH'`, 8-byte cells with per-layer CRC and sections). The two were briefly
-both called `hex_world`; that name stays here and the voxel store took
-`hex_voxel` (loft-lang/loft-libs-world#13, moros plan #19 `L4`).
-
-Renamed from `world` 2026-06-01 (see
-[LAVITION.md W.1](https://github.com/jjstwerff/loft/blob/main/doc/claude/LAVITION.md#next-library-work--execution-order))
-— the `hex_` prefix disambiguates from voxel / tile / BSP "world"
-expectations.
+⚠ The `(q, r)` here are axial, while `hex_grid`'s `(q, r)` are an odd-r offset pair — both are
+two integers, so nothing catches a mix.  And this is not `hex_voxel`, the layered voxel column
+store with its own `'WTTH'` file format.
 
 ## Tests
 
@@ -55,6 +45,6 @@ expectations.
 cd hex_world && loft --interpret --tests tests
 ```
 
-Smoke test (`tests/hex_world.loft`) covers get/set/round-trip;
-`tests/02-persist.loft` covers save/load + edge cases (empty file,
-bad magic, bad version, negative coords).
+`tests/hex_world.loft` covers get/set; `tests/02-persist.loft` save/load and its edge cases
+(empty file, bad magic, bad version, negative coordinates); `tests/worked-examples.loft` the
+five contracts `@HXW-001..005` cited from the functions they belong to.

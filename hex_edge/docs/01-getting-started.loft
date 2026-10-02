@@ -1,0 +1,137 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @NAME: Getting Started
+// @TITLE: Put a wall between two hexes, bounce off its exact surface, and sweep a body into it.
+//
+// `hex_edge` is collision on the hex lattice.  A wall sits BETWEEN two cells, so it is stored
+// on the EDGE they share, in a `hex_field::EdgeSet`.  Each marked edge carries the id of an
+// analytic SURFACE — a straight line or an arc — so a body that hits it gets the wall's exact
+// normal, not one of the six directions a hex edge happens to face.  Each edge can also carry
+// a MATERIAL: how tall, how opaque, how loud.
+//
+// It is not the cell set or its outlines — that is `hex_field`, which also owns the `EdgeSet`
+// storage.  It is not coordinates and neighbours either: that is `hex_grid`.  Reach for
+// `hex_edge` when something has to stop, bounce off, or see past a wall.
+//
+// Cells are `(q, r)` in odd-r offset coordinates; a cell's centre is at
+// `(lattice_k(q, r) · √3/2, lattice_m(q, r) / 2)`, so neighbouring centres are √3 apart.
+use hex_edge::*;
+use hex_field::*;
+
+const SQ3 = 1.7320508075688772;
+
+fn main() {
+  e = edgeset_new(-4, -4, 9, 9);          // a 9 x 9 chunk around the origin
+  edge_block(e, 0, 0, 1, 0);              // a wall between (0,0) and its east neighbour
+  println("east blocked {!passable(e, 0, 0, 1, 0)}, from the other side {!passable(e, 1, 0, 0, 0)}, north-east open {passable(e, 0, 0, 0, -1)}");
+  assert(!passable(e, 0, 0, 1, 0) && !passable(e, 1, 0, 0, 0), "one edge, asked from either side");
+  assert(passable(e, 0, 0, 0, -1), "the cell's other edges are untouched");
+
+  // Every section below is a function, and `main` calls each one: a section nothing calls
+  // still compiles, but its assertions never run.
+  a_wall_knows_its_surface();
+  sweeping_a_body();
+  what_a_wall_is_made_of();
+}
+
+// That prints:
+//
+//     east blocked true, from the other side true, north-east open true
+//
+// ## A wall knows its surface
+//
+// `edge_block` marks an edge with no geometry: it blocks, but `collide` answers a normal of
+// (0, 0), and reflecting a velocity off that changes nothing.  Give the wall a surface instead
+// and `collide` answers the exact normal.  Surface id 0 is reserved for "no surface", so the
+// first surface you add is id 1.  `edge_point` is where the edge sits — the point the normal
+// is evaluated at.
+
+fn a_wall_knows_its_surface() {
+  s = surfaces_new();
+  (px, py) = edge_point(0, 0, 1, 0);
+  assert(px == SQ3 / 2.0 && py == 0.0, "half way between the two centres");
+  wall = surf_straight(s, 1.0, 0.0, px);       // the line x = √3/2, facing +x
+  assert(wall == 1, "id 0 is taken");
+
+  bare = edgeset_new(-4, -4, 9, 9);
+  edge_block(bare, 0, 0, 1, 0);
+  (b1, nx1, ny1) = collide(bare, s, 0, 0, 1, 0);
+  assert(b1 && nx1 == 0.0 && ny1 == 0.0, "blocked, and no direction to bounce in");
+
+  known = edgeset_new(-4, -4, 9, 9);
+  edge_block_surf(known, 0, 0, 1, 0, wall);
+  (b2, nx2, ny2) = collide(known, s, 0, 0, 1, 0);
+  assert(b2 && nx2 == 1.0 && ny2 == 0.0, "the wall's own normal");
+  println("surface : bare wall ({nx1}, {ny1}), surfaced wall ({nx2}, {ny2})");
+}
+
+// ## Sweeping a body
+//
+// `sweep_path(e, x0, y0, x1, y1)` walks a segment edge by edge and stops at the first marked
+// one.  It answers `(t, q, r, dir)`: the fraction travelled, the cell it stopped in, and the
+// direction of the wall — `dir < 0` when nothing blocked.  There is no step size, so a fast
+// body or a dropped frame cannot jump a wall.
+//
+// Centre to centre across the wall, the stop is exactly half way.  That stop lies ON the line
+// between the two cells, and there `hex_at` names the FAR cell.  So a second `sweep_path`
+// from the stop starts past the wall and walks straight through.  The sweep already told you
+// the cell you are in: pass it back with `sweep_path_from`, and pressing on travels nothing.
+
+fn sweeping_a_body() {
+  e = edgeset_new(-4, -4, 9, 9);
+  edge_block(e, 0, 0, 1, 0);
+  (t, cq, cr, d) = sweep_path(e, 0.0, 0.0, SQ3, 0.0);
+  assert(t == 0.5 && cq == 0 && cr == 0 && d == 0, "stopped half way, in (0,0), facing east");
+
+  sx = t * SQ3;
+  (t2, q2, r2, d2) = sweep_path_from(e, cq, cr, sx, 0.0, SQ3, 0.0);
+  assert(t2 == 0.0 && q2 == 0 && r2 == 0 && d2 == 0, "threaded: still against the wall");
+  (t3, _q3, _r3, d3) = sweep_path(e, sx, 0.0, SQ3, 0.0);
+  assert(t3 == 1.0 && d3 < 0, "re-derived: the far cell, and the wall is behind it");
+  println("sweep   : stop at {t}; threaded {t2} further, re-derived {t3} (through the wall)");
+}
+
+// ## What a wall is made of
+//
+// A `Materials` palette gives each edge a substance: solid or not, height, opacity, sound
+// damping in dB, permeability and bounce.  `edge_block_full` marks the edge with a surface
+// and a material together.  Material id 0 is "nothing there", and every reader answers a
+// neutral value for it — 0 height, but permeability 1.0, fully open.
+//
+// `sight_clear` reads opacity and height, so a solid but transparent fence stops a body and
+// not a look.  Movement reads NO material: `passable` and `sweep_path` stop at any marked
+// edge.  So `material_set_solid(m, gate, false)` does not open a gate — clearing the edge's
+// surface mark does.
+
+fn what_a_wall_is_made_of() {
+  s = surfaces_new();
+  wall = surf_straight(s, 1.0, 0.0, SQ3 / 2.0);
+  m = materials_new();
+  stone = material_add(m, true, 2.0, 1.0, 40.0, 0.0, 0.2);   // solid, 2 tall, opaque
+  fence = material_add(m, true, 2.0, 0.0, 3.0, 1.0, 0.0);    // solid, see-through
+  assert(stone == 1 && fence == 2, "id 0 is taken here too");
+  assert(mat_height(m, 0) == 0.0 && mat_perm(m, 0) == 1.0, "nothing there: no height, fully open");
+
+  g = edgeset_new(-4, -4, 9, 9);
+  edge_block_full(g, 0, 0, 1, 0, wall, stone);
+  f = edgeset_new(-4, -4, 9, 9);
+  edge_block_full(f, 0, 0, 1, 0, wall, fence);
+  // an eye at height 1 in (0,0), looking at height 1 into (1,0)
+  assert(!sight_clear(g, m, 0.0, 0.0, 1.0, SQ3, 0.0, 1.0, 0.5), "stone hides it");
+  assert(sight_clear(f, m, 0.0, 0.0, 1.0, SQ3, 0.0, 1.0, 0.5), "the fence does not");
+  assert(!passable(f, 0, 0, 1, 0), "but the fence still stops a body");
+
+  material_set_solid(m, stone, false);
+  assert(!mat_solid(m, stone) && !passable(g, 0, 0, 1, 0), "a material change moves nothing");
+  edge_set_surf(g, 0, 0, 1, 0, 0);
+  assert(passable(g, 0, 0, 1, 0), "clearing the mark opens it");
+  println("material: stone hides, the fence does not; a gate opens by clearing its mark");
+}
+
+// ## Where to go next
+//
+// - `tests/02-worked-examples.loft` — `@HXE-001` … `@HXE-011`: the reserved surface id, the
+//   stop on the bisector and why to thread the cell, two parts meeting at one edge
+//   (`edge_block_arb`), doors and windows as `Features` on a surface, a thin cut against a
+//   solid body, sight against movement, and junctions between surfaces.
+// - `hex_field` — the `HexSet` / `EdgeSet` storage, `hex_at`, `nb_q` / `nb_r`.
