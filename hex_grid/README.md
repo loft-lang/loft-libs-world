@@ -9,9 +9,11 @@ The **coordinate** axis of the `hex_*` family: conversions between hex coordinat
 world plane, neighbours, distance, corners and edges. Pure functions over `(q, r)` — no
 structs, no state, nothing to construct or free.
 
-It is the base every other `hex_*` package builds on: `hex_field` (occupancy and outlines),
-`hex_shape` (the line, box and arc vocabulary), `hex_form` (turtle forms), `hex_draw`,
-`hex_fit`, `hex_world`, `hex_terrain`. Four of them depend on it directly.
+Five `hex_*` packages build on it directly: `hex_form` (turtle forms), `hex_shape` (the line,
+box and arc vocabulary), `hex_draw`, `hex_fit` and `hex_terrain`.  `hex_field` (occupancy and
+outlines) and `hex_world` stand on their own.
+
+A guide: [docs/01-getting-started.loft](docs/01-getting-started.loft).
 
 ## Install
 
@@ -57,8 +59,9 @@ mistake that costs an afternoon:
 x = SQRT3 * (q + 0.5 * (r & 1))      y = 1.5 * r
 ```
 
-The scale constants `HEX_SIZE`, `HEX_LEN` and `SQRT3` are exported so a consumer can work in
-the same units rather than re-deriving them.
+The scale constants `HEX_SIZE`, `HEX_LEN` and `SQRT3` (and `GRID_SIZE`, `GRID_LEN` for the
+square basis below) are exported so a consumer can work in the same units rather than
+re-deriving them.
 
 ## The two families
 
@@ -113,9 +116,9 @@ cd hex_grid && loft test
 
 ## Status
 
-Stable and additive. Extracted from the **crawler** roguelike, and shared with **moros** —
-the convention above is the single executable source of it, which is the point of the package:
-two games that disagree about where a hex centre is do not interoperate.
+Stable and additive. Shared by the **crawler** roguelike and **moros** — the convention above
+is the single executable source of it, which is the point of the package: two games that
+disagree about where a hex centre is do not interoperate.
 
 Everything is a pure function over integers and floats, so there is no store, no lifetime
 question and nothing to leak.
