@@ -14,11 +14,11 @@
 // `HexSet` window, `nb_q`/`nb_r`, `lattice_*` and `corner_*` from hex_field, and
 // `hex_neighbor_dir`/`hex_edge_corners` from hex_grid.
 //
-// ⚠ THE ONE DIFFERENCE IS THE SWEEP COUNT.  The library's spread asks `surface_of` twice and
-// `side_edges` once more, each a full sweep of the window returning a fresh five-vector run;
-// the twin sweeps once into a `Vec<SideEdge>` and derives the surface and the span from that
-// one run.  Same edges in the same order, so every float is bit-identical — the gap is the
-// repeated sweeps.  `black_box` guards each op's INPUT and the sink, never a kernel.
+// The twin follows the library's composition, sweep count included (bench/README.md rule 1:
+// the library as written is what is measured): `surface_fitted_spread` asks `surface_of`, and
+// `surface_span` asks `surface_of` again and `side_edges` once more — three sweeps of the
+// window per call, as in src/hexsurf.loft.  `black_box` guards each op's INPUT and the sink,
+// never a kernel.
 use std::hint::black_box;
 use std::time::Instant;
 
@@ -305,9 +305,10 @@ struct WallSurface {
     den: i64,
 }
 
-fn surface_of(run: &[SideEdge]) -> WallSurface {
+fn surface_of(p: &Plan, cells: &HexSet, side: i64) -> WallSurface {
+    let run = side_edges(p, cells, side);
     let (mut dk, mut dm, mut mk, mut mm) = (0i64, 0i64, 0i64, 0i64);
-    for e in run {
+    for e in &run {
         let (c1, c2) = edge_corners_of(e.qa, e.ra, e.qb, e.rb);
         dk += CORNER_K[c2] - CORNER_K[c1];
         dm += CORNER_M[c2] - CORNER_M[c1];
@@ -336,7 +337,9 @@ impl WallSurface {
     }
 }
 
-fn surface_span(w: &WallSurface, run: &[SideEdge]) -> (f64, f64, f64, f64) {
+fn surface_span(p: &Plan, cells: &HexSet, side: i64) -> (f64, f64, f64, f64) {
+    let w = surface_of(p, cells, side);
+    let run = side_edges(p, cells, side);
     let (dx, dy, dl) = w.dir();
     let ux = dx / dl;
     let uy = dy / dl;
@@ -344,7 +347,7 @@ fn surface_span(w: &WallSurface, run: &[SideEdge]) -> (f64, f64, f64, f64) {
     let cy = w.mean_y();
     let mut lo = 1.0e9;
     let mut hi = -1.0e9;
-    for e in run {
+    for e in &run {
         let (c1, c2) = edge_corners_of(e.qa, e.ra, e.qb, e.rb);
         for cc in [c1, c2] {
             let ex = (lattice_k(e.qa, e.ra) + CORNER_K[cc]) as f64 * 0.8660254037844386;
@@ -362,9 +365,8 @@ fn surface_span(w: &WallSurface, run: &[SideEdge]) -> (f64, f64, f64, f64) {
 }
 
 fn surface_fitted_spread(p: &Plan, cells: &HexSet, side: i64) -> f64 {
-    let run = side_edges(p, cells, side);
-    let w = surface_of(&run);
-    let (sx0, sy0, sx1, sy1) = surface_span(&w, &run);
+    let w = surface_of(p, cells, side);
+    let (sx0, sy0, sx1, sy1) = surface_span(p, cells, side);
     let (px, py) = w.perp();
     let cx = w.mean_x();
     let cy = w.mean_y();
