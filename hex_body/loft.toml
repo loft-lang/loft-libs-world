@@ -1,7 +1,7 @@
 [package]
 name    = "hex_body"
-version = "0.3.4"
-loft    = ">=0.8"
+version = "0.3.5"
+loft    = ">=2026.8.0"
 
 # 0.2.0 adds the third dimension: `rig_bone3` with an explicit revolute axis and
 # an `oz`, plus `rig_world_seg3`.  The two pins differ, and the reason is worth
