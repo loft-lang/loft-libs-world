@@ -26,9 +26,9 @@ fn fabs(x: float) -> float { if x < 0.0 { 0.0 - x } else { x } }
 // (`K-FIT`): a joint value is ORDINAL, so a refusal owes an OFFER of the nearest admissible — unlike
 // a material id, which is nominal and offers nothing (`X68`).
 pub struct Joint {
-  jt_value: float,   // the joint value, in turns
-  jt_lo:    float,   // limit low  (turns)
-  jt_hi:    float,   // limit high (turns)
+  pub jt_value: float,   // the joint value, in turns
+  pub jt_lo:    float,   // limit low  (turns)
+  pub jt_hi:    float,   // limit high (turns)
 }
 
 // One articulation: its current value and the range it may move in.  The limits travel
@@ -161,16 +161,16 @@ pub fn joint_residual(j: Joint, value: float) -> float {
 // frame, its length along its own +x, its revolute axis and its joint limits.  `rig_new` and
 // `rig_read` make one.
 pub struct Rig {
-  rg_parent: vector<integer>,   // parent bone index; -1 for the root
-  rg_ox:     vector<float>,     // joint offset in the parent's frame (x)
-  rg_oy:     vector<float>,     // joint offset in the parent's frame (y)
-  rg_oz:     vector<float>,     // joint offset in the parent's frame (z) — 0 in a planar rig
-  rg_len:    vector<float>,     // the bone's length from its joint, along its own +x
-  rg_ax:     vector<float>,     // the revolute axis, AS GIVEN — see above
-  rg_ay:     vector<float>,     //   "
-  rg_az:     vector<float>,     //   " — (0,0,1) in a planar rig: the implicit axis made explicit
-  rg_lo:     vector<float>,     // the joint's limit low  (turns)
-  rg_hi:     vector<float>,     // the joint's limit high (turns)
+  pub rg_parent: vector<integer>,   // parent bone index; -1 for the root
+  pub rg_ox:     vector<float>,     // joint offset in the parent's frame (x)
+  pub rg_oy:     vector<float>,     // joint offset in the parent's frame (y)
+  pub rg_oz:     vector<float>,     // joint offset in the parent's frame (z) — 0 in a planar rig
+  pub rg_len:    vector<float>,     // the bone's length from its joint, along its own +x
+  pub rg_ax:     vector<float>,     // the revolute axis, AS GIVEN — see above
+  pub rg_ay:     vector<float>,     //   "
+  pub rg_az:     vector<float>,     //   " — (0,0,1) in a planar rig: the implicit axis made explicit
+  pub rg_lo:     vector<float>,     // the joint's limit low  (turns)
+  pub rg_hi:     vector<float>,     // the joint's limit high (turns)
 }
 
 // An empty rig.  Add bones to it; every parallel vector stays the same length, which is
@@ -483,10 +483,10 @@ pub fn rig_world_seg(r: Rig, values: vector<float>, i: integer) -> (float, float
 // cloud of points in the BONE's frame, and posing them means applying this
 // once and reusing it, not walking the tree per point.
 pub struct Frame {
-  fr_x: float, fr_y: float, fr_z: float,      // the bone's joint, in world
-  fr_00: float, fr_01: float, fr_02: float,   // its basis, row-major
-  fr_10: float, fr_11: float, fr_12: float,
-  fr_20: float, fr_21: float, fr_22: float,
+  pub fr_x: float, pub fr_y: float, pub fr_z: float,      // the bone's joint, in world
+  pub fr_00: float, pub fr_01: float, pub fr_02: float,   // its basis, row-major
+  pub fr_10: float, pub fr_11: float, pub fr_12: float,
+  pub fr_20: float, pub fr_21: float, pub fr_22: float,
 }
 
 // The world frame of bone `i` at the given joint values.  ⚠ One tree walk;
@@ -583,10 +583,10 @@ pub fn rig_world_seg3(r: Rig, values: vector<float>, i: integer)
 
 // An oriented bounding box: centre, unit axis (along the bone), and half-extents.
 pub struct Obb {
-  ob_cx: float, ob_cy: float,   // centre
-  ob_ux: float, ob_uy: float,   // unit axis, along the segment
-  ob_hl: float,                 // half-length, along the axis
-  ob_hw: float,                 // half-width, perpendicular
+  pub ob_cx: float, pub ob_cy: float,   // centre
+  pub ob_ux: float, pub ob_uy: float,   // unit axis, along the segment
+  pub ob_hl: float,                 // half-length, along the axis
+  pub ob_hw: float,                 // half-width, perpendicular
 }
 
 // THE PROXY of bone `i`: the OBB that bounds its capsule of half-width `w`.  Length grows by `w`

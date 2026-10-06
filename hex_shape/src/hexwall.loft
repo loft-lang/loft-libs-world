@@ -38,8 +38,8 @@ pub const D24 = 24;
 pub struct Wall {
   wa_ox:   float,      // centre of the run, world units
   wa_oy:   float,
-  wa_dx:   float,      // unit direction
-  wa_dy:   float,
+  pub wa_dx:   float,      // unit direction
+  pub wa_dy:   float,
   wa_half: float,      // half the run length
   wa_mat:  integer,    // the material written into every slot it crosses
 }
@@ -514,17 +514,17 @@ pub fn wall_chain_branches(edges: EdgeSet, q0: integer, r0: integer,
 // than *the* traversal.  `wc_branch` counts the vertices this chain passes through where that
 // choice was made, so a consumer needing a simple path can refuse rather than believe.
 pub struct WallChain {
-  wc_ok:     boolean,          // there is an `nth` chain
-  wc_n:      integer,          // how many chains the marking falls into
-  wc_branch: integer,          // vertices on this chain where three or more marks met
-  wc_loop:   boolean,          // the walk came back to the vertex it started from
-  wc_va:     vector<integer>,  // vertex `i`, in exact triangle-lattice coordinates
-  wc_vb:     vector<integer>,
-  wc_x:      vector<float>,    // …and in world units, from `tri_x` / `tri_y`
-  wc_y:      vector<float>,
-  wc_q:      vector<integer>,  // the mark walked between vertex `i` and `i + 1`: its cell
-  wc_r:      vector<integer>,
-  wc_d:      vector<integer>,  // …and the direction out of that cell
+  pub wc_ok:     boolean,          // there is an `nth` chain
+  pub wc_n:      integer,          // how many chains the marking falls into
+  pub wc_branch: integer,          // vertices on this chain where three or more marks met
+  pub wc_loop:   boolean,          // the walk came back to the vertex it started from
+  pub wc_va:     vector<integer>,  // vertex `i`, in exact triangle-lattice coordinates
+  pub wc_vb:     vector<integer>,
+  pub wc_x:      vector<float>,    // …and in world units, from `tri_x` / `tri_y`
+  pub wc_y:      vector<float>,
+  pub wc_q:      vector<integer>,  // the mark walked between vertex `i` and `i + 1`: its cell
+  pub wc_r:      vector<integer>,
+  pub wc_d:      vector<integer>,  // …and the direction out of that cell
 }
 
 // How many marks meet at this vertex, counting only marks the walk has not taken yet.  A

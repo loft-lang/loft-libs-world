@@ -138,9 +138,9 @@ pub fn head_of_step(dk: integer, dm: integer) -> integer {
 // turn total -12, so requiring +12 picks one spelling of the two — the canonical-form rule
 // C3 (`DESIGN.md` §3) applied at its cheapest point, before anything is written down.
 pub struct Form {
-  fm_h0:   integer,
-  fm_len:  vector<integer>,
-  fm_turn: vector<integer>,
+  pub fm_h0:   integer,
+  pub fm_len:  vector<integer>,
+  pub fm_turn: vector<integer>,
 }
 
 // One full revolution, in twelfths.
@@ -757,11 +757,11 @@ pub fn plan_side_normal(p: Plan, side: integer) -> (float, float) {
 
 // ── the boundary edges lying on one side, with their reading parameter ──────
 pub struct SideRun {
-  sr_qa: vector<integer>,
-  sr_ra: vector<integer>,
-  sr_qb: vector<integer>,
-  sr_rb: vector<integer>,
-  sr_t:  vector<float>,     // 0..1 along the side, A -> B, as read from OUTSIDE
+  pub sr_qa: vector<integer>,
+  pub sr_ra: vector<integer>,
+  pub sr_qb: vector<integer>,
+  pub sr_rb: vector<integer>,
+  pub sr_t:  vector<float>,     // 0..1 along the side, A -> B, as read from OUTSIDE
 }
 
 // How many entries the run holds — the bound for walking one side's collected points.

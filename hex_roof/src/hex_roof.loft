@@ -315,16 +315,16 @@ pub const ROOF_RIDGE   = 4;   // rf_x,rf_y = one end; rf_x2,rf_y2 = the other
 // worst residual over the footprint.  `roof_plane_fit`, `roof_cone_fit`, `roof_dome_fit`
 // and `roof_ridge_fit` answer one.
 pub struct RoofFit {
-  rf_kind:  integer,
-  rf_x:     float,     // plane: a       cone: centre x
-  rf_y:     float,     // plane: b       cone: centre y
-  rf_z:     float,     // plane: c       cone: apex z
-  rf_slope: float,     // cone and ridge: dz per unit of distance
-  rf_res:   float,     // worst residual over the footprint
+  pub rf_kind:  integer,
+  pub rf_x:     float,     // plane: a       cone: centre x
+  pub rf_y:     float,     // plane: b       cone: centre y
+  pub rf_z:     float,     // plane: c       cone: apex z
+  pub rf_slope: float,     // cone and ridge: dz per unit of distance
+  pub rf_res:   float,     // worst residual over the footprint
   // ⚠ **THE RIDGE'S SECOND END — a segment needs four numbers where a point needs two.**
   // Zero for every other kind, which is what the existing literals give them.
-  rf_x2:    float = 0.0,
-  rf_y2:    float = 0.0,
+  pub rf_x2:    float = 0.0,
+  pub rf_y2:    float = 0.0,
 }
 
 // Least squares z = a*x + b*y + c.  Covers flat and every shed/mono-pitch.

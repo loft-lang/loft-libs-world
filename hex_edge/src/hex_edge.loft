@@ -66,10 +66,10 @@ use hex_field::*;
 // cheap to evaluate at contact time.
 pub struct Surfaces {
   sf_kind: vector<integer>,     // 1 = straight, 2 = arc (radial normal)
-  sf_a:    vector<float>,       // straight: nx      arc: centre x
-  sf_b:    vector<float>,       // straight: ny      arc: centre y
-  sf_c:    vector<float>,       // straight: offset  arc: radius
-  sf_n:    integer,
+  pub sf_a:    vector<float>,       // straight: nx      arc: centre x
+  pub sf_b:    vector<float>,       // straight: ny      arc: centre y
+  pub sf_c:    vector<float>,       // straight: offset  arc: radius
+  pub sf_n:    integer,
 }
 
 // Example: @HXE-001
@@ -368,14 +368,14 @@ pub const FEAT_LOOPHOLE = 3;
 // surface, its interval along it, its vertical extent (sill to head), its kind and the
 // material inside it.  `features_new` makes an empty set.
 pub struct Features {
-  fe_surf: vector<integer>,
-  fe_s0:   vector<float>,     // interval along the surface parameter
-  fe_s1:   vector<float>,
-  fe_z0:   vector<float>,     // vertical extent: sill..head
-  fe_z1:   vector<float>,
-  fe_kind: vector<integer>,
-  fe_mat:  vector<integer>,   // the material INSIDE the feature
-  fe_n:    integer,
+  pub fe_surf: vector<integer>,
+  pub fe_s0:   vector<float>,     // interval along the surface parameter
+  pub fe_s1:   vector<float>,
+  pub fe_z0:   vector<float>,     // vertical extent: sill..head
+  pub fe_z1:   vector<float>,
+  pub fe_kind: vector<integer>,
+  pub fe_mat:  vector<integer>,   // the material INSIDE the feature
+  pub fe_n:    integer,
 }
 
 // An empty set of features: doors, windows and openings placed ALONG a surface rather

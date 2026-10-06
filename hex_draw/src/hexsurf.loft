@@ -35,8 +35,8 @@ pub const WIDEN_FACE  = 0.18301270189221933;   // (sqrt3 - 1)/4  u, applied to e
 // The averaged surface of one wall run.  Direction is exact integer; position is an exact
 // rational held as `(num_k, num_m) / den`.
 pub struct WallSurface {
-  ws_dk:    integer,   // summed edge vector, doubled coordinates — exact
-  ws_dm:    integer,
+  pub ws_dk:    integer,   // summed edge vector, doubled coordinates — exact
+  pub ws_dm:    integer,
   ws_num_k: integer,   // mean midpoint = (num_k / den, num_m / den) in doubled coordinates
   ws_num_m: integer,
   ws_den:   integer,   // 2 * n
