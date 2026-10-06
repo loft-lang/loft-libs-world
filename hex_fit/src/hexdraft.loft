@@ -40,11 +40,11 @@ use hex_shape::*;
 // (`df_d`, -1 for none), its anchor `(df_a, df_b)` and its periods.  `draft_new`,
 // `draft_read` and `draft_canon` make one.
 pub struct Draft {
-  df_form: Form,
-  df_d:    integer,     // embedded run direction, or -1 for none
-  df_a:    integer,     // anchor, triangle coordinates
+  pub df_form: Form,
+  pub df_d:    integer,     // embedded run direction, or -1 for none
+  pub df_a:    integer,     // anchor, triangle coordinates
   df_b:    integer,
-  df_p:    integer,     // periods
+  pub df_p:    integer,     // periods
 }
 
 // A stencil description: the form, plus the linework run it carries (`d` = -1 for none).  The

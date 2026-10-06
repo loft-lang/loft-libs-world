@@ -66,10 +66,10 @@ pub const REGIME_R2 = 2;
 // draws it), the recovered form (meaningful in R1), the unexplained-cell count and how many
 // candidates matched.
 pub struct Rebuilt {
-  rb_regime:  integer,   // REGIME_R1 (exact, unique) or REGIME_R2 (no grammar form draws this)
-  rb_form:    Form,      // the recovered model — meaningful only in R1
-  rb_rho:     integer,   // 0 in R1; the smallest unexplained-cell count in R2
-  rb_matches: integer,   // how many candidates matched exactly; >1 means the level is ambiguous
+  pub rb_regime:  integer,   // REGIME_R1 (exact, unique) or REGIME_R2 (no grammar form draws this)
+  pub rb_form:    Form,      // the recovered model — meaningful only in R1
+  pub rb_rho:     integer,   // 0 in R1; the smallest unexplained-cell count in R2
+  pub rb_matches: integer,   // how many candidates matched exactly; >1 means the level is ambiguous
 }
 
 // ── the admitted set — the candidate space `rebuild` matches against ───────
@@ -200,17 +200,17 @@ pub fn rebuild_text(cells: HexSet, name: text) -> text {
 // would silently overwrite each other in the map, so the build COUNTS such clashes in
 // `ri_collisions`, and zero is the answer law F promises (@HXV-002).
 pub struct IdxEntry {
-  ix_digest: text,      // `field_norm_text` of the form's drawn field — NOT named `key`
-  ix_form:   Form,
+  pub ix_digest: text,      // `field_norm_text` of the form's drawn field — NOT named `key`
+  pub ix_form:   Form,
 }
 
 // The admitted forms keyed by the digest of the field each draws, so `rebuild_indexed` finds
 // a match by lookup.  `index_build` builds it and records what that cost.
 pub struct RecoveryIndex {
-  ri_map:        hash<IdxEntry[ix_digest]>,
-  ri_count:      integer,   // entries indexed
-  ri_collisions: integer,   // candidates whose digest was already taken — a law F failure
-  ri_fills:      integer,   // draws performed to build it (the cost, reported not guessed)
+  pub ri_map:        hash<IdxEntry[ix_digest]>,
+  pub ri_count:      integer,   // entries indexed
+  pub ri_collisions: integer,   // candidates whose digest was already taken — a law F failure
+  pub ri_fills:      integer,   // draws performed to build it (the cost, reported not guessed)
 }
 
 // Example: @HXV-002

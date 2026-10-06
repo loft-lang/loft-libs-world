@@ -66,10 +66,10 @@ pub struct HexSet {
 
 // A vector map: loops concatenated, loop i occupying [vm_start[i], vm_start[i+1]).
 pub struct VecMap {
-  vm_k:     vector<integer>,
-  vm_m:     vector<integer>,
-  vm_start: vector<integer>,
-  vm_loops: integer,
+  pub vm_k:     vector<integer>,
+  pub vm_m:     vector<integer>,
+  pub vm_start: vector<integer>,
+  pub vm_loops: integer,
 }
 
 // A chunk anchored at (q0,r0), w x h cells.  THE primitive — everything else builds
@@ -712,16 +712,16 @@ pub const HXF_BAD_EXTENT    = 7;   // w or h impossible for a file this size
 // What a load produced.  `doc_code` is the refusal code; the field members are
 // meaningful only when it is HXF_OK.
 pub struct HexDoc {
-  doc_code:    integer,
-  doc_cells:   HexSet,
-  doc_heights: Heights,
-  doc_labels:  Labels,
-  doc_edges:   EdgeSet,
-  doc_layers:  Layers,
-  doc_has_h:   boolean,
-  doc_has_l:   boolean,
-  doc_has_e:   boolean,
-  doc_skipped: integer,   // unknown sections skipped — the forward-compat count
+  pub doc_code:    integer,
+  pub doc_cells:   HexSet,
+  pub doc_heights: Heights,
+  pub doc_labels:  Labels,
+  pub doc_edges:   EdgeSet,
+  pub doc_layers:  Layers,
+  pub doc_has_h:   boolean,
+  pub doc_has_l:   boolean,
+  pub doc_has_e:   boolean,
+  pub doc_skipped: integer,   // unknown sections skipped — the forward-compat count
 }
 
 // ── writing ──────────────────────────────────────────────────────────────
@@ -1025,15 +1025,15 @@ pub fn cell_mirror(q: integer, r: integer) -> (integer, integer) {
 // are present) and its named layers.  `stencil_from` builds one; `stencil_rotate` and
 // `stencil_mirror` transform it.
 pub struct Stencil {
-  sn_cells:   HexSet,
-  sn_heights: Heights,
-  sn_labels:  Labels,
-  sn_edges:   EdgeSet,
-  sn_layers:  Layers,
+  pub sn_cells:   HexSet,
+  pub sn_heights: Heights,
+  pub sn_labels:  Labels,
+  pub sn_edges:   EdgeSet,
+  pub sn_layers:  Layers,
   sn_has_h:   boolean,
   sn_has_l:   boolean,
   sn_has_e:   boolean,
-  sn_code:    integer,
+  pub sn_code:    integer,
 }
 
 // Build the field FIRST, then construct the stencil: these take their arguments

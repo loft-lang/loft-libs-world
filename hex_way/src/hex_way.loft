@@ -28,9 +28,9 @@ pub const WAY_ARC      = 2;
 // A track: straights and arcs (`WAY_STRAIGHT`, `WAY_ARC`) in order, six numbers per segment.
 // `track_new` makes an empty one.
 pub struct Track {
-  tk_kind: vector<integer>,
-  tk_p:    vector<float>,      // 6 per segment
-  tk_n:    integer,
+  pub tk_kind: vector<integer>,
+  pub tk_p:    vector<float>,      // 6 per segment
+  pub tk_n:    integer,
 }
 
 // An empty track.  Append straights and arcs in order; the track IS the sequence, and
