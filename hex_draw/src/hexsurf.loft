@@ -37,10 +37,10 @@ pub const WIDEN_FACE  = 0.18301270189221933;   // (sqrt3 - 1)/4  u, applied to e
 pub struct WallSurface {
   pub ws_dk:    integer,   // summed edge vector, doubled coordinates — exact
   pub ws_dm:    integer,
-  ws_num_k: integer,   // mean midpoint = (num_k / den, num_m / den) in doubled coordinates
-  ws_num_m: integer,
-  ws_den:   integer,   // 2 * n
-  ws_n:     integer,   // edges averaged
+  pub ws_num_k: integer, // mean midpoint = (num_k / den, num_m / den) in doubled coordinates
+  pub ws_num_m: integer,
+  pub ws_den:   integer, // 2 * n
+  pub ws_n:     integer, // edges averaged
 }
 
 // The two corners bounding the boundary edge between cell (qa,ra) and its outside neighbour.
