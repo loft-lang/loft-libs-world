@@ -37,6 +37,16 @@ fn test_an_arc_surface_measures_distance_from_its_rim() {
   assert(d2 > 1.99 && d2 < 2.01, "a point 2 outside the rim is 2 away, got {d2}");
 }
 
+// A consumer tells an arc from a straight surface by its kind (crawler's tower walls do): the
+// kind is readable outside this library.
+fn test_a_surface_says_whether_it_is_straight_or_an_arc() {
+  s = surfaces_new();
+  line = surf_straight(s, 0.0, 1.0, 0.0);
+  arc = surf_arc(s, 0.0, 0.0, 5.0);
+  assert(s.sf_kind[line] == 1, "a straight surface is kind 1, got {s.sf_kind[line]}");
+  assert(s.sf_kind[arc] == 2, "an arc is kind 2, got {s.sf_kind[arc]}");
+}
+
 fn test_the_material_table_carries_its_properties() {
   m = materials_new();
   id = material_add(m, true, 3.0, 1.0, 0.0, 0.0, 0.0);

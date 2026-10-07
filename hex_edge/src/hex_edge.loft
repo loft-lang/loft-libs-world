@@ -65,7 +65,7 @@ use hex_field::*;
 // The surfaces a collision can reference.  Small and flat on purpose: a normal must be
 // cheap to evaluate at contact time.
 pub struct Surfaces {
-  sf_kind: vector<integer>,     // 1 = straight, 2 = arc (radial normal)
+  pub sf_kind: vector<integer>, // 1 = straight, 2 = arc (radial normal)
   pub sf_a:    vector<float>,       // straight: nx      arc: centre x
   pub sf_b:    vector<float>,       // straight: ny      arc: centre y
   pub sf_c:    vector<float>,       // straight: offset  arc: radius
