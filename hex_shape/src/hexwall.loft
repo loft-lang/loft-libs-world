@@ -36,8 +36,8 @@ pub const D24 = 24;
 // A straight wall run in world units: its centre, unit direction and half-length, and the
 // material it writes into every slot it crosses.  `wall_new` and `wall_from_run` make one.
 pub struct Wall {
-  wa_ox:   float,      // centre of the run, world units
-  wa_oy:   float,
+  pub wa_ox:   float,  // centre of the run, world units
+  pub wa_oy:   float,
   pub wa_dx:   float,      // unit direction
   pub wa_dy:   float,
   wa_half: float,      // half the run length

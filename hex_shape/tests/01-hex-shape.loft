@@ -13,6 +13,13 @@ fn main() {
   assert(box_hw(b) > 0.0, "a box has a positive half-width");
 }
 
+// A consumer places a wall by its centre (hexbody's wall gate reads it back): the centre is
+// readable outside this library.
+fn test_a_wall_keeps_the_centre_it_was_made_with() {
+  w = wall_new(0, 2.5, -1.5, 3.0, 4);
+  assert(w.wa_ox == 2.5 && w.wa_oy == -1.5, "the centre is (2.5, -1.5), got ({w.wa_ox}, {w.wa_oy})");
+}
+
 fn test_the_two_orbits_are_distinct() {
   // 60-degree steps are a lattice symmetry (orbit 0); 30-degree steps are not (orbit 1). A
   // consumer choosing a box angle must know which family it is in, so the split is asserted.
