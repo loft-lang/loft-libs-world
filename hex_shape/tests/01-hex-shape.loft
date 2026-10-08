@@ -20,6 +20,13 @@ fn test_a_wall_keeps_the_centre_it_was_made_with() {
   assert(w.wa_ox == 2.5 && w.wa_oy == -1.5, "the centre is (2.5, -1.5), got ({w.wa_ox}, {w.wa_oy})");
 }
 
+// A consumer places a footprint by its anchor cell and rotation (moros's editor gestures do):
+// both are readable outside this library.
+fn test_a_box_keeps_its_anchor_and_rotation() {
+  b = box_new(3, -2, 4, 2, 5, false);
+  assert(b.bx_cq == 3 && b.bx_cr == -2 && b.bx_rot == 5, "anchor (3, -2) rot 5, got ({b.bx_cq}, {b.bx_cr}) {b.bx_rot}");
+}
+
 fn test_the_two_orbits_are_distinct() {
   // 60-degree steps are a lattice symmetry (orbit 0); 30-degree steps are not (orbit 1). A
   // consumer choosing a box angle must know which family it is in, so the split is asserted.
