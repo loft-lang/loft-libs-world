@@ -91,11 +91,11 @@ pub fn box_orbit(rot: integer) -> integer { (((rot % BOX_ROT) + BOX_ROT) % BOX_R
 // A rectangular footprint of hex cells: an anchor cell, a width and depth in hex steps along
 // its local axes, a rotation in thirty-degree steps (0..11) and a mirror flag.
 pub struct Box {
-  bx_cq:  integer,     // anchor cell
-  bx_cr:  integer,
+  pub bx_cq:  integer, // anchor cell
+  pub bx_cr:  integer,
   bx_wid: integer,     // extent along local u, in hex steps (1.5 m each)
   bx_dep: integer,     // extent along local v
-  bx_rot: integer,     // 0..11 — THIRTY degree steps
+  pub bx_rot: integer, // 0..11 — THIRTY degree steps
   bx_mir: boolean,     // the flip
 }
 
