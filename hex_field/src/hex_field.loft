@@ -1,10 +1,9 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
-// hex_field — hex cell sets -> an EXACT integer vector map (plan #5 / FORMS.md).
+// hex_field — hex cell sets -> an EXACT integer vector map.
 //
-// The loft port of plans/5-geometry/hexforms.py.  The Python stays as the oracle; this
-// must reproduce its golden JSON byte-for-byte, which is possible because the whole
-// representation is INTEGER:
+// A consumer's Python oracle checks the traced output against golden JSON byte-for-byte,
+// which is possible because the whole representation is INTEGER:
 //
 //   every hex centre AND corner lies on the lattice  x = k*sqrt(3)/2 , y = m/2
 //   with centre(q,r) = (2q + (r&1), 3r) and corners at (0,+-2), (+-1,+-1).
@@ -67,10 +66,10 @@ pub struct HexSet {
 
 // A vector map: loops concatenated, loop i occupying [vm_start[i], vm_start[i+1]).
 pub struct VecMap {
-  vm_k:     vector<integer>,
-  vm_m:     vector<integer>,
-  vm_start: vector<integer>,
-  vm_loops: integer,
+  pub vm_k:     vector<integer>,
+  pub vm_m:     vector<integer>,
+  pub vm_start: vector<integer>,
+  pub vm_loops: integer,
 }
 
 // A chunk anchored at (q0,r0), w x h cells.  THE primitive — everything else builds
@@ -713,16 +712,16 @@ pub const HXF_BAD_EXTENT    = 7;   // w or h impossible for a file this size
 // What a load produced.  `doc_code` is the refusal code; the field members are
 // meaningful only when it is HXF_OK.
 pub struct HexDoc {
-  doc_code:    integer,
-  doc_cells:   HexSet,
-  doc_heights: Heights,
-  doc_labels:  Labels,
-  doc_edges:   EdgeSet,
-  doc_layers:  Layers,
-  doc_has_h:   boolean,
-  doc_has_l:   boolean,
-  doc_has_e:   boolean,
-  doc_skipped: integer,   // unknown sections skipped — the forward-compat count
+  pub doc_code:    integer,
+  pub doc_cells:   HexSet,
+  pub doc_heights: Heights,
+  pub doc_labels:  Labels,
+  pub doc_edges:   EdgeSet,
+  pub doc_layers:  Layers,
+  pub doc_has_h:   boolean,
+  pub doc_has_l:   boolean,
+  pub doc_has_e:   boolean,
+  pub doc_skipped: integer,   // unknown sections skipped — the forward-compat count
 }
 
 // ── writing ──────────────────────────────────────────────────────────────
@@ -1022,16 +1021,19 @@ pub fn cell_mirror(q: integer, r: integer) -> (integer, integer) {
   lattice_to_cell(0 - lattice_k(q, r), lattice_m(q, r))
 }
 
+// A stencil: a set of cells with optional heights, labels and edges (`sn_has_*` say which
+// are present) and its named layers.  `stencil_from` builds one; `stencil_rotate` and
+// `stencil_mirror` transform it.
 pub struct Stencil {
-  sn_cells:   HexSet,
-  sn_heights: Heights,
-  sn_labels:  Labels,
-  sn_edges:   EdgeSet,
-  sn_layers:  Layers,
+  pub sn_cells:   HexSet,
+  pub sn_heights: Heights,
+  pub sn_labels:  Labels,
+  pub sn_edges:   EdgeSet,
+  pub sn_layers:  Layers,
   sn_has_h:   boolean,
   sn_has_l:   boolean,
   sn_has_e:   boolean,
-  sn_code:    integer,
+  pub sn_code:    integer,
 }
 
 // Build the field FIRST, then construct the stencil: these take their arguments
@@ -1480,12 +1482,10 @@ pub fn stencil_unstamp_all(
 // ═══════════════════════════════════════════════════════════════════════
 // edges — the wall layer.
 //
-// PORTED from crawler's `hexedge.loft`, not invented here: same canonical key,
-// same direction canon, same halo, same type widths.  crawler's version also
-// carries a SURFACE id (its physics geometry — straights and arcs); this holds
-// only the material, which is what authored content and a stencil need.  When
-// crawler's module migrates, the two merge by adding that field back — they do
-// not compete.
+// The canonical key, direction canon, halo and type widths are crawler's edge
+// layer's.  That layer also carries a SURFACE id (physics geometry — straights
+// and arcs); this holds only the material, which is what authored content and a
+// stencil need, and `hex_edge` adds the surface on top.
 //
 // The canonical key is the DOUBLED MIDPOINT of the two cell centres:
 //   edge_k = lattice_k(a) + lattice_k(b),  edge_m = lattice_m(a) + lattice_m(b)
@@ -1590,11 +1590,11 @@ fn eg_index(e: EdgeSet, qa: integer, ra: integer, qb: integer, rb: integer) -> i
 pub fn edge_set_mat(e: EdgeSet, qa: integer, ra: integer, qb: integer, rb: integer, mat: integer) {
   i = eg_index(e, qa, ra, qb, rb);
   if i < 0 { return; }
-  // OUT OF DOMAIN IS REFUSED, NOT NARROWED.  The slot is a u8, and the narrowing cast
-  // answers null past it — so the `?? 0` that used to stand here wrote the one value
-  // that means NO WALL.  `edge_set_mat(e, …, 300)` deleted the wall it was setting, and
-  // read back as open.  The slot therefore keeps what it held and the refusal is
-  // counted, because a wall that is not there is not something a caller can see.
+  // OUT OF DOMAIN IS REFUSED, NOT NARROWED.  The slot is a u8, and narrowing past it
+  // with a `?? 0` default would write the one value that means NO WALL —
+  // `edge_set_mat(e, …, 300)` would delete the wall it was setting.  The slot keeps
+  // what it held and the refusal is counted, because a wall that is not there is not
+  // something a caller can see.
   if mat < 0 || mat > EDGE_MAT_MAX { e.eg_refused = e.eg_refused + 1; return; }
   e.eg_mat[i] = (mat as u8?) ?? 0;
 }
@@ -1748,6 +1748,8 @@ pub fn edgeset_count(e: EdgeSet) -> integer {
 // i*w*h + r*w + q.  Adding a layer appends w*h slots, so a stencil with one layer
 // costs one layer's worth of storage.
 
+// Named integer layers over a `ly_w × ly_h` window anchored at `(ly_q0, ly_r0)`: the layer
+// names, and every value in one flat vector, layer i and cell (q,r) at i*w*h + r*w + q.
 pub struct Layers {
   ly_q0:    integer,
   ly_r0:    integer,

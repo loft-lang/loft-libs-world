@@ -27,6 +27,19 @@ fn test_the_walls_are_one_connected_boundary() {
   assert(ne == 38, "the 5x4 house has 38 wall edges, got {ne}");
 }
 
+// A consumer reads a surface's exact rational and builds one as a control (hexbody's surface
+// gate): every field of `WallSurface` is readable and buildable outside this library.
+fn test_a_surface_is_its_exact_rational() {
+  p = plan5x4();
+  cells = hexset_chunk(-20, -20, 41, 41);
+  types = labels_new(-20, -20, 41, 41);
+  draw_floor(p, cells, types, 1);
+  w = surface_of(p, cells, 0);
+  assert(w.ws_n > 0 && w.ws_den == 2 * w.ws_n, "den is twice the edges averaged: {w.ws_den} vs {w.ws_n}");
+  one = WallSurface { ws_dk: 2, ws_dm: 0, ws_num_k: 4, ws_num_m: 0, ws_den: 2, ws_n: 1 };
+  assert(surface_mean_x(one) > 1.73 && surface_mean_x(one) < 1.74, "mean x of (4/2) is 2 * 0.866, got {surface_mean_x(one)}");
+}
+
 fn test_a_wall_recovers_as_one_exact_surface() {
   // `G2`: a wall is not a strip of edges, it is one analytic surface -- and its direction is
   // EXACTLY a heading, not a fitted approximation.  This is what a game emits as a collision proxy.

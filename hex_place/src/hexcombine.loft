@@ -2,9 +2,8 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // hexcombine — TWO STENCILS ADJACENT: WHO OWNS THE SHARED EDGE? (rung A8, the combination rung).
 //
-// The rung the single-object census cannot see: where things that work ALONE stop working TOGETHER.
-// crawler settled the mechanism (EXTRACTION.md, `cut_arb` in its `hexway.loft`) and it is re-
-// measured here, float-free.  The design in one line:
+// Where things that work ALONE stop working TOGETHER.  The mechanism is crawler's `cut_arb`,
+// float-free.  The design in one line:
 //
 //   "MARK EVERY PART, THEN CUT ONCE."
 //

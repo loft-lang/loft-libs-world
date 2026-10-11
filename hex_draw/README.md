@@ -10,17 +10,16 @@ the inverse — a wall's **analytic surface** recovered as the exact average of 
 a wall renders as **one flat quad** and a game emits it as a collision proxy derived from the
 geometry itself.
 
-Part of the `hex_*` family beside `hex_field` (cell sets), `hex_grid` (the lattice), `hex_edge`
-(collision), `hex_way` (linework) and `hex_roof` (height profiles). Produced by **hexbody**, the
-workshop that proves the family against an exact round trip.
+Part of the `hex_*` family beside `hex_field` (cells, edges, labels, heights), `hex_form` (`Plan`
+and the side runs), `hex_grid` (the lattice), `hex_edge` (collision), `hex_way` (linework) and
+`hex_roof` (height profiles).
 
 ## Using it
 
-Add the dependency, `use hex_draw;`, and call the maps below. **`USAGE.md` is the worked guide**, with
-every example pointed at a passing test in `tests/01-hex-draw.loft` — the tests are the executable documentation.
+A guide: [docs/01-getting-started.loft](docs/01-getting-started.loft).
+
+Add the dependency, `use hex_draw;`, and call the maps below. `USAGE.md` is the map of the package,
+with every claim pointed at a passing test in `tests/01-hex-draw.loft`.
 The seven things a caller gets wrong — beginning with drawing a wall as the strip of edges it is
 stored as — are worked one by one in `tests/02-worked-examples.loft` (`@HXD-001..007`), cited from
 the functions they belong to.
-
-Split from `ROUNDTRIP.md`'s objects and maps (`SPEC` **I-EXTEND**: a library defines its primitives
-from its own semantics, for consumers it will never meet). See hexbody's `plans/lib-split/`.

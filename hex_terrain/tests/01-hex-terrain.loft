@@ -4,6 +4,7 @@
 // carving, and THE window-independence invariant (samples re-derived from a
 // rebuilt world are identical).
 use hex_terrain::*;
+use hex_grid;
 
 // Indices into the test's type table.
 SEA = 0;
@@ -33,7 +34,7 @@ fn build_world(seed: integer) -> (hex_terrain::Terrain, hex_terrain::TerrainPara
   th = &t.tr_h;
   tmo = &t.tr_moist;
   ww = (nx as float) * 400.0;
-  wh = ((ny as float) * 1.5 * 400.0 / hex_terrain::SQRT3) ?? 0.0;
+  wh = ((ny as float) * 1.5 * 400.0 / hex_grid::SQRT3) ?? 0.0;
   for r in 0..ny {
     for c in 0..nx {
       (x, y) = hex_terrain::terrain_center(p, c, r);

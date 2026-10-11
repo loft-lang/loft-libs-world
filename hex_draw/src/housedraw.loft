@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // housedraw — DRAW A BUILDING IN ANY OF THE 12 ORIENTATIONS.
 //
-// The field primitives all exist already (hex_field: HexSet/Labels/EdgeSet/Heights;
-// hexroof: the roof profiles).  What was missing is the layer above them: a LOCAL FRAME
-// so the same building can be drawn at 6 rotations x 2 chiralities, and openings placed
-// on its walls by (side, t) rather than by cell coordinates.
+// The field primitives are hex_field's (HexSet/Labels/EdgeSet/Heights) and the roof
+// profiles hex_roof's.  This is the layer above them: a LOCAL FRAME (hex_form's `Plan`) so
+// the same building can be drawn at 6 rotations x 2 chiralities, and openings placed on its
+// walls by (side, t) rather than by cell coordinates.
 //
 // FOUR ROUTINES, and each writes exactly one layer:
 //
@@ -14,7 +14,7 @@
 //   place_opening n edges at t -> EdgeSet material    (doors and windows)
 //   draw_roof     a ridge      -> Heights             (a thin caller of hexroof)
 //
-// THE TWO RULES THAT MAKE 12 ORIENTATIONS WORK, both measured by src/housetest.loft:
+// THE TWO RULES THAT MAKE 12 ORIENTATIONS WORK:
 //
 //  1. THE MIRROR IS APPLIED ONCE, IN THE FRAME.  Local -> world negates local u when
 //     mirrored; a side's endpoints then only EXCHANGE.  Applying it in both places turns
@@ -46,13 +46,11 @@ const EPS = 0.000000001;
 // ⚠ `OPEN_NONE` IS NOT "no opening" — it is the wall-material value **0, which means NO WALL**.
 // Writing it DELETES the edge and breaks the run in two (`X51`: 37 edges, 2 dangling ends, and on
 // a tower 3 arcs instead of 1).  It is kept because 0 is the slot's empty value, but it is never
-// what an author means by an opening.  moros makes exactly this mistake — `builtin_house_door`
-// leaves the doorway edge at material 0 and calls it *"crawler's convention: a door is a gap"*.
+// what an author means by an opening.
 //
-// THE TAXONOMY (user, 2026-07-24: *"A door is not a gap in the wall, it is something that can be a
-// collider or not. But we also allow real gaps — the door itself is missing completely, but the
-// wall continues like normal"*).  Three distinct things live on a wall edge, and **all three keep
-// the wall one continuous run**:
+// THE TAXONOMY.  A door is not a gap in the wall; it is something that can be a collider or
+// not.  A real gap is allowed too — the door itself is missing, but the wall continues as normal.
+// Three distinct things live on a wall edge, and **all three keep the wall one continuous run**:
 //
 //   OPEN_DOOR    an opening fitted with a door leaf — a collider WHEN CLOSED, not when open
 //   OPEN_WINDOW  an opening at elevation — never a floor-level collider, wall continues
@@ -61,9 +59,9 @@ const EPS = 0.000000001;
 // The difference between `OPEN_GAP` and `OPEN_NONE` is the whole point: a gap is an **opening in a
 // wall that is still there**; `OPEN_NONE` is the **absence of the wall**.
 //
-// THE RATIONALE, and it is what makes this not a matter of taste (user, 2026-07-24): *"a gap/door
-// will never be rendered as a missing wall, there will be something like a door-frame or ragged
-// stone opening there."*  An opening **has geometry of its own** — a frame, a lintel, a ragged
+// THE RATIONALE, and it is what makes this not a matter of taste: a gap or a door is never
+// rendered as a missing wall — there is a door frame or a ragged stone opening there.  An
+// opening **has geometry of its own** — a frame, a lintel, a ragged
 // jamb.  Absence has none.  So an opening must name a material that carries that geometry, which
 // is precisely a wall id into the palette; writing 0 would ask the renderer to draw nothing and the
 // collision layer to find no wall, both wrong.
@@ -130,8 +128,9 @@ pub fn draw_walls(cells: HexSet, edges: EdgeSet, wall_mat: integer) -> integer {
 // shrinking the segment over-corrects.  One hex edge is 1.0 world unit = 0.87 m of
 // clear width — a real domestic door, which a cell-thick wall could not express at all.
 //
-// The edge KEEPS its wall material; the opening goes in the surf slot.  Nothing is
-// deleted, so the wall still fits as one run.
+// The opening material REPLACES the wall material on those edges (the slot holds one).
+// With any kind but `OPEN_NONE` nothing is deleted, so the wall still fits as one run.
+// Returns how many edges it wrote: fewer than `nedges` when the side is shorter.
 //
 // Example: @HXD-004
 pub fn place_opening(p: Plan, cells: HexSet, edges: EdgeSet,

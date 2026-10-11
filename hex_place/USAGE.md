@@ -17,9 +17,13 @@ slot alone, so its footprint is untouched. Arbitration fails safe toward solid.
 
 ## The things you will reach for
 
-- **pose a body and query it** — `pose_new · pose_fwd_x/y · pose_inv_x/y · disk_hit`
-- **combine two stencils order-free** — `combine_cut · shared_marked`
-- **arbitrate overlapping solids** — `arb_solid — fail-safe toward solid (I4)`
+- **pose a body and query it** — `pose_new · pose_fwd_x/y · pose_inv_x/y · disk_hit · pose_residual`
+- **combine two stencils order-free** — `combine_cut · shared_marked · field_union`
+- **combine per level** — `combine_cut_level · kappa_at_level`
+- **seat a stencil on terrain** — `seat_height · seat_residual · seat_write` with `SEAT_LOW / SEAT_MEAN / SEAT_HIGH`
+- **arbitrate overlapping solids** — `arb_solid` (fail-safe toward solid) · `arb_owner` (lowest id, `-1` for none)
+
+A guide that runs: [`docs/01-getting-started.loft`](docs/01-getting-started.loft).
 
 ## The worked examples, in the tests
 
@@ -49,12 +53,11 @@ Run them yourself: `loft --interpret --tests tests` from the `hex_place/` direct
 
 ## The rules that bite
 
-- **Discover the API from source or `loft api hex_place` once published** — not from memory. Even the
-  authors mis-recall signatures; the tests exist because guessing is unreliable.
-- **A refusal is data, not an error.** Where a map can decline (the doorstep, recovery), it returns
-  a *reason* and an *offer*, and your editor should show them rather than treating the call as failed.
-- **No `ε` in an R1 comparison.** For content you authored, recovery is exact; a tolerance there is
-  a defect, not a knob (`SPEC` **P4**).
+- **Discover the API from source or `loft api hex_place`** — not from memory.
+- **Compare cross-frame coordinates with a tolerance, never `==`.** The pose transform is the one
+  floating-point step; inside a frame every test is exact.
+- **Show the seat residual.** `seat_residual` is the cut and fill a placement owes; it is returned
+  so an editor can display it, not so it can be dropped.
 - **Never draw two stencils' walls and overlay them.** Union first, cut once. The overlay is
   order-dependent and grows a wall down the middle of what the author drew as one building
   (`@HXP-001`).

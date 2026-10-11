@@ -11,8 +11,9 @@ every form has a **canonical text** it writes to and reads back from **byte-for-
 what makes a project file diffable and an undo history exact.
 
 Part of the `hex_*` family beside `hex_field` (cell sets), `hex_grid` (the lattice), `hex_edge`
-(collision), `hex_way` (linework) and `hex_roof` (height profiles). Produced by **hexbody**, the
-workshop that proves the family against an exact round trip.
+(collision), `hex_way` (linework) and `hex_roof` (height profiles).
+
+A guide: [docs/01-getting-started.loft](docs/01-getting-started.loft).
 
 ## Using it
 
@@ -21,6 +22,3 @@ every example pointed at a passing test in `tests/01-hex-form.loft` — the test
 The five rules of the canonical text — C1–C5, and every one of them a way a hand-written form parses
 and means something else — are worked one by one in `tests/02-worked-examples.loft` (`@HXF-001..007`),
 cited from the functions they belong to.
-
-Split from `ROUNDTRIP.md`'s objects and maps (`SPEC` **I-EXTEND**: a library defines its primitives
-from its own semantics, for consumers it will never meet). See hexbody's `plans/lib-split/`.

@@ -26,9 +26,9 @@ fn fabs(x: float) -> float { if x < 0.0 { 0.0 - x } else { x } }
 // (`K-FIT`): a joint value is ORDINAL, so a refusal owes an OFFER of the nearest admissible — unlike
 // a material id, which is nominal and offers nothing (`X68`).
 pub struct Joint {
-  jt_value: float,   // the joint value, in turns
-  jt_lo:    float,   // limit low  (turns)
-  jt_hi:    float,   // limit high (turns)
+  pub jt_value: float,   // the joint value, in turns
+  pub jt_lo:    float,   // limit low  (turns)
+  pub jt_hi:    float,   // limit high (turns)
 }
 
 // One articulation: its current value and the range it may move in.  The limits travel
@@ -157,17 +157,20 @@ pub fn joint_residual(j: Joint, value: float) -> float {
 // ⚠ `rig_world_seg` IS UNCHANGED.  Re-expressing it through the 3-D path would
 // have moved every existing consumer's numbers by an ulp to buy nothing.
 
+// A bone rig: for each bone its parent (-1 for the root), its joint offset in the parent's
+// frame, its length along its own +x, its revolute axis and its joint limits.  `rig_new` and
+// `rig_read` make one.
 pub struct Rig {
-  rg_parent: vector<integer>,   // parent bone index; -1 for the root
-  rg_ox:     vector<float>,     // joint offset in the parent's frame (x)
-  rg_oy:     vector<float>,     // joint offset in the parent's frame (y)
-  rg_oz:     vector<float>,     // joint offset in the parent's frame (z) — 0 in a planar rig
-  rg_len:    vector<float>,     // the bone's length from its joint, along its own +x
-  rg_ax:     vector<float>,     // the revolute axis, AS GIVEN — see above
-  rg_ay:     vector<float>,     //   "
-  rg_az:     vector<float>,     //   " — (0,0,1) in a planar rig: the implicit axis made explicit
-  rg_lo:     vector<float>,     // the joint's limit low  (turns)
-  rg_hi:     vector<float>,     // the joint's limit high (turns)
+  pub rg_parent: vector<integer>,   // parent bone index; -1 for the root
+  pub rg_ox:     vector<float>,     // joint offset in the parent's frame (x)
+  pub rg_oy:     vector<float>,     // joint offset in the parent's frame (y)
+  pub rg_oz:     vector<float>,     // joint offset in the parent's frame (z) — 0 in a planar rig
+  pub rg_len:    vector<float>,     // the bone's length from its joint, along its own +x
+  pub rg_ax:     vector<float>,     // the revolute axis, AS GIVEN — see above
+  pub rg_ay:     vector<float>,     //   "
+  pub rg_az:     vector<float>,     //   " — (0,0,1) in a planar rig: the implicit axis made explicit
+  pub rg_lo:     vector<float>,     // the joint's limit low  (turns)
+  pub rg_hi:     vector<float>,     // the joint's limit high (turns)
 }
 
 // An empty rig.  Add bones to it; every parallel vector stays the same length, which is
@@ -192,8 +195,8 @@ pub fn rig_bone3(r: Rig, parent: integer, ox: float, oy: float, oz: float, len: 
   r
 }
 
-// Append one bone in the PLANE — the special case, and its signature is
-// unchanged from 0.1.0.  A planar bone is one at `oz = 0` about `(0, 0, 1)`,
+// Append one bone in the PLANE — the special case.  A planar bone is one at
+// `oz = 0` about `(0, 0, 1)`,
 // which is exactly the axis the 2-D code left implicit.
 //
 // Example: @HXB-001
@@ -261,23 +264,14 @@ pub fn rig_admissible(r: Rig) -> boolean {
 
 // ── THE FORMAT, AND WHY A SPATIAL BONE CHANGES ITS RECORD TAG ────────────────
 //
-// A planar bone writes exactly the bytes 0.1.0 wrote, so **a planar rig
-// round-trips byte-identically across the version** and every rig on disk today
-// still reads.
+// A planar bone writes a `bone` record, so a planar rig reads in any version
+// that knows `bone`.
 //
-// ⚠⚠ A spatial bone writes `bone3` rather than a longer `bone` line, and that
-// is the whole compatibility decision — MEASURED against the shipped 0.1.0
-// reader rather than reasoned about:
-//
-//     extra words appended to a `bone` line  ->  0.1.0 reads 1 bone
-//     the same rig under the tag `bone3`     ->  0.1.0 reads 0 bones
-//
-// 0.1.0's parser checks the keywords it knows and never the word COUNT, so
-// appending fields makes an old reader silently return the bone's PLANAR
-// PROJECTION — a rig quietly flattened, which is exactly the failure this
-// library's *"a lenient reader would void the byte diff"* rule exists to stop.
-// A new tag makes the same reader refuse the whole rig, which `rig_admissible`
-// then rejects.  Loud beats tidy.
+// ⚠⚠ A spatial bone writes `bone3` rather than a longer `bone` line.  A reader
+// that checks the keywords it knows and not the word COUNT would read extra
+// fields on a `bone` line as the bone's PLANAR PROJECTION — a rig quietly
+// flattened.  Under its own tag the same reader refuses the whole rig, which
+// `rig_admissible` then rejects.  Loud beats tidy.
 //
 // Example: @HXB-008
 pub fn rig_write(r: Rig, name: text) -> text {
@@ -335,14 +329,12 @@ fn rig_floats_ok(line: text, lo: integer, hi: integer) -> boolean {
 // STRICT PARSER — accepts exactly what `rig_write` emits, refuses anything else by returning an
 // empty rig (which `rig_admissible` then rejects).  A lenient reader would void the byte diff.
 //
-// THAT WAS A CLAIM BEFORE IT WAS A TEST, and it was wrong nine ways: `len 1.0`, `+1.5`, `01.5`,
-// `1.50`, `1.5e0`, an empty field, a trailing space and an extra field were all ADMITTED and
-// then re-written differently — and `len x` became `len 0`, a BONE THAT IS NOT THERE, admitted
-// into the model without a word.  What pins it now is a RE-SPELLING IDENTITY: a field is a
-// number only if printing the parse reproduces the original characters, and a line is a record
-// only if it carries exactly the fields the writer emits.
+// What pins that is a RE-SPELLING IDENTITY: a field is a number only if printing the parse
+// reproduces the original characters (so `1.0`, `+1.5`, `01.5`, `1.50`, `1.5e0`, an empty
+// field and `x` are refused), and a line is a record only if it carries exactly the fields the
+// writer emits (so a trailing space or an extra field is refused).
 //
-// ⚠ WHAT THIS PARSER DOES NOT CHECK IS THE PARENT, and an earlier note here said it did.  A
+// ⚠ WHAT THIS PARSER DOES NOT CHECK IS THE PARENT.  A
 // forward, absent or duplicate-root parent round-trips FAITHFULLY — nothing is repaired, the
 // byte diff still means what it says — so it is not the reader's to refuse.  It is
 // `rig_admissible`'s, which is the rig's doorstep and catches every one of them.  Reading a rig
@@ -465,11 +457,7 @@ pub fn rig_world_seg(r: Rig, values: vector<float>, i: integer) -> (float, float
   (x0, y0, x0 + ex, y0 + ey)
 }
 
-// ── FORWARD KINEMATICS IN SPACE (`G1b`) ──────────────────────────────────────
-//
-// The world segment of bone `i` IN THREE DIMENSIONS: `(x0,y0,z0)` its base,
-// `(x1,y1,z1)` its tip.  The 2-D sibling above is not replaced and not
-// re-expressed — see the header for what that would have cost.
+// ── FORWARD KINEMATICS IN SPACE ──────────────────────────────────────────────
 //
 // The composition is the same tree walk one dimension up: a bone's offset rides
 // its PARENT's rotation (not its own joint), and its length runs along its own
@@ -488,17 +476,17 @@ pub fn rig_world_seg(r: Rig, values: vector<float>, i: integer) -> (float, float
 // which is the honest reading of *"nothing to turn about"*.  It is not repaired
 // to `+z`: that would invent an axis the author did not write, and
 // `rig_admissible` refuses the rig anyway.
+
 // A bone's WORLD FRAME: where its joint sits, and how its own axes lie.
 //
-// ⚠ **This is the thing `rig_world_seg3` used to compute and throw away**,
-// and a consumer that draws a body needs it: a limb hung on a bone is a
+// A consumer that draws a body needs it: a limb hung on a bone is a
 // cloud of points in the BONE's frame, and posing them means applying this
 // once and reusing it, not walking the tree per point.
 pub struct Frame {
-  fr_x: float, fr_y: float, fr_z: float,      // the bone's joint, in world
-  fr_00: float, fr_01: float, fr_02: float,   // its basis, row-major
-  fr_10: float, fr_11: float, fr_12: float,
-  fr_20: float, fr_21: float, fr_22: float,
+  pub fr_x: float, pub fr_y: float, pub fr_z: float,      // the bone's joint, in world
+  pub fr_00: float, pub fr_01: float, pub fr_02: float,   // its basis, row-major
+  pub fr_10: float, pub fr_11: float, pub fr_12: float,
+  pub fr_20: float, pub fr_21: float, pub fr_22: float,
 }
 
 // The world frame of bone `i` at the given joint values.  ⚠ One tree walk;
@@ -577,16 +565,12 @@ pub fn rig_world_point3(r: Rig, values: vector<float>, i: integer,
   frame_point(rig_world_frame3(r, values, i), lx, ly, lz)
 }
 
-// ── FORWARD KINEMATICS IN SPACE (`G1b`) ──────────────────────────────────────
-//
 // The world segment of bone `i` IN THREE DIMENSIONS: `(x0,y0,z0)` its base,
-// `(x1,y1,z1)` its tip.  The 2-D sibling above is not replaced and not
-// re-expressed — see the header for what that would have cost.
+// `(x1,y1,z1)` its tip.  The 2-D `rig_world_seg` is a separate walk — see the
+// header for why.
 //
-// ⚠ Since 0.3.0 this is TWO POINTS of the bone's own frame and nothing more:
-// its base is the frame's origin and its tip is `(len, 0, 0)` in it.  One
-// implementation of the walk, and the numbers are unchanged — adding a
-// rotated `(0,0,0)` is an exact `+ 0.0`.
+// It is TWO POINTS of the bone's own frame: its base is the frame's origin and
+// its tip is `(len, 0, 0)` in it.
 //
 // Example: @HXB-003
 pub fn rig_world_seg3(r: Rig, values: vector<float>, i: integer)
@@ -599,10 +583,10 @@ pub fn rig_world_seg3(r: Rig, values: vector<float>, i: integer)
 
 // An oriented bounding box: centre, unit axis (along the bone), and half-extents.
 pub struct Obb {
-  ob_cx: float, ob_cy: float,   // centre
-  ob_ux: float, ob_uy: float,   // unit axis, along the segment
-  ob_hl: float,                 // half-length, along the axis
-  ob_hw: float,                 // half-width, perpendicular
+  pub ob_cx: float, pub ob_cy: float,   // centre
+  pub ob_ux: float, pub ob_uy: float,   // unit axis, along the segment
+  pub ob_hl: float,                 // half-length, along the axis
+  pub ob_hw: float,                 // half-width, perpendicular
 }
 
 // THE PROXY of bone `i`: the OBB that bounds its capsule of half-width `w`.  Length grows by `w`

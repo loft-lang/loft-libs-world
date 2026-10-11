@@ -1,0 +1,128 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @NAME: Getting Started
+// @TITLE: Raise a roof over a hex footprint, check that it drains, and recover the exact surface to draw.
+//
+// `hex_roof` writes roofs, vaults and arches as a HEIGHT per cell — a `hex_field::Heights`
+// over a `HexSet` footprint.  Every profile is one formula, `peak - slope * d`, and only the
+// distance `d` changes: to a point for a cone, to a line for a gable, to a short segment for
+// a hip, to the nearest eave for `roof_hip`.  Going the other way, `roof_match` reads a height
+// field back as an exact surface, so a renderer draws a real cone rather than a staircase of
+// hexes.
+//
+// It is not the footprint or its outline — that is `hex_field`.  It is not the ridge line
+// either: a ridge is a `hex_way::Track`.  Reach for `hex_roof` when cells need a height that
+// follows a roof form.
+//
+// World units: a cell (q, r) is centred at `(lattice_k(q, r) · √3/2, lattice_m(q, r) / 2)`, so
+// neighbouring centres are √3 apart.
+use hex_roof::*;
+use hex_field::*;
+use hex_way::*;
+
+const SQ3 = 1.7320508075688772;
+
+fn near(a: float, b: float) -> boolean { abs(a - b) < 0.000001 }
+
+// A cell and its six neighbours, in a 5 x 5 window around the origin.
+fn hexagon() -> HexSet {
+  s = hexset_new(2);
+  hexset_set(s, 0, 0, true);
+  for d in 0..6 { hexset_set(s, nb_q(0, 0, d), nb_r(0, 0, d), true); }
+  s
+}
+
+fn main() {
+  s = hexagon();
+  f = heights_new(-2, -2, 5, 5);
+  roof_cone(s, f, 0.0, 0.0, 4.0, 1.0, 100.0);      // apex 4 over the origin, slope 1
+  fit = roof_match(s, f, 0.001);
+  println("apex {height_get(f, 0, 0)}, eave {height_get(f, 1, 0):.4}; recovered as kind {fit.rf_kind}, apex {fit.rf_z:.4}, slope {fit.rf_slope:.4}");
+  assert(height_get(f, 0, 0) == 4.0 && near(height_get(f, 1, 0), 4.0 - SQ3), "√3 from the apex");
+  assert(fit.rf_kind == ROOF_CONE && near(fit.rf_z, 4.0) && near(fit.rf_slope, 1.0), "the cone back");
+
+  // Every section below is a function, and `main` calls each one: a section nothing calls
+  // still compiles, but its assertions never run.
+  draw_the_surface();
+  a_hip_is_a_shorter_ridge();
+  a_roof_must_drain();
+}
+
+// That prints:
+//
+//     apex 4, eave 2.2679; recovered as kind 2, apex 4.0000, slope 1.0000
+//
+// (kind 2 is `ROOF_CONE`.)
+//
+// ## Draw the surface, not the cells
+//
+// The heights are storage: one number per cell.  `roof_eval(fit, x, y)` evaluates the
+// recovered surface anywhere, so the roof is exact at any resolution.  When no shape fits
+// within the tolerance, `roof_match` answers `ROOF_UNKNOWN` and `roof_eval` draws nothing —
+// it never passes off the least-bad shape as a recovery.
+
+fn draw_the_surface() {
+  s = hexagon();
+  f = heights_new(-2, -2, 5, 5);
+  roof_cone(s, f, 0.0, 0.0, 4.0, 1.0, 100.0);
+  fit = roof_match(s, f, 0.001);
+  between = roof_eval(fit, SQ3 / 2.0, 0.0);      // half way to the east neighbour
+  assert(near(between, 4.0 - SQ3 / 2.0), "on the cone, between two cell centres");
+  println("surface : half way between two cells the roof is {between:.4}");
+}
+
+// ## A hip is a shorter ridge
+//
+// `roof_ridge(s, f, track, peak, slope, dmax)` measures `d` to a `Track`.  A ridge the full
+// length of the roof is a gable: the ends stay at full height to the end wall.  Shorten the
+// ridge and past its ends the distance runs to the tip instead, so the ends slope in — a hip,
+// from the same call.  `dmax` clamps the distance; 100 here means "never".
+
+fn a_hip_is_a_shorter_ridge() {
+  s = hexset_new(4);
+  for r in -1..2 { for q in -3..4 { hexset_set(s, q, r, true); } }   // 7 cells by 3 rows
+  full = track_new();
+  track_straight(full, -3.0 * SQ3, 0.0, 3.0 * SQ3, 0.0);
+  short = track_new();
+  track_straight(short, 0.0 - SQ3, 0.0, SQ3, 0.0);
+  gable = heights_new(-4, -4, 9, 9);
+  roof_ridge(s, gable, full, 5.0, 1.0, 100.0);
+  hip = heights_new(-4, -4, 9, 9);
+  roof_ridge(s, hip, short, 5.0, 1.0, 100.0);
+  assert(height_get(gable, 0, 0) == 5.0 && height_get(hip, 0, 0) == 5.0, "both on their ridge");
+  assert(height_get(gable, 3, 0) == 5.0, "the gable carries the ridge to the end wall");
+  assert(near(height_get(hip, 3, 0), 5.0 - 2.0 * SQ3), "the hip is 2√3 past its ridge's end");
+  assert(roof_ponds(s, gable) == 0 && roof_ponds(s, hip) == 0, "both drain");
+  println("ridge   : end cell of the gable {height_get(gable, 3, 0)}, of the hip {height_get(hip, 3, 0):.4}");
+}
+
+// ## A roof must drain
+//
+// `roof_ponds` counts INTERIOR cells — all six neighbours in the footprint — with no lower
+// neighbour: water collects there and never leaves.  A roof that drains has none.  Boundary
+// cells are not counted, because they drain off the eave.
+//
+// `roof_hip(s, f, eave, per_ring)` is the roof that drains on any footprint: the boundary is
+// ring 0 at eave height, and each ring inward rises by `per_ring`.  Its eave is level by
+// construction, which `eave_spread` (the spread of the boundary heights) confirms.
+
+fn a_roof_must_drain() {
+  s = hexagon();
+  f = heights_new(-2, -2, 5, 5);
+  top = roof_hip(s, f, 3.0, 1.0);
+  assert(top == 1 && height_get(f, 0, 0) == 4.0, "one ring inside the eave");
+  assert(eave_spread(s, f) == 0.0 && roof_ponds(s, f) == 0, "a level eave, and it drains");
+
+  height_set(f, 0, 0, 2.0);            // dent the middle below the eave
+  assert(roof_ponds(s, f) == 1, "the centre now holds water");
+  println("drain   : hip rings {top}, ponds 0; dented, ponds {roof_ponds(s, f)}");
+}
+
+// ## Where to go next
+//
+// - `tests/02-worked-examples.loft` — `@HXR-001` … `@HXR-006`: the hip as a gable, why a cone
+//   on a drawn footprint cannot get both the eave and the drainage right, the centre in world
+//   units, groin against cloister (`vault_groin` / `vault_cloister`), ponding on the
+//   boundary, and drawing the recovered surface.
+// - `vault_arc` and `dome` are the curved profiles: the soffit of an arch, and a point source
+//   with a circular profile.

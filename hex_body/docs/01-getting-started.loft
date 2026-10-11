@@ -1,0 +1,138 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @NAME: Getting Started
+// @TITLE: Build a two-bone arm, pose it from joint values, and ask where its hand is.
+//
+// `hex_body` models a moving body as a RIG: a tree of bones joined by revolute joints, each
+// joint with the limits it may turn between.  A rig is never a pose.  You keep the joint values
+// yourself, in a vector, and the library COMPUTES where every bone is from them — a pure
+// function, so the same values always give the same answer.  A part that bends is more bones on
+// more joints; nothing deforms.
+//
+// Joint values are in TURNS: 0.25 is a quarter turn, 1.0 a whole revolution.
+//
+// It is not an animation system (it answers where a part is now, never where it will be), and it
+// has no lattice in it: the hex world it lives in is `hex_grid` and `hex_field`.
+use hex_body::*;
+
+fn close(a: float, b: float) -> boolean { abs(a - b) < 0.000000001 }
+
+// An upper arm 2 long that may swing half a turn either way, and a forearm 1 long hinged at the
+// upper arm's tip, which may swing a quarter turn either way.
+fn arm() -> Rig {
+  r = rig_new();
+  r = rig_bone(r, -1, 0.0, 0.0, 2.0, -0.5, 0.5);    // bone 0: the root, no parent
+  r = rig_bone(r, 0, 2.0, 0.0, 1.0, -0.25, 0.25);   // bone 1: at (2, 0) in bone 0's frame
+  r
+}
+
+fn main() {
+  a = arm();
+  // Both joints a quarter turn: the upper arm points straight up, and the forearm turns a
+  // further quarter, so it points back along -x.
+  (x0, y0, x1, y1) = rig_world_seg(a, [0.25, 0.25], 1);
+  println("forearm from ({x0:.3}, {y0:.3}) to ({x1:.3}, {y1:.3})");
+  assert(rig_admissible(a) && rig_count(a) == 2, "a well-formed two-bone rig");
+  assert(close(x0, 0.0) && close(y0, 2.0), "the elbow sits at the top of the upper arm");
+  assert(close(x1, -1.0) && close(y1, 2.0), "the hand is one unit back along -x");
+
+  // Every section below is a function, and `main` calls each one: a section nothing calls
+  // still compiles, but its assertions never run.
+  a_joint_has_a_doorstep();
+  the_rig_is_text();
+  a_wheel_rolls_by_construction();
+  the_proxy_contains_the_shape();
+  a_bone_in_space();
+}
+
+// That prints:
+//
+//     forearm from (0.000, 2.000) to (-1.000, 2.000)
+//
+// ## A joint has a doorstep
+//
+// The values vector is yours, and nothing checks it against the limits for you.  Ask the joint:
+// `joint_fits` says whether a value is inside its limits, and when it is not, `joint_offer` gives
+// the nearest value that is, and `joint_residual` how far off the request was.
+
+fn a_joint_has_a_doorstep() {
+  elbow = rig_joint(arm(), 1);
+  assert(joint_fits(elbow, 0.2) && !joint_fits(elbow, 0.3), "0.2 turns fits; 0.3 does not");
+  assert(joint_offer(elbow, 0.3) == 0.25, "the nearest admissible value is the limit");
+  assert(close(joint_residual(elbow, 0.3), 0.05), "and the request was 0.05 turns past it");
+  println("joint   : 0.3 refused, 0.25 offered");
+}
+
+// ## The rig is text
+//
+// `rig_write` gives a rig's canonical text and `rig_read` reads it back exactly — floats
+// included — so a rig on disk diffs cleanly.  The reader is strict: a number not spelled the way
+// the writer spells it is refused, and a refused text reads as an empty rig, which
+// `rig_admissible` rejects.
+
+fn the_rig_is_text() {
+  t = rig_write(arm(), "arm");
+  assert(t == "rig arm bones 2\nbone 0 parent -1 at 0 0 len 2 lim -0.5 0.5\nbone 1 parent 0 at 2 0 len 1 lim -0.25 0.25",
+         "two bone records under a header");
+  assert(rig_eq(rig_read(t), arm()), "it reads back as the same rig");
+  bad = rig_read(t.replace("len 2 ", "len 2.0 "));
+  assert(rig_count(bad) == 0 && !rig_admissible(bad), "`2.0` is not how the writer spells 2");
+  println("text    : {len(t.split('\n'))} lines, read back exactly");
+}
+
+// ## A wheel rolls by construction
+//
+// A wheel is a joint whose value is DERIVED from how far it travelled: `wheel_value(travel,
+// radius, slip)` is `travel / (2πr)` turns.  A wheel of radius 0.5 that travels π covers one
+// circumference, so it turns exactly once, and its contact point does not skid.  The `slip`
+// argument makes a wheel that does: 10 % more turning skids by a tenth of the travel.
+
+fn a_wheel_rolls_by_construction() {
+  v = wheel_value(PI, 0.5, 0.0);
+  assert(close(v, 1.0) && wheel_skid(0.5, v, PI) < 0.000000001, "one turn, no skid");
+  spun = wheel_value(PI, 0.5, 0.1);
+  assert(close(wheel_skid(0.5, spun, PI), 0.1 * PI), "a spinning wheel skids 0.1π");
+  println("wheel   : {v:.3} turns over π, skid {wheel_skid(0.5, spun, PI):.3} with 10 % slip");
+}
+
+// ## The proxy contains the shape
+//
+// For collisions a bone is a CAPSULE — every point within a half-width `w` of its segment — and
+// its proxy is the box `bone_obb` builds around that capsule.  The box always contains the
+// capsule, and is larger only at its corners: the upper arm lying along +x with `w = 0.5` is the
+// segment (0, 0)–(2, 0), and the point (2.4, 0.4) is in its box but 0.57 from the segment's end,
+// outside the capsule.
+
+fn the_proxy_contains_the_shape() {
+  a = arm();
+  box = bone_obb(a, [0.0, 0.0], 0, 0.5);
+  assert(box.ob_cx == 1.0 && box.ob_hl == 1.5 && box.ob_hw == 0.5, "centre 1, half-length 1.5");
+  assert(obb_contains(box, 2.4, 0.4), "the corner is in the box");
+  assert(!bone_shape_has(a, [0.0, 0.0], 0, 0.5, 2.4, 0.4), "but not in the capsule");
+  assert(bone_shape_has(a, [0.0, 0.0], 0, 0.5, 1.0, 0.4), "beside the middle is in both");
+  println("proxy   : (2.4, 0.4) is in the box, outside the capsule");
+}
+
+// ## A bone in space
+//
+// `rig_bone3` gives a joint an explicit axis and an offset in z.  A rig with one is no longer
+// planar, and the 2-D `rig_world_seg` then answers as if every axis were +z — four ordinary
+// numbers, and wrong.  Ask `rig_planar` first, and use `rig_world_seg3` (or `rig_world_frame3`
+// for many points of one bone) for a spatial rig.  A bone 1 long hinged about +y, turned a
+// quarter, points down -z.
+
+fn a_bone_in_space() {
+  r = rig_bone3(rig_new(), -1, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, -0.5, 0.5);
+  assert(rig_admissible(r) && !rig_planar(r), "admissible, and not planar");
+  (_, _, _, tx, ty, tz) = rig_world_seg3(r, [0.25], 0);
+  assert(close(tx, 0.0) && close(ty, 0.0) && close(tz, -1.0), "the tip is at (0, 0, -1)");
+  (_, _, fx, fy) = rig_world_seg(r, [0.25], 0);
+  assert(close(fx, 0.0) && close(fy, 1.0), "the 2-D walk turns it about +z instead");
+  println("space   : tip ({tx:.3}, {ty:.3}, {tz:.3}); the 2-D walk says (0, 1)");
+}
+
+// ## Where to go next
+//
+// - `tests/03-worked-examples.loft` — `@HXB-001` … `@HXB-008`: the values vector that defaults
+//   rather than refuses, holding a frame instead of walking the tree per point, the axis stored
+//   as given, the planar-only 2-D path, the proxy's stated overshoot, the wheel, and the text.

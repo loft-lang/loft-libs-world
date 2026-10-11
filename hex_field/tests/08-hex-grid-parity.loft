@@ -1,0 +1,35 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// `hex_field` is a leaf: it does not depend on `hex_grid`, so `lattice_k` / `lattice_m` and
+// `nb_q` / `nb_r` restate `hex_grid`'s convention (pointy-top, odd-r offset).  Two copies of a
+// convention drift silently — an odd-row shift written `r % 2` instead of `r & 1` agrees for
+// every non-negative row and is a full hex step off on every negative odd one.  This test is
+// what keeps the copies equal: both parities and both signs, every cell and every neighbour.
+use hex_field::*;
+use hex_grid::*;
+
+fn test_the_lattice_map_is_hex_grids_world_position() {
+  for r in -5..5 { for q in -5..5 {
+    (x, y) = hex_grid::hex_to_px(q, r);
+    assert(abs((lattice_k(q, r) as float) * 0.8660254037844386 - x) < 0.000000001,
+           "x of ({q}, {r}): lattice {lattice_k(q, r)} against hex_grid {x}");
+    assert(abs((lattice_m(q, r) as float) * 0.5 - y) < 0.000000001,
+           "y of ({q}, {r}): lattice {lattice_m(q, r)} against hex_grid {y}");
+  } }
+}
+
+fn test_every_neighbour_is_one_of_hex_grids() {
+  for r in -5..5 { for q in -5..5 {
+    for d in 0..6 {
+      nq = nb_q(q, r, d);
+      nr = nb_r(q, r, d);
+      found = false;
+      for g in 0..6 {
+        (gq, gr) = hex_grid::hex_neighbor(q, r, g);
+        if gq == nq && gr == nr { found = true; }
+      }
+      assert(found, "neighbour {d} of ({q}, {r}) is ({nq}, {nr}), not one of hex_grid's six");
+    }
+  } }
+}

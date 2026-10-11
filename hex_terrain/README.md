@@ -1,12 +1,18 @@
+<!--
+Copyright (c) 2026 Jurjen Stellingwerff
+SPDX-License-Identifier: LGPL-3.0-or-later
+-->
+
 # hex_terrain
 
 The OVERLAND terrain layer of the `hex_*` family: a coarse overland hex lattice
 (pointy-top, odd-r — the moros convention via `hex_grid`) is the terrain
 authority; the fine, walked world derives from it by **pure functions**.
 
-Ported from a user-tuned Python blueprint (crawler repo: `OVERLAND.md` +
-`tools/overland_blueprint.py`); designed to be consumed alike by crawler,
-moros and dryopea (see `CONVERGENCE.md` at the repo root).
+The same model serves crawler, moros and dryopea; `CONVERGENCE.md` at the repo
+root says how the `hex_*` packages divide the work.
+
+A guide: [docs/01-getting-started.loft](docs/01-getting-started.loft).
 
 ## Model
 
@@ -62,12 +68,13 @@ line, not a crossfade (`@HXT-008`).
 ## Use
 
 ```loft
-use hex_terrain;
+use hex_terrain::*;
 
 p = terrain_params(seed, 500.0);          // 500 m overland tiles
 t = terrain_new(48, 37);
 // ... author cell heights/moisture/materials (content side) ...
-terrain_hydrology(t, p, LAKE_MAT);        // flood-fill, flow, accumulation
+terrain_hydrology(t, p, lake);            // flood-fill, flow, accumulation;
+                                          //   `lake` = your lake type's index in `types`
 // ... classify land materials (content side) ...
 terrain_relief_pass(t, types, p);
 rivers = terrain_rivers(t, types, p);

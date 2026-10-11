@@ -130,9 +130,8 @@ fn main() {
 //
 // The number that sees it is the gap at the joint, and it is zero here for every
 // combination of turn direction and side — which is what "left normal positive"
-// has to mean for arcs too.  It did not: the arc branch read the sweep direction
-// the other way up and put every turn on the far side.  Fixed in 0.1.1, and this
-// is the test that would have caught it.  A dedicated equidistance gate did not.
+// has to mean for arcs too.  An equidistance gate alone cannot see an arc branch
+// that reads the sweep direction the other way up; this joint test does.
 fn test_an_offset_has_to_join_where_the_centreline_joins() {
   // A left turn: 10 units of straight, then a quarter circle about (10, 5).
   left = track_new();
@@ -445,8 +444,7 @@ fn test_the_shortest_safe_tread_depends_on_the_heading() {
          "just under 1.5 the column flight skips: riser {worst_riser(sc, fc2)}");
 }
 
-// @HXY-007 — AN ANGLE IS A DIRECTION, NOT A QUANTITY, AND `seg_distance` USED TO
-// DISAGREE.
+// @HXY-007 — AN ANGLE IS A DIRECTION, NOT A QUANTITY.
 //
 // `track_arc` takes plain floats, so the angles an arc is authored with are
 // whatever the caller had to hand: a heading that has been decremented a few
@@ -454,32 +452,22 @@ fn test_the_shortest_safe_tread_depends_on_the_heading() {
 // Every one of those describes the same curve in the plane — an angle names a
 // direction, and adding or removing 2*pi does not move anything.
 //
-// `seg_distance` normalised the point's angle in ONE direction:
-//
-//     while aa < lo { aa = aa + 2*pi; }        // …and no companion going down
-//
-// which is exactly right for an arc authored ABOVE the atan2 range and silently
-// wrong for one authored below it.  A point taken FROM the arc — by `seg_point`,
-// so it is on the curve by construction — then reported itself as most of a
-// radius away.
+// A normalisation in ONE direction — `while aa < lo { aa = aa + 2*pi; }` and no
+// companion going down — is right for an arc authored ABOVE the atan2 range and
+// silently wrong for one authored below it: a point taken FROM the arc, by
+// `seg_point`, would report itself as most of a radius away.
 //
 // WHY IT MATTERS MORE THAN A DISTANCE.  `seg_distance` is not a leaf:
 // `track_distance`, `nearest_seg`, `way_mark`, `way_stamp`, `cut_arb` and
 // `way_param`'s own choice of segment all reach it.  So the failure a caller
-// actually sees is not a wrong number, it is a way rasterised somewhere else:
-// the same quarter arc marked 5 cells authored at [0, pi/2] and 1 authored at
-// [-2*pi, -2*pi + pi/2].  One curve, two footprints.
+// would see is not a wrong number, it is a way rasterised somewhere else: one
+// curve, two footprints.  `seg_distance` and `seg_param` both normalise through
+// `ang_wrap`, which wraps up AND down, so the arc below is the same arc at either
+// authoring.
 //
-// ⚠ The file already had the right idiom TWELVE LINES AWAY — `seg_param` wraps
-// up AND down — so this was one file carrying two normalisations, one of them
-// half written.  Both call `ang_wrap` now, which is why there is no second place
-// left for the pair to disagree.
-//
-// ⚠ THIS BLOCK DEFINES THE TAG, SO IT MUST NOT ALSO CITE ONE. The scanner's rule 4 is
-// that a citation line anywhere in a block cancels a tag named in its earlier prose —
-// and the first draft of this note said so IN WORDS THAT CONTAINED THE TOKEN, which
-// tripped the rule it was describing: three citations and no fn carrying the tag.
-// The citations live in `src/hex_way.loft`, on the two functions this is about.
+// ⚠ This block DEFINES the tag, so it must not also cite one: a citation line
+// anywhere in a block cancels a tag named in its prose.  The citations live in
+// `src/hex_way.loft`, on the two functions this is about.
 fn test_the_same_arc_authored_a_turn_lower_is_the_same_arc() {
   // Two spellings of ONE quarter turn: radius 4 about the origin, from due east
   // to due north.

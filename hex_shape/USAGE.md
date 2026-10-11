@@ -16,8 +16,12 @@ centre recovers exactly and whose radius quantises to a realisable shell `3k²+m
 
 ## The things you will reach for
 
-- **fill an arc and read its shell back** — `arc_fill · arc_recover_centre · arc_shells_upto`
-- **know which orbit a box angle is in** — `box_orbit — 60° is a lattice symmetry, 30° is not`
+- **fill an arc and read its shell back** — `arc_fill · arc_recover_centre · arc_shells_upto · arc_shell_max`
+- **select a box** — `box_new · box_fill`; `box_orbit` — 60° is a lattice symmetry, 30° is not
+- **a thick wall, and whether it holds** — `box_ring_out · box_ring_in · flood_outside · leak_count`
+  (`set_connected` says one chain, not closed)
+- **a wall along a line** — `wall_from_run · wall_write · wall_read_run`; `wall_is_exact` for the 12
+  exact directions of 24
 - **get a marking back in walk order** — `wall_chain_walk`, where `wall_chain_ends` and
   `wall_chain_branches` only count. A scan of stored edges has **no order at all**, and
   `wall_read_run` needs a chain's two ends; a marking with a **corner** in it has no such
@@ -27,6 +31,8 @@ centre recovers exactly and whose radius quantises to a realisable shell `3k²+m
   seeds wherever the scan lands, so its first and last span may be one run (`wc_loop`
   says so, and what to do about it is yours); and at a **branch** the order is one of
   several (`wc_branch` counts the vertices where the walk had to choose).
+
+A guide that runs: [`docs/01-getting-started.loft`](docs/01-getting-started.loft).
 
 ## The worked examples, in the tests
 
@@ -57,9 +63,8 @@ Run them yourself: `loft --interpret --tests tests` from the `hex_shape/` direct
 
 ## The rules that bite
 
-- **Discover the API from source or `loft api hex_shape` once published** — not from memory. Even the
-  authors mis-recall signatures; the tests exist because guessing is unreliable.
-- **A refusal is data, not an error.** Where a map can decline (the doorstep, recovery), it returns
-  a *reason* and an *offer*, and your editor should show them rather than treating the call as failed.
-- **No `ε` in an R1 comparison.** For content you authored, recovery is exact; a tolerance there is
-  a defect, not a knob (`SPEC` **P4**).
+- **Discover the API from source or `loft api hex_shape`** — not from memory.
+- **A refused run is `p = 0`, not an error.** `snap_run_from_heading` answers `p = 0` for an anchor
+  that is not a vertex or a zero length; check it before building a wall from it.
+- **Snap a radius to a shell first.** `arc_fill` draws the shell below a value no `(k, m)` realises
+  and says nothing; `arc_shells_upto` is the grid.

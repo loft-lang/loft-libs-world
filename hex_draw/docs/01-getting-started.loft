@@ -1,0 +1,112 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @NAME: Getting Started
+// @TITLE: Draw a small house into the field — floor, walls, a door — and read one wall back as a single flat surface.
+//
+// `hex_draw` turns a `Plan` (a rectangle on the hex lattice: a centre cell, a width and depth in
+// hex steps, one of six rotations and a mirror) into the layers a building is stored as: FLOOR
+// cells, WALL edges, OPENINGS on those edges and a ROOF height field.  And it reads a wall back:
+// the edges of one side average to one exact flat surface, which is what a renderer draws and a
+// game collides with.
+//
+// It is not the storage and not the plan.  `hex_field` holds the cells, edges and heights
+// (`HexSet`, `EdgeSet`, `Labels`, `Heights`); `hex_form` owns `Plan` and the side runs.  Reach for
+// `hex_draw` to draw a building into those, or to recover a wall's surface from them.
+use hex_draw::*;
+use hex_form::*;
+use hex_field::*;
+
+struct House { cells: HexSet, edges: EdgeSet }
+
+// A 4 x 2 house on cell (0, 0), floor type 1 and wall material 7.
+fn house() -> House {
+  h = House { cells: hexset_chunk(-10, -10, 21, 21), edges: edgeset_new(-10, -10, 21, 21) };
+  draw_floor(plan(), h.cells, labels_new(-10, -10, 21, 21), 1);
+  draw_walls(h.cells, h.edges, 7);
+  h
+}
+
+fn plan() -> Plan { plan_new(0, 0, 4, 2, 0, false) }
+
+fn main() {
+  cells = hexset_chunk(-10, -10, 21, 21);
+  types = labels_new(-10, -10, 21, 21);
+  edges = edgeset_new(-10, -10, 21, 21);
+  floor = draw_floor(plan(), cells, types, 1);
+  walls = draw_walls(cells, edges, 7);
+  println("floor {floor} cells, walls {walls} edges, floor after walls {hexset_count(cells)}");
+  assert(floor == 13 && walls == 26, "5 + 4 + 4 cells; every edge between a floor cell and outside");
+  assert(hexset_count(cells) == 13, "a wall is an edge, so it costs no floor");
+
+  // Every section below is a function, and `main` calls each one: a section nothing calls
+  // still compiles, but its assertions never run.
+  four_sides();
+  a_door_is_a_material();
+  a_wall_reads_back_as_one_surface();
+}
+
+// That prints:
+//
+//     floor 13 cells, walls 26 edges, floor after walls 13
+//
+// ## Four sides
+//
+// A wall is the boundary of the floor: every edge between a floor cell and a cell outside it.
+// That boundary is closed by construction at any size or rotation.  `side_edges` (from
+// `hex_form`) sorts those edges onto the plan's four sides — 0 and 2 at the ends of the width,
+// 1 and 3 along it — and gives each one its place `t` from 0 to 1 along the side.
+
+fn four_sides() {
+  h = house();
+  counts: vector<integer> = [];
+  for s in 0..4 { counts += [side_run_len(side_edges(plan(), h.cells, s))]; }
+  assert("{counts}" == "[5,8,5,8]", "the two ends and the two long sides");
+  println("sides   : {counts} edges, 26 in all");
+}
+
+// ## A door is a material
+//
+// `place_opening` puts an opening of `nedges` edges on a side, centred at `t`, by writing an
+// opening material onto those wall edges: `OPEN_DOOR`, `OPEN_WINDOW` or `OPEN_GAP`.  The wall
+// stays one continuous run, so a renderer can draw a frame there.  `OPEN_NONE` is the value 0,
+// which means NO wall: writing it deletes the edges and splits the wall in two.  `wall_edge_count`
+// counts the edges that still carry a material.
+
+fn a_door_is_a_material() {
+  h = house();
+  placed = place_opening(plan(), h.cells, h.edges, 1, 0.5, 2, OPEN_DOOR);
+  assert(placed == 2 && wall_edge_count(h.cells, h.edges) == 26, "a door: still 26 wall edges");
+
+  g = house();
+  place_opening(plan(), g.cells, g.edges, 1, 0.5, 2, OPEN_NONE);
+  holes = wall_edge_count(g.cells, g.edges);
+  assert(holes == 24, "material 0 removed two edges");
+  println("opening : a door keeps 26 wall edges; OPEN_NONE leaves {holes}");
+}
+
+// ## A wall reads back as one surface
+//
+// A wall is stored as a zigzag strip of edges, but it is meant as one flat face.
+// `surface_of` recovers that face by AVERAGING the side's edges, in exact integers: the summed
+// edge vector is the direction and the mean edge midpoint is the position.  Nothing is fitted,
+// so there is no tolerance.  `surface_is_exact` says the direction lies exactly on one of the
+// lattice's twelve headings.  Side 1's eight edges have midpoints at y = 2.25, spread evenly
+// either side of x = 0, so that is the surface's mean.
+
+fn a_wall_reads_back_as_one_surface() {
+  h = house();
+  w = surface_of(plan(), h.cells, 1);
+  mx = surface_mean_x(w);
+  my = surface_mean_y(w);
+  assert(surface_is_exact(w), "the averaged direction is a lattice heading");
+  assert(mx == 0.0 && my == 2.25, "the mean of the eight edge midpoints");
+  println("surface : side 1 is one flat face through ({mx}, {my})");
+}
+
+// ## Where to go next
+//
+// - `tests/02-worked-examples.loft` — `@HXD-001` … `@HXD-007`: one quad, not a strip; why
+//   exactness is a zero cross product; the mitered corner; a door is a material; counting wall
+//   edges in all six directions; a feature indexed by its exact `t`; and the gable roof.
+// - `draw_roof` writes a roof height field into a `Heights`; `surface_quad` gives the mitered
+//   quad a renderer draws.

@@ -1,0 +1,146 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @NAME: Getting Started
+// @TITLE: Put two buildings side by side without a wall between them, seat one on a slope, and pose a body.
+//
+// `hex_place` answers what happens where two things MEET on the hex lattice.  Two stencils
+// (footprints) placed side by side should become one building, not two with a wall down the
+// middle.  A stencil placed on sloping ground should keep its footprint and report how badly it
+// fits.  A body that moves (a rotated, translated "pose") must be tested in its own frame, so
+// float error lives in one place only.
+//
+// It is not the cell set and not the shape.  `hex_field` holds which cells are filled and which
+// edges are walls (`HexSet`, `EdgeSet`, `Heights`); `hex_form` describes a shape by its sides.
+// Reach for `hex_place` when you combine stencils, seat them on terrain, or test a posed body.
+//
+// Coordinates are `hex_field`'s: odd-r offset `(q, r)`, every cell with six edges.
+use hex_place::*;
+use hex_field::*;
+
+// A 2x2 block of cells with its left column at `q0`, in a chunk with room around it.
+fn block(q0: integer) -> HexSet {
+  s = hexset_chunk(-10, -10, 21, 21);
+  for r in 0..2 { for q in q0..q0 + 2 { hexset_set(s, q, r, true); } }
+  s
+}
+
+fn main() {
+  a = block(0);                         // cells q 0..1
+  b = block(2);                         // cells q 2..3 — touching a, not overlapping
+  walls = edgeset_new(-10, -10, 21, 21);
+  cut = combine_cut(a, 1, b, 2, walls); // material 1 for a's walls, 2 for b's
+  seam = shared_marked(a, b, walls);
+  println("walls cut: {cut}, walls between the two: {seam}");
+  assert(cut == 22 && seam == 0, "the outline of one 4x2 building, and no wall inside it");
+
+  // Every section below is a function, and `main` calls each one: a section nothing calls
+  // still compiles, but its assertions never run.
+  why_cut_once();
+  a_level_is_a_sheet();
+  seating_on_a_slope();
+  a_posed_body();
+}
+
+// That prints:
+//
+//     walls cut: 22, walls between the two: 0
+//
+// ## Why cut once
+//
+// `combine_cut` takes the UNION of the two footprints and cuts the union's outline once,
+// tagging each wall with the material of the stencil whose cell it borders.  The edge the two
+// share is inside the union, so nobody cuts it.  Cutting each stencil's own outline instead
+// gives each 2x2 block its 14 walls, and the 3 edges between them are cut twice — a wall down
+// the middle of what was drawn as one building.  The arithmetic shows where they went:
+// 14 + 14 - 2 * 3 = 22.  The result does not depend on which stencil you pass first.
+
+fn why_cut_once() {
+  a = block(0);
+  b = block(2);
+  overlay = edgeset_new(-10, -10, 21, 21);
+  na = combine_cut(a, 1, a, 1, overlay);   // a's own outline
+  nb = combine_cut(b, 2, b, 2, overlay);   // b's own outline, into the same set
+  seam = shared_marked(a, b, overlay);
+  assert(na == 14 && nb == 14 && seam == 3, "each block alone has 14 walls, and 3 now separate them");
+
+  swapped = edgeset_new(-10, -10, 21, 21);
+  assert(combine_cut(b, 2, a, 1, swapped) == 22, "the other order cuts the same 22");
+  println("overlay : 14 + 14 walls, 3 of them inside the building");
+}
+
+// ## A level is a sheet
+//
+// A LEVEL is which sheet a thing sits on — a bridge is on level 1 over a road on level 0.  It is
+// not a height.  `combine_cut_level` keeps only the stencils on the level you ask for, then cuts
+// as `combine_cut` does, so two stencils on different levels never fuse and never contend.
+
+fn a_level_is_a_sheet() {
+  road = block(0);
+  bridge = block(2);
+  e0 = edgeset_new(-10, -10, 21, 21);
+  e1 = edgeset_new(-10, -10, 21, 21);
+  at0 = combine_cut_level(road, 0, 1, bridge, 1, 2, 0, e0);
+  at1 = combine_cut_level(road, 0, 1, bridge, 1, 2, 1, e1);
+  assert(at0 == 14 && at1 == 14, "at each level only one block is there, with its own 14 walls");
+  same = edgeset_new(-10, -10, 21, 21);
+  assert(combine_cut_level(road, 0, 1, bridge, 0, 2, 0, same) == 22, "on one level they fuse again");
+  println("levels  : 14 walls on each sheet; 22 when both share one");
+}
+
+// ## Seating on a slope
+//
+// A stencil is drawn flat; the ground is not.  Seating picks one height for the whole footprint
+// — the lowest ground (`SEAT_LOW`), the mean (`SEAT_MEAN`) or the highest (`SEAT_HIGH`) — and
+// `seat_residual` hands back the worst gap between that height and the ground, which is the cut
+// and fill the placement owes.  `seat_write` writes the height into the `Heights` and touches no
+// cell, so the footprint is the same on any ground.
+
+fn seating_on_a_slope() {
+  a = block(0);
+  ground = heights_new(-10, -10, 21, 21);
+  for r in 0..2 { for q in 0..2 { height_set(ground, q, r, (q + 2 * r) as float); } }   // 0, 1, 2, 3
+
+  low = seat_height(a, ground, SEAT_LOW);
+  mean = seat_height(a, ground, SEAT_MEAN);
+  high = seat_height(a, ground, SEAT_HIGH);
+  assert(low == 0.0 && mean == 1.5 && high == 3.0, "the lowest, the mean and the highest ground");
+  gap = seat_residual(a, ground, mean);
+  assert(gap == 1.5, "seated at the mean, the worst gap is 1.5");
+  assert(seat_residual(a, ground, low) == 3.0, "perched on the lowest ground, it is 3.0");
+
+  assert(seat_write(a, ground, mean) == 4, "four cells get the seat height");
+  assert(hexset_count(a) == 4 && height_get(ground, 1, 1) == 1.5, "same footprint; the ground is levelled");
+  println("seat    : low {low}, mean {mean}, high {high}; worst gap at the mean {gap}");
+}
+
+// ## A posed body
+//
+// A body that moves carries a `Pose`: a rotation given as its cosine and sine, then a
+// translation.  To ask whether a world point touches the body, transform the point into the
+// body's frame once and test there — `disk_hit` does that for a disk.  This transform is the only
+// floating-point step, so compare its results with a tolerance, never with `==`.
+//
+// Where two frames disagree about a point, `arb_solid` says solid if either does, so a crack
+// between them gives a spurious contact rather than a fall through the world.  `arb_owner` names
+// the solid frame with the LOWEST id, or -1 when neither is solid — and -1 is not an id.
+
+fn a_posed_body() {
+  p = pose_new(0.6, 0.8, 10.0, 0.0);      // turned by the angle with cos 0.6, sin 0.8; moved 10 in x
+  wx = pose_fwd_x(p, 5.0, 0.0);           // the body's local point (5, 0), in the world
+  wy = pose_fwd_y(p, 5.0, 0.0);
+  assert(abs(wx - 13.0) < 0.000001 && abs(wy - 4.0) < 0.000001, "lands at (13, 4)");
+
+  // A disk of radius 2 (squared radius 4) at the body's origin.
+  assert(disk_hit(p, 0.0, 0.0, 4.0, 11.0, 1.0), "(11, 1) is (1.4, -0.2) locally: inside");
+  assert(!disk_hit(p, 0.0, 0.0, 4.0, 13.0, 0.0), "(13, 0) is (1.8, -2.4) locally: 3 away, outside");
+
+  assert(arb_solid(false, true) && arb_owner(true, 7, true, 3) == 3, "solid wins; the lower id owns it");
+  assert(arb_owner(false, 7, false, 3) == -1, "no solid frame: -1");
+  println("pose    : local (5, 0) is world ({wx:.1}, {wy:.1})");
+}
+
+// ## Where to go next
+//
+// - `tests/02-worked-examples.loft` — `@HXP-001` … `@HXP-006`: the shared edge, order and
+//   overlap, levels, seating, why one sample of the pose error is not a bound, and arbitration.
+// - `USAGE.md` — the map of the package, and the rules that bite.

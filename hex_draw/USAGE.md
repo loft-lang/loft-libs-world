@@ -17,9 +17,12 @@ geometry itself.
 
 ## The things you will reach for
 
-- **draw a house** — `draw_floor · draw_walls · place_opening · draw_roof`
+- **draw a house** — `draw_floor · draw_walls · place_opening · draw_roof` (the `Plan` is `hex_form`'s `plan_new`)
+- **count what a wall still holds** — `wall_edge_count`
 - **get a wall's collision surface** — `surface_of · surface_is_exact · surface_span`
 - **the mitered render quad** — `surface_quad`
+
+A guide that runs: [`docs/01-getting-started.loft`](docs/01-getting-started.loft).
 
 ## The worked examples, in the tests
 
@@ -46,12 +49,9 @@ Run them yourself: `loft --interpret --tests tests` from the `hex_draw/` directo
 
 ## The rules that bite
 
-- **Discover the API from source or `loft api hex_draw` once published** — not from memory. Even the
-  authors mis-recall signatures; the tests exist because guessing is unreliable.
-- **A refusal is data, not an error.** Where a map can decline (the doorstep, recovery), it returns
-  a *reason* and an *offer*, and your editor should show them rather than treating the call as failed.
-- **No `ε` in an R1 comparison.** For content you authored, recovery is exact; a tolerance there is
-  a defect, not a knob (`SPEC` **P4**). The exactness lives in the INTEGER half — the summed direction
+- **Discover the API from source or `loft api hex_draw`** — not from memory.
+- **No `ε` when checking a recovered surface.** It is an average of exact rationals, so a tolerance
+  there hides a defect (`SPEC` **P4**). The exactness lives in the INTEGER half — the summed direction
   and the rational mean — so test it there (`surface_heading`), not on a float projected through
   world coordinates (`@HXD-001`).
 - **Never diff a recovered surface against `Plan` geometry.** What `surface_of` recovers is the wall
