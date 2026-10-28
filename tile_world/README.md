@@ -9,6 +9,8 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 loft install tile_world
 ```
 
+The game this library is built for is designed in [DESIGN.md](DESIGN.md).
+
 ## The memory model
 
 - **Layers:** `z` is the floor level, unbounded both ways: negative for dungeons and mines,
