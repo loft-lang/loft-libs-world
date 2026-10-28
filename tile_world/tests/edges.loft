@@ -1,0 +1,157 @@
+// Edges between cells, a layer's ground, and a cell's rise.  Kinds: floor (walkable), wall
+// (opaque); a box (1 high, blocks) and a lamp (a light).  Edge kinds: a wall (not crossed,
+// opaque), a door (crossed, opaque), a window (not crossed, see-through).  Every answer is
+// worked out by hand in its cell.
+use tile_world;
+
+const FLOOR = 1;
+const WALL = 2;
+const BOX = 1;
+const LAMP = 2;
+const E_WALL = 1;
+const E_DOOR = 2;
+const E_WINDOW = 3;
+
+// A room x 0 .. 4, y 0 .. 2 on layer 0, walled round, under a ceiling.
+fn room() -> tile_world::World {
+  w = tile_world::world();
+  tile_world::terrain_kind(w, FLOOR, true, false, false, ".");
+  tile_world::terrain_kind(w, WALL, false, true, false, "#");
+  tile_world::thing_kind(w, BOX, 1, true, false, false, "b");
+  tile_world::thing_kind(w, LAMP, 0, false, false, true, "*");
+  tile_world::edge_kind(w, E_WALL, false, true, "|");
+  tile_world::edge_kind(w, E_DOOR, true, true, "+");
+  tile_world::edge_kind(w, E_WINDOW, false, false, "=");
+  tile_world::fill(w, -1, -1, 5, 3, 0, WALL);
+  tile_world::fill(w, 0, 0, 4, 2, 0, FLOOR);
+  tile_world::fill(w, -1, -1, 5, 3, 1, FLOOR);
+  w
+}
+
+fn main() {
+  w = room();
+  assert(tile_world::edge(w, 2, 2, 0, tile_world::NORTH) == 0, "no edges to start with");
+}
+
+// A cell's east edge is its east neighbour's west edge; its south edge is the cell below's north.
+fn test_an_edge_is_shared_by_its_two_cells() {
+  w = room();
+  tile_world::set_edge(w, 2, 1, 0, tile_world::EAST, E_WALL);
+  assert(tile_world::edge(w, 3, 1, 0, tile_world::WEST) == E_WALL, "the same edge from the east");
+  tile_world::set_edge(w, 2, 1, 0, tile_world::SOUTH, E_WINDOW);
+  assert(tile_world::edge(w, 2, 2, 0, tile_world::NORTH) == E_WINDOW, "the same edge from below");
+  assert(tile_world::edge(w, 2, 1, 0, tile_world::EAST) == E_WALL, "setting the south kept the east");
+  tile_world::set_edge(w, 3, 1, 0, tile_world::WEST, 0);
+  assert(tile_world::edge(w, 2, 1, 0, tile_world::EAST) == 0, "taken away from either side");
+  tile_world::set_edge(w, -40, 70, 0, tile_world::NORTH, E_DOOR);
+  assert(tile_world::edge(w, -40, 69, 0, tile_world::SOUTH) == E_DOOR, "far out, in a new chunk");
+}
+
+// Crossing and seeing across each edge kind, both ways.
+fn test_crossing_and_seeing() {
+  w = room();
+  tile_world::set_edge(w, 1, 0, 0, tile_world::EAST, E_WALL);
+  tile_world::set_edge(w, 1, 1, 0, tile_world::EAST, E_DOOR);
+  tile_world::set_edge(w, 1, 2, 0, tile_world::EAST, E_WINDOW);
+  assert(!tile_world::crossable(w, 1, 0, 0, 1, 0) && !tile_world::crossable(w, 2, 0, 0, -1, 0), "a wall, both ways");
+  assert(!tile_world::see_through(w, 1, 0, 0, 1, 0), "a wall stops sight");
+  assert(tile_world::crossable(w, 2, 1, 0, -1, 0) && !tile_world::see_through(w, 2, 1, 0, -1, 0), "a door: crossed, not seen through");
+  assert(!tile_world::crossable(w, 1, 2, 0, 1, 0) && tile_world::see_through(w, 1, 2, 0, 1, 0), "a window: seen through, not crossed");
+  assert(tile_world::crossable(w, 0, 0, 0, 0, 1) && tile_world::see_through(w, 0, 0, 0, 0, 1), "no edge");
+  tile_world::set_edge(w, 3, 0, 0, tile_world::EAST, 9);
+  assert(!tile_world::crossable(w, 3, 0, 0, 1, 0) && !tile_world::see_through(w, 3, 0, 0, 1, 0), "an undeclared edge kind is a wall");
+}
+
+// Wall edges between x 1 and x 2 on rows 0 and 1 leave a gap on row 2: from (0, 0) to (3, 0) the
+// walk goes down to row 2, across, and back up: 3 across + 2 down + 2 up = 7 steps.
+fn test_a_path_goes_round_wall_edges() {
+  w = room();
+  assert(len(tile_world::shortest_path(w, 0, 0, 3, 0, 0)) == 3, "3 steps with no edges");
+  tile_world::set_edge(w, 1, 0, 0, tile_world::EAST, E_WALL);
+  tile_world::set_edge(w, 1, 1, 0, tile_world::EAST, E_WALL);
+  p = tile_world::shortest_path(w, 0, 0, 3, 0, 0);
+  assert(len(p) == 7, "7 steps, got {len(p)}");
+  px = 0;
+  crossed_at = -1;
+  for c in p {
+    if px == 1 && c.0 == 2 { crossed_at = c.1; }
+    px = c.0;
+  }
+  assert(crossed_at == 2, "crossed from x 1 to x 2 on row 2, got {crossed_at}");
+  tile_world::set_edge(w, 1, 2, 0, tile_world::EAST, E_DOOR);
+  assert(len(tile_world::shortest_path(w, 0, 0, 3, 0, 0)) == 7, "a door on the gap is still a way through");
+  tile_world::set_edge(w, 1, 2, 0, tile_world::EAST, E_WINDOW);
+  assert(len(tile_world::shortest_path(w, 0, 0, 3, 0, 0)) == 0, "a window is not");
+}
+
+// Light from a lamp at (0, 0), along row 0 from x -1 (the west wall) to x 5 (the east wall).
+// Walls on the east edges of x 2, every row: x 3 and on are dark.  Windows instead: the light
+// passes, one shade a step.
+fn row(w: const tile_world::World) -> text {
+  t = "";
+  for s in tile_world::shades(w, -1, 0, 5, 0, 0) { t += "{s},"; }
+  t
+}
+
+fn test_light_and_sight_stop_at_opaque_edges() {
+  w = room();
+  tile_world::place(w, 0, 0, 0, LAMP);
+  for y in 0..3 { tile_world::set_edge(w, 2, y, 0, tile_world::EAST, E_WALL); }
+  assert(row(w) == "1,0,1,2,7,7,7,", "wall edges: {row(w)}");
+  assert(!tile_world::line_of_sight(w, 0, 1, 4, 1, 0), "no sight across them");
+  for y in 0..3 { tile_world::set_edge(w, 2, y, 0, tile_world::EAST, E_WINDOW); }
+  assert(row(w) == "1,0,1,2,3,4,5,", "window edges: {row(w)}");
+  assert(tile_world::line_of_sight(w, 0, 1, 4, 1, 0), "sight through the windows");
+}
+
+// One diagonal step from (0, 0) to (1, 1) passes the corner either way round: with the east edge
+// of (0, 0) a wall it goes round by (0, 1); with the south edge a wall too, there is no way.
+fn test_a_diagonal_sees_round_one_side_of_a_corner() {
+  w = room();
+  tile_world::set_edge(w, 0, 0, 0, tile_world::EAST, E_WALL);
+  assert(tile_world::line_of_sight(w, 0, 0, 1, 1, 0), "round by the south");
+  tile_world::set_edge(w, 0, 0, 0, tile_world::SOUTH, E_WALL);
+  assert(!tile_world::line_of_sight(w, 0, 0, 1, 1, 0), "both ways shut");
+}
+
+// A ground: every unset cell of layer 0 reads as floor with tile 7 and costs no chunk; a cell set
+// to void is a pit; `clear` gives it back to the ground.  A ground on the layer above is a
+// ceiling over every cell.
+fn test_a_ground_is_open_land_for_nothing() {
+  w = room();
+  v = tile_world::world();
+  tile_world::terrain_kind(v, FLOOR, true, false, false, ".");
+  tile_world::set_ground(v, 0, FLOOR, 7);
+  assert(tile_world::terrain(v, 500, -300, 0) == FLOOR && tile_world::tile(v, 500, -300, 0) == 7, "floor, tile 7, far out");
+  assert(tile_world::chunk_count(v) == 0 && tile_world::passable(v, 500, -300, 0), "no chunk, and walkable");
+  assert(tile_world::open_sky(v, 3, 3, 0), "nothing above layer 0");
+  tile_world::set_terrain(v, 1, 1, 0, tile_world::VOID);
+  assert(tile_world::terrain(v, 1, 1, 0) == tile_world::VOID && tile_world::is_set(v, 1, 1, 0), "a pit");
+  assert(!tile_world::passable(v, 1, 1, 0), "a pit is not walked on");
+  tile_world::clear(v, 1, 1, 0);
+  assert(tile_world::terrain(v, 1, 1, 0) == FLOOR && !tile_world::is_set(v, 1, 1, 0), "the ground again");
+  assert(tile_world::terrain(v, 9, 9, 1) == tile_world::VOID, "layer 1 has no ground");
+  tile_world::set_ground(v, 1, FLOOR);
+  assert(!tile_world::open_sky(v, 3, 3, 0), "a ground on layer 1 is a ceiling");
+  tile_world::set_ground(v, 0, tile_world::VOID);
+  assert(tile_world::terrain(v, 500, -300, 0) == tile_world::VOID && tile_world::ground(v, 0) == tile_world::VOID, "taken away");
+  assert(tile_world::terrain(w, 2, 2, 0) == FLOOR, "a world without a ground is as it was");
+}
+
+// A hillside: rises 1, 2, 3 at x 1, 2, 3 — each one step above the last.  A box on the top
+// stands 4.  A rise keeps the cell's edges, and the edges keep it.
+fn test_a_rise_makes_a_slope() {
+  w = room();
+  for x in 1..4 { tile_world::set_rise(w, x, 0, 0, x); }
+  assert(tile_world::height(w, 0, 0, 0) == 0 && tile_world::height(w, 2, 0, 0) == 2, "0 at the foot, 2 halfway");
+  tile_world::place(w, 3, 0, 0, BOX);
+  assert(tile_world::height(w, 3, 0, 0) == 4, "a box on rise 3 stands 4");
+  tile_world::set_edge(w, 2, 0, 0, tile_world::NORTH, E_WALL);
+  tile_world::set_edge(w, 2, 0, 0, tile_world::WEST, E_DOOR);
+  tile_world::set_rise(w, 2, 0, 0, 15);
+  assert(tile_world::rise(w, 2, 0, 0) == 15, "rise 15, the most");
+  assert(tile_world::edge(w, 2, 0, 0, tile_world::NORTH) == E_WALL && tile_world::edge(w, 2, 0, 0, tile_world::WEST) == E_DOOR,
+         "the edges stayed");
+  tile_world::set_edge(w, 2, 0, 0, tile_world::NORTH, 0);
+  assert(tile_world::rise(w, 2, 0, 0) == 15, "and the rise stayed");
+}
