@@ -168,3 +168,29 @@ fn test_view() {
   got = tile_world::view(w, -1, 0, 5, 0, 0, marks);
   assert(got == "#@b.=.#\n", "got {got}");
 }
+
+// What a world holds, listed: layers lowest first, a layer's chunks in reading order, the
+// cells with things layer by layer in reading order.  Chunks: (-1, 0) holds x -32 .. -1.
+fn test_enumeration() {
+  w = tile_world::world();
+  kinds(w);
+  tile_world::set_terrain(w, 40, 5, 2, FLOOR);
+  tile_world::set_terrain(w, -1, 5, 0, FLOOR);
+  tile_world::set_terrain(w, 3, 70, 0, FLOOR);
+  tile_world::set_terrain(w, 3, 3, 0, WALL);
+  tile_world::set_terrain(w, 0, 0, -1, FLOOR);
+  ls = "";
+  for z in tile_world::layers(w) { ls += "{z},"; }
+  assert(ls == "-1,0,2,", "layers {ls}");
+  cs = "";
+  for c in tile_world::chunks(w, 0) { cs += "({c.0},{c.1})"; }
+  assert(cs == "(-1,0)(0,0)(0,2)", "layer 0's chunks {cs}");
+  assert(len(tile_world::chunks(w, 5)) == 0, "an empty layer has none");
+  tile_world::place(w, 3, 3, 0, BOX);
+  tile_world::place(w, 1, 9, 0, LAMP);
+  tile_world::place(w, 2, 3, 0, BOX);
+  tile_world::place(w, 0, 0, -1, BOX);
+  ss = "";
+  for s in tile_world::stacks(w) { ss += "({s.0},{s.1},{s.2})"; }
+  assert(ss == "(0,0,-1)(2,3,0)(3,3,0)(1,9,0)", "stacks {ss}");
+}

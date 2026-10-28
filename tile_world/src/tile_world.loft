@@ -135,6 +135,49 @@ pub fn chunk_count(w: const World) -> integer {
   len(w.chunks)
 }
 
+/// The layers that hold any terrain, lowest first — what saving the world walks.
+pub fn layers(w: const World) -> vector<integer> {
+  out: vector<integer> = [];
+  for c in w.chunks {
+    at = 0;
+    while at < len(out) && (out[at] ?? 0) < c.z { at += 1; }
+    if at == len(out) || (out[at] ?? 0) != c.z { out.insert(at, c.z); }
+  }
+  out
+}
+
+/// The chunks layer z holds, as (cx, cy), in reading order (row by row, west to east) — each
+/// one 32x32 cells from (cx * 32, cy * 32).
+pub fn chunks(w: const World, z: integer) -> vector<(integer, integer)> {
+  out: vector<(integer, integer)> = [];
+  for c in w.chunks {
+    if c.z != z { continue; }
+    at = 0;
+    while at < len(out) && before(out[at].1, out[at].0, c.cy, c.cx) { at += 1; }
+    out.insert(at, (c.cx, c.cy));
+  }
+  out
+}
+
+/// Every cell that holds things, as (x, y, z): layer by layer, lowest first, each in reading
+/// order.
+pub fn stacks(w: const World) -> vector<(integer, integer, integer)> {
+  out: vector<(integer, integer, integer)> = [];
+  for s in w.stacks {
+    at = 0;
+    while at < len(out) && (out[at].2 < s.z || (out[at].2 == s.z && before(out[at].1, out[at].0, s.y, s.x))) {
+      at += 1;
+    }
+    out.insert(at, (s.x, s.y, s.z));
+  }
+  out
+}
+
+// Does row-major position (ay, ax) come before (by, bx)?
+fn before(ay: integer, ax: integer, by: integer, bx: integer) -> boolean {
+  ay < by || (ay == by && ax < bx)
+}
+
 // --- Terrain ---
 
 /// Set a cell's terrain: a kind (0..15) and, for the picture, a tile number (0..4095).
