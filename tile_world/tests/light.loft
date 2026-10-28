@@ -1,0 +1,89 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Light: each cell is one shade darker per step from the nearest light, down to DARKEST (7).
+// The scene is a corridor x 0 .. 6 at y 0 under a ceiling, walled all round (x -1 and x 7 are
+// walls), so nothing is open sky unless a cell says so.  Rows are read from x -1 to x 7.
+use tile_world;
+
+fn corridor() -> tile_world::World {
+  w = tile_world::world();
+  tile_world::fill(w, -1, -1, 7, 1, 0, tile_world::WALL);
+  tile_world::fill(w, 0, 0, 6, 0, 0, tile_world::FLOOR);
+  tile_world::fill(w, -1, -1, 7, 1, 1, tile_world::FLOOR);
+  tile_world::put_hero(w, 0, 0, 0);
+  w
+}
+
+fn row(w: const tile_world::World) -> text {
+  t = "";
+  for s in tile_world::shades(w, -1, 0, 7, 0, 0) { t += "{s},"; }
+  t
+}
+
+fn main() {
+  w = corridor();
+  assert(row(w) == "7,7,7,7,7,7,7,7,7,", "no light, no open sky: all darkest, never black: {row(w)}");
+}
+
+// A torch (the staff) on the west wall: 0 there, then 1 .. 7 eastwards; the east wall is 8 steps
+// away and reads the darkest, 7.
+fn test_a_torch_fades_by_one_shade_a_step() {
+  w = corridor();
+  tile_world::place(w, -1, 0, 0, tile_world::STAFF);
+  assert(row(w) == "0,1,2,3,4,5,6,7,7,", "{row(w)}");
+}
+
+// A wall in the corridor at x 3 is lit (4) and stops the light: what is past it is dark.
+fn test_a_wall_takes_light_and_stops_it() {
+  w = corridor();
+  tile_world::place(w, -1, 0, 0, tile_world::STAFF);
+  tile_world::set_terrain(w, 3, 0, 0, tile_world::WALL);
+  assert(row(w) == "0,1,2,3,4,7,7,7,7,", "{row(w)}");
+}
+
+// The ceiling over x 6 taken away: the sky lights x 6 (0) and its neighbours by distance, and
+// each cell takes the nearer of the two lights: x 3 is 4 from the torch, 3 from the sky.
+fn test_open_sky_is_a_light() {
+  w = corridor();
+  tile_world::place(w, -1, 0, 0, tile_world::STAFF);
+  tile_world::set_terrain(w, 6, 0, 1, tile_world::VOID);
+  assert(row(w) == "0,1,2,3,3,2,1,0,1,", "{row(w)}");
+}
+
+// The hero takes the torch off the wall (walking west into it), carries the light east, and
+// fixes it to the east wall.
+fn test_the_staff_is_carried_and_fixed() {
+  w = corridor();
+  tile_world::place(w, -1, 0, 0, tile_world::STAFF);
+  assert(tile_world::walk(w, -1, 0) == tile_world::Step.Took, "taken off the wall");
+  assert(w.hero_item == tile_world::STAFF && w.hero_x == 0, "held, the hero did not move");
+  assert(row(w) == "1,0,1,2,3,4,5,6,7,", "the light is the hero: {row(w)}");
+  for _ in 0..6 { _ = tile_world::walk(w, 1, 0); }
+  assert(tile_world::walk(w, 1, 0) == tile_world::Step.Placed, "fixed to the east wall");
+  assert(w.hero_item == 0 && w.hero_x == 6, "the hand is empty");
+  assert(row(w) == "7,7,6,5,4,3,2,1,0,", "{row(w)}");
+  assert(tile_world::walk(w, 1, 0) == tile_world::Step.Took, "and taken again");
+  assert(tile_world::walk(w, 0, 1) == tile_world::Step.Placed, "and fixed to the south wall");
+}
+
+// A staff on the floor is picked up by walking onto it; with empty hands a bare wall is a wall.
+fn test_a_staff_on_the_floor_is_picked_up() {
+  w = corridor();
+  tile_world::place(w, 2, 0, 0, tile_world::STAFF);
+  assert(tile_world::walk(w, 0, -1) == tile_world::Step.Blocked, "a bare wall, empty hands");
+  _ = tile_world::walk(w, 1, 0);
+  assert(tile_world::walk(w, 1, 0) == tile_world::Step.Walked, "onto the staff");
+  assert(w.hero_item == tile_world::STAFF && tile_world::top(w, 2, 0, 0) == 0, "picked up");
+}
+
+// The cellar is solvable: take the torch, push the rock east twice (it stops at 7), slip up
+// into row 1 at x 6 past the wall at x 5, and walk out to the yard at x 12.  Pushing the rock
+// on instead rolls it into the yard's row and shuts the lower way out.
+fn test_the_cellar_is_solved_with_the_torch() {
+  w = tile_world::the_cellar();
+  assert(!tile_world::in_daylight(w), "starts in the cellar");
+  assert(tile_world::walk(w, -1, 0) == tile_world::Step.Took, "the torch");
+  tile_world::play(w, "s d d d d d w d d d d d d");
+  assert(tile_world::in_daylight(w), "out in the yard at {w.hero_x},{w.hero_y}\n{tile_world::view(w, 0, 0, 12, 3, 0)}");
+}

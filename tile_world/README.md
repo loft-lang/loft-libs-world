@@ -37,6 +37,11 @@ The game this library is built for is designed in [DESIGN.md](DESIGN.md).
   carts and pulls up to 2.
 - **Rocks and anvils:** pushed only, never pulled, and never by a cart or another rock. On the
   rails they block trains.
+- **Light:** a wizard's staff is a light.  Fixed to a wall it is a torch: walking into
+  that wall takes it, and walking into a bare wall while holding it fixes it there; on the
+  floor it is picked up by walking onto it.  The open sky (nothing on the layer above) is
+  daylight.  Each cell is one shade darker per step from the nearest light, down to
+  `DARKEST`; a wall is lit but passes no light on.
 - **Green potion:** walking onto one gives +2 strength for 60000 ms of the world's clock
   (`tick(w, ms)`).
 
@@ -46,8 +51,9 @@ The game this library is built for is designed in [DESIGN.md](DESIGN.md).
 | `place`, `things`, `top`, `height`, `train` | the stacks |
 | `put_hero`, `walk`, `pull`, `play(w, "s s d pa …")` | moving |
 | `tick`, `boosted`, `push_strength`, `pull_strength` | strength and time |
+| `shades(w, x0, y0, x1, y1, z)`, `light_source`, `open_sky`, `DARKEST` | light: 0 at a light, one shade darker a step, never black |
 | `view(w, x0, y0, x1, y1, z)` | a layer as text |
-| `first_climb()`, `reached_ledge(w)` | the demo level |
+| `first_climb()`, `reached_ledge(w)`; `the_cellar()`, `in_daylight(w)` | the demo levels |
 
 ## Play
 
