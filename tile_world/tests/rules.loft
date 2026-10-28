@@ -1,0 +1,287 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// The world model and the traversal rules, each a small scene played out move by move; the
+// expected positions, stacks and steps are worked out by hand in each cell.  A failing cell
+// prints the layer as `view` draws it.
+use tile_world;
+
+// A floor row from x 0 to `n - 1` on layer 0, y 0, with walls round it.
+fn row(n: integer) -> tile_world::World {
+  w = tile_world::world();
+  tile_world::fill(w, -1, -1, n, 1, 0, tile_world::WALL);
+  tile_world::fill(w, 0, 0, n - 1, 0, 0, tile_world::FLOOR);
+  w
+}
+
+fn at(w: const tile_world::World) -> text {
+  "{w.hero_x},{w.hero_y},{w.hero_z} h{w.hero_h}"
+}
+
+fn show(w: const tile_world::World, n: integer) -> text {
+  tile_world::view(w, -1, -1, n, 1, w.hero_z)
+}
+
+fn main() {
+  w = tile_world::world();
+  assert(tile_world::terrain(w, 5, 5, 0) == tile_world::VOID, "an empty world is void");
+}
+
+// Chunks are 32 wide and counted from a floor division: -1 is chunk -1, slot 31.
+fn test_addressing() {
+  assert(tile_world::chunk_of(0) == 0 && tile_world::chunk_of(31) == 0, "0 and 31 in chunk 0");
+  assert(tile_world::chunk_of(32) == 1 && tile_world::chunk_of(-1) == -1, "32 in 1, -1 in -1");
+  assert(tile_world::chunk_of(-32) == -1 && tile_world::chunk_of(-33) == -2, "-32 in -1, -33 in -2");
+  assert(tile_world::inside(-1) == 31 && tile_world::inside(-33) == 31 && tile_world::inside(33) == 1,
+         "slots 31, 31, 1");
+}
+
+// Terrain is sparse and per layer: one cell far out and one on another layer make two chunks,
+// and setting more cells in them makes none.
+fn test_sparse_layers() {
+  w = tile_world::world();
+  tile_world::set_terrain(w, -1000000, 7, 0, tile_world::WATER, 12);
+  tile_world::set_terrain(w, -1000000, 7, -3, tile_world::RAIL, 4095);
+  assert(tile_world::chunk_count(w) == 2, "two chunks, got {tile_world::chunk_count(w)}");
+  tile_world::set_terrain(w, -999999, 8, 0, tile_world::FLOOR);
+  assert(tile_world::chunk_count(w) == 2, "a neighbour in the same chunk adds none");
+  assert(tile_world::terrain(w, -1000000, 7, 0) == tile_world::WATER, "water on layer 0");
+  assert(tile_world::tile(w, -1000000, 7, 0) == 12, "its tile");
+  assert(tile_world::terrain(w, -1000000, 7, -3) == tile_world::RAIL, "rail three below");
+  assert(tile_world::tile(w, -1000000, 7, -3) == 4095, "the largest tile number");
+  assert(tile_world::terrain(w, -1000000, 7, -2) == tile_world::VOID, "nothing in between");
+}
+
+// Walls and water stop the hero; so does the void.
+fn test_walls_and_water_block() {
+  w = row(4);
+  tile_world::set_terrain(w, 2, 0, 0, tile_world::WATER);
+  tile_world::put_hero(w, 0, 0, 0);
+  assert(tile_world::walk(w, 0, -1) == tile_world::Step.Blocked, "the wall north");
+  assert(tile_world::walk(w, 1, 0) == tile_world::Step.Walked, "east onto floor");
+  assert(tile_world::walk(w, 1, 0) == tile_world::Step.Blocked, "the river");
+  assert(at(w) == "1,0,0 h0", "stopped at 1: {at(w)}\n{show(w, 4)}");
+}
+
+// Rails at x 1..3; a cart at 1 is pushed to 2 and to 3, and stops where the rails end.
+fn test_cart_runs_on_rails() {
+  w = row(6);
+  tile_world::fill(w, 1, 0, 3, 0, 0, tile_world::RAIL);
+  tile_world::place(w, 1, 0, 0, tile_world::CART);
+  tile_world::put_hero(w, 0, 0, 0);
+  assert(tile_world::walk(w, 1, 0) == tile_world::Step.Pushed, "first push");
+  assert(tile_world::walk(w, 1, 0) == tile_world::Step.Pushed, "second push");
+  assert(tile_world::walk(w, 1, 0) == tile_world::Step.Blocked, "no rail at 4");
+  assert(tile_world::top(w, 3, 0, 0) == tile_world::CART && at(w) == "2,0,0 h0",
+         "cart at 3, hero at 2: {at(w)}\n{show(w, 6)}");
+}
+
+// Pulling a cart: the hero at 2 walks west and the cart at 3 follows onto 2, and again onto 1
+// (the cell the hero left is rail each time).  From the floor at 4 the hero pulls east: the
+// cell it leaves is no rail, so the cart at 3 stays and the hero walks alone.
+fn test_cart_is_pulled_along_rails() {
+  w = row(6);
+  tile_world::fill(w, 1, 0, 3, 0, 0, tile_world::RAIL);
+  tile_world::place(w, 3, 0, 0, tile_world::CART);
+  tile_world::put_hero(w, 2, 0, 0);
+  assert(tile_world::pull(w, -1, 0) == tile_world::Step.Pulled, "pulled");
+  assert(tile_world::top(w, 2, 0, 0) == tile_world::CART && at(w) == "1,0,0 h0",
+         "cart at 2, hero at 1: {at(w)}\n{show(w, 6)}");
+  assert(tile_world::pull(w, -1, 0) == tile_world::Step.Pulled, "pulled again");
+  assert(tile_world::top(w, 1, 0, 0) == tile_world::CART && at(w) == "0,0,0 h0",
+         "cart at 1, hero at 0: {at(w)}\n{show(w, 6)}");
+  v = row(6);
+  tile_world::fill(v, 1, 0, 3, 0, 0, tile_world::RAIL);
+  tile_world::place(v, 3, 0, 0, tile_world::CART);
+  tile_world::put_hero(v, 4, 0, 0);
+  assert(tile_world::pull(v, 1, 0) == tile_world::Step.Walked, "the hero walks off alone");
+  assert(tile_world::top(v, 3, 0, 0) == tile_world::CART && tile_world::top(v, 4, 0, 0) == 0,
+         "the cart stays on its rails\n{show(v, 6)}");
+}
+
+// A rock on the rails stops a pushed cart; the cart does not push it on.  The rock itself is
+// pushed, never pulled, and is not pushed into a cart or another rock.
+fn test_rock_blocks_rails_and_is_only_pushed() {
+  w = row(7);
+  tile_world::fill(w, 1, 0, 5, 0, 0, tile_world::RAIL);
+  tile_world::place(w, 2, 0, 0, tile_world::CART);
+  tile_world::place(w, 3, 0, 0, tile_world::ROCK);
+  tile_world::put_hero(w, 1, 0, 0);
+  assert(tile_world::walk(w, 1, 0) == tile_world::Step.Blocked, "the cart cannot push the rock");
+  assert(tile_world::top(w, 3, 0, 0) == tile_world::ROCK, "the rock stays");
+  // Round the other side: the hero at 4 pushes the rock west into the cart — blocked.
+  tile_world::put_hero(w, 4, 0, 0);
+  assert(tile_world::walk(w, -1, 0) == tile_world::Step.Blocked, "a rock is not pushed into a cart");
+  // Pulling the rock east: the hero walks to 5 and the rock stays at 3.
+  assert(tile_world::pull(w, 1, 0) == tile_world::Step.Walked, "a rock is not pulled");
+  assert(tile_world::top(w, 3, 0, 0) == tile_world::ROCK, "still at 3");
+  // An anvil is the same: pushed off the rails onto the floor at 6.
+  tile_world::place(w, 5, 0, 0, tile_world::ANVIL);
+  tile_world::put_hero(w, 4, 0, 0);
+  assert(tile_world::walk(w, 1, 0) == tile_world::Step.Pushed, "the anvil is pushed");
+  assert(tile_world::top(w, 6, 0, 0) == tile_world::ANVIL, "onto the floor at 6\n{show(w, 7)}");
+  tile_world::place(w, 0, 0, 0, tile_world::ROCK);
+  tile_world::place(w, 1, 0, 0, tile_world::ROCK);
+  tile_world::put_hero(w, 2, 0, 0);
+  assert(tile_world::walk(w, -1, 0) == tile_world::Step.Blocked, "a rock is not pushed into a rock");
+}
+
+// A chair is pushed across the floor; against a table it cannot go on, so the hero climbs onto
+// it (height 1) and from it onto the table (height 2), and steps down to the floor.
+fn test_chair_climbs_tables() {
+  w = row(6);
+  tile_world::place(w, 1, 0, 0, tile_world::CHAIR);
+  tile_world::place(w, 3, 0, 0, tile_world::TABLE);
+  tile_world::put_hero(w, 0, 0, 0);
+  assert(tile_world::walk(w, 1, 0) == tile_world::Step.Pushed, "the chair slides to 2");
+  assert(tile_world::top(w, 2, 0, 0) == tile_world::CHAIR, "at 2");
+  assert(tile_world::walk(w, 1, 0) == tile_world::Step.Walked, "against the table: onto the chair");
+  assert(at(w) == "2,0,0 h1", "on the chair: {at(w)}");
+  assert(tile_world::walk(w, 1, 0) == tile_world::Step.Walked, "onto the table");
+  assert(at(w) == "3,0,0 h2", "on the table: {at(w)}");
+  assert(tile_world::walk(w, 1, 0) == tile_world::Step.Walked, "down to the floor");
+  assert(at(w) == "4,0,0 h0", "on the floor: {at(w)}");
+  // From the floor a table is two steps up: blocked.
+  assert(tile_world::walk(w, -1, 0) == tile_world::Step.Blocked, "a table from the floor");
+}
+
+// The way up a layer: the hero on a table pulls a chair from the floor up onto it, steps onto
+// it from a second table, and climbs onto the floor of layer 1; walking back into the void over
+// the stack climbs down onto it.
+//
+//   layer 0:  . h T T .        layer 1:        . .
+//            x 0 1 2 3 4                       x 2 3 (floor over the tables' row, beside x 1)
+fn test_a_chair_on_a_table_reaches_the_next_layer() {
+  w = row(5);
+  tile_world::place(w, 1, 0, 0, tile_world::CHAIR);
+  tile_world::place(w, 2, 0, 0, tile_world::TABLE);
+  tile_world::place(w, 3, 0, 0, tile_world::TABLE);
+  tile_world::fill(w, 2, -1, 3, -1, 1, tile_world::FLOOR);
+  tile_world::put_hero(w, 0, 0, 0);
+  // The chair cannot slide into the table: the hero climbs it, then the table at 2.
+  assert(tile_world::walk(w, 1, 0) == tile_world::Step.Walked, "onto the chair");
+  assert(tile_world::walk(w, 1, 0) == tile_world::Step.Walked, "onto the first table");
+  // Back west the hero steps down onto the chair; east again, then pull: walking on to the
+  // second table drags the chair from 1 up onto the first table.
+  assert(tile_world::walk(w, -1, 0) == tile_world::Step.Walked, "down onto the chair");
+  assert(tile_world::walk(w, 1, 0) == tile_world::Step.Walked, "back on the table");
+  assert(tile_world::walk(w, -1, 0) == tile_world::Step.Walked, "on the chair again");
+  assert(tile_world::walk(w, 1, 0) == tile_world::Step.Walked, "and on the table");
+  // Stand on the first table (x 2) with the chair behind at x 1: pull east.
+  assert(tile_world::pull(w, 1, 0) == tile_world::Step.Pulled, "the chair is lifted onto the table");
+  assert(at(w) == "3,0,0 h2", "on the second table: {at(w)}");
+  // Layer 1's floor is north of this table too, but a table alone (height 2) is not enough.
+  assert(tile_world::walk(w, 0, -1) == tile_world::Step.Blocked, "no climb from height 2");
+  assert(tile_world::height(w, 2, 0, 0) == 3, "table and chair stand 3 high");
+  // From the second table (2) onto the stack (3) is one step up.
+  assert(tile_world::walk(w, -1, 0) == tile_world::Step.Walked, "onto the chair on the table");
+  assert(at(w) == "2,0,0 h3", "at height 3: {at(w)}");
+  // North of the stack is layer 1's floor: the climb.
+  assert(tile_world::walk(w, 0, -1) == tile_world::Step.Climbed, "up a layer");
+  assert(at(w) == "2,-1,1 h0", "on layer 1: {at(w)}");
+  assert(tile_world::walk(w, 1, 0) == tile_world::Step.Walked, "walk on layer 1");
+  assert(tile_world::walk(w, -1, 0) == tile_world::Step.Walked, "back");
+  // South, over the stack, is void on layer 1: the climb down onto it.
+  assert(tile_world::walk(w, 0, 1) == tile_world::Step.Climbed, "down onto the stack");
+  assert(at(w) == "2,0,0 h3", "back at height 3: {at(w)}");
+}
+
+// A chair is pushed along a row of tables at table height.
+fn test_chair_slides_along_tables() {
+  w = row(5);
+  tile_world::place(w, 1, 0, 0, tile_world::TABLE);
+  tile_world::place(w, 2, 0, 0, tile_world::TABLE);
+  tile_world::place(w, 2, 0, 0, tile_world::CHAIR);
+  tile_world::place(w, 3, 0, 0, tile_world::TABLE);
+  tile_world::put_hero(w, 1, 0, 0);
+  w.hero_h = 2;
+  assert(tile_world::walk(w, 1, 0) == tile_world::Step.Pushed, "pushed along");
+  assert(tile_world::height(w, 3, 0, 0) == 3 && tile_world::height(w, 2, 0, 0) == 2,
+         "the chair is on the third table");
+  assert(at(w) == "2,0,0 h2", "the hero on the second: {at(w)}");
+}
+
+fn test_view() {
+  w = row(4);
+  tile_world::set_terrain(w, 1, 0, 0, tile_world::RAIL);
+  tile_world::place(w, 1, 0, 0, tile_world::CART);
+  tile_world::set_terrain(w, 2, 0, 0, tile_world::WATER);
+  tile_world::put_hero(w, 0, 0, 0);
+  got = tile_world::view(w, -1, -1, 4, 1, 0);
+  assert(got == "######\n#@c~.#\n######\n", "got\n{got}");
+}
+
+// A train of carts: rails at x 1..8, carts at 2, 3, 4.  The hero at 1 pushes all three on to
+// 3, 4, 5 (strength 3).  A fourth cart at 6 makes a train of four from 3: too heavy.
+fn test_a_train_is_pushed_up_to_the_strength() {
+  w = row(10);
+  tile_world::fill(w, 1, 0, 8, 0, 0, tile_world::RAIL);
+  tile_world::place(w, 2, 0, 0, tile_world::CART);
+  tile_world::place(w, 3, 0, 0, tile_world::CART);
+  tile_world::place(w, 4, 0, 0, tile_world::CART);
+  tile_world::put_hero(w, 1, 0, 0);
+  assert(tile_world::walk(w, 1, 0) == tile_world::Step.Pushed, "three carts pushed");
+  assert(tile_world::train(w, 3, 0, 0, 1, 0) == 3 && tile_world::top(w, 2, 0, 0) == 0,
+         "now at 3, 4, 5\n{show(w, 10)}");
+  tile_world::place(w, 6, 0, 0, tile_world::CART);
+  assert(tile_world::walk(w, 1, 0) == tile_world::Step.Blocked, "four are too heavy");
+  assert(tile_world::push_strength(w) == 3 && tile_world::pull_strength(w) == 2, "the strengths");
+}
+
+// A train stops at a rock even when the hero is strong enough.
+fn test_a_train_stops_at_a_rock() {
+  w = row(8);
+  tile_world::fill(w, 1, 0, 6, 0, 0, tile_world::RAIL);
+  tile_world::place(w, 2, 0, 0, tile_world::CART);
+  tile_world::place(w, 3, 0, 0, tile_world::CART);
+  tile_world::place(w, 4, 0, 0, tile_world::ROCK);
+  tile_world::put_hero(w, 1, 0, 0);
+  assert(tile_world::walk(w, 1, 0) == tile_world::Step.Blocked, "the rock holds the train");
+}
+
+// Pulling: a train of two behind the hero follows one cell; a train of three is too heavy, and
+// the hero walks off alone.
+fn test_a_train_is_pulled_up_to_the_strength() {
+  w = row(10);
+  tile_world::fill(w, 1, 0, 8, 0, 0, tile_world::RAIL);
+  tile_world::place(w, 3, 0, 0, tile_world::CART);
+  tile_world::place(w, 4, 0, 0, tile_world::CART);
+  tile_world::put_hero(w, 2, 0, 0);
+  assert(tile_world::pull(w, -1, 0) == tile_world::Step.Pulled, "two pulled");
+  assert(tile_world::train(w, 2, 0, 0, 1, 0) == 2 && tile_world::top(w, 4, 0, 0) == 0,
+         "now at 2, 3\n{show(w, 10)}");
+  v = row(10);
+  tile_world::fill(v, 1, 0, 8, 0, 0, tile_world::RAIL);
+  tile_world::place(v, 3, 0, 0, tile_world::CART);
+  tile_world::place(v, 4, 0, 0, tile_world::CART);
+  tile_world::place(v, 5, 0, 0, tile_world::CART);
+  tile_world::put_hero(v, 2, 0, 0);
+  assert(tile_world::pull(v, -1, 0) == tile_world::Step.Walked, "three are too heavy to pull");
+  assert(tile_world::train(v, 3, 0, 0, 1, 0) == 3, "the train stayed\n{show(v, 10)}");
+}
+
+// A green potion, used by walking onto it, adds 2 to both strengths for 60000 ms of the world's
+// clock: four carts pushed and three pulled while it lasts, and not a millisecond after.
+fn test_a_potion_strengthens_for_a_minute() {
+  w = row(12);
+  tile_world::fill(w, 2, 0, 10, 0, 0, tile_world::RAIL);
+  tile_world::place(w, 1, 0, 0, tile_world::POTION);
+  tile_world::place(w, 3, 0, 0, tile_world::CART);
+  tile_world::place(w, 4, 0, 0, tile_world::CART);
+  tile_world::place(w, 5, 0, 0, tile_world::CART);
+  tile_world::place(w, 6, 0, 0, tile_world::CART);
+  tile_world::put_hero(w, 0, 0, 0);
+  tile_world::tick(w, 1000);
+  assert(tile_world::walk(w, 1, 0) == tile_world::Step.Walked, "onto the potion");
+  assert(tile_world::top(w, 1, 0, 0) == 0 && w.boost_until == 61000, "used up, strong until 61000");
+  assert(tile_world::push_strength(w) == 5 && tile_world::pull_strength(w) == 4, "5 and 4");
+  assert(tile_world::walk(w, 1, 0) == tile_world::Step.Walked, "onto the rail at 2");
+  assert(tile_world::walk(w, 1, 0) == tile_world::Step.Pushed, "four carts pushed");
+  assert(tile_world::train(w, 4, 0, 0, 1, 0) == 4, "now at 4..7\n{show(w, 12)}");
+  tile_world::tick(w, 59999);
+  assert(tile_world::boosted(w), "still strong at 60999");
+  tile_world::tick(w, 1);
+  assert(!tile_world::boosted(w) && tile_world::push_strength(w) == 3, "back to 3 at 61000");
+  assert(tile_world::walk(w, 1, 0) == tile_world::Step.Blocked, "four are too heavy again");
+}
+

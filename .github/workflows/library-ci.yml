@@ -19,4 +19,4 @@ jobs:
       contents: read
       pull-requests: read
     with:
-      packages: '["hex_body", "hex_draw", "hex_edge", "hex_field", "hex_fit", "hex_form", "hex_grid", "hex_place", "hex_recover", "hex_roof", "hex_shape", "hex_terrain", "hex_way", "hex_world"]'
+      packages: '["hex_body", "hex_draw", "hex_edge", "hex_field", "hex_fit", "hex_form", "hex_grid", "hex_place", "hex_recover", "hex_roof", "hex_shape", "hex_terrain", "hex_way", "hex_world", "tile_world"]'

@@ -1,0 +1,46 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// The demo level is solvable, by the solution written out here, and a wrong order fails.
+use tile_world;
+
+const SOLUTION = "s s s d d d d pa pa pa s d d w d d d d a a a a s s s a a a w d d d s d w w a w d d d s d w w a w d d pd a w";
+
+fn show(w: const tile_world::World) -> text {
+  tile_world::view(w, 0, 0, 12, 8, 0)
+}
+
+fn main() {
+  w = tile_world::first_climb();
+  tile_world::play(w, SOLUTION);
+  assert(tile_world::reached_ledge(w), "solved\n{show(w)}");
+}
+
+// Step by step: the cart dragged off the bridge, the rock pushed along the rails, the chair
+// across the river, onto the table, and the climb.
+fn test_the_solution_in_stages() {
+  w = tile_world::first_climb();
+  tile_world::play(w, "s s s d d d d pa pa pa");
+  assert(tile_world::top(w, 3, 4, 0) == tile_world::CART && tile_world::top(w, 6, 4, 0) == 0,
+         "the cart off the bridge\n{show(w)}");
+  tile_world::play(w, "s d d w d d d d");
+  assert(tile_world::top(w, 9, 4, 0) == tile_world::ROCK && w.hero_x == 8, "the rock pushed on\n{show(w)}");
+  tile_world::play(w, "a a a a s s s a a a w d d d s d w w a w d d d s d w w");
+  assert(tile_world::top(w, 8, 2, 0) == tile_world::CHAIR, "the chair beside the tables\n{show(w)}");
+  tile_world::play(w, "a w d d");
+  assert(w.hero_x == 9 && w.hero_h == 2, "on the first table, height {w.hero_h}");
+  tile_world::play(w, "pd");
+  assert(tile_world::height(w, 9, 2, 0) == 3, "the chair is up on the table");
+  tile_world::play(w, "a w");
+  assert(tile_world::reached_ledge(w), "on the ledge\n{tile_world::view(w, 7, 0, 12, 2, 1)}");
+}
+
+// Pushing the cart east first wedges it against the rock and blocks the bridge for good.
+fn test_the_cart_cannot_be_pushed_past_the_rock() {
+  w = tile_world::first_climb();
+  tile_world::play(w, "s s s d d d d d d");
+  assert(tile_world::top(w, 7, 4, 0) == tile_world::CART && tile_world::top(w, 8, 4, 0) == tile_world::ROCK,
+         "the cart against the rock\n{show(w)}");
+  tile_world::play(w, SOLUTION);
+  assert(!tile_world::reached_ledge(w), "the solution no longer works from here");
+}
