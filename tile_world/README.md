@@ -3,69 +3,62 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# tile_world — an unbounded, layered square-grid world, and a small traversal-puzzle game in it
+# tile_world — an unbounded, layered square-grid world, and the routines that answer questions about it
 
 ```sh
 loft install tile_world
 ```
 
-The game this library is built for is designed in [DESIGN.md](DESIGN.md).
+The world model a 2-D (90-degree) game stands on.  It holds what is where, and answers:
+- how far it is to walk somewhere (`shortest_path`);
+- what can be seen from where (`line_of_sight`);
+- how much light falls on each cell (`shades`).
+
+What the pieces of a game do, such as pushing, climbing or picking up, is the game's: it
+declares its kinds here and moves things with `place` and `take`.
 
 ## The memory model
 
-- **Layers:** `z` is the floor level, unbounded both ways: negative for dungeons and mines,
-  positive for upper floors and mountain tops.
-- **Chunks:** each layer is an unbounded grid held in 32x32 chunks that exist only where
-  something was set, found through a hash keyed on `(cx, cy, z)`. The same addressing as
-  hex_world and moros, with floor division for negative coordinates.
-- **Terrain:** two bytes a cell, a kind (void, floor, wall, water, rail) and a tile number for
-  the picture, so a chunk is 2 KB.
-- **Things** (carts, chairs, tables, rocks, anvils, potions) move, so they live in a second
-  sparse hash of per-cell stacks, bottom first. They cost memory only where they are.
+- **Layers:** `z` is the floor level, unbounded both ways: negative below the ground,
+  positive above.
+- **Chunks:** each layer is an unbounded grid held in 32x32 chunks, which exist only where
+  something was set.  They're found through a hash keyed on `(cx, cy, z)`; this is the
+  hex_world and moros addressing, with floor division for negative coordinates.
+- **Terrain:** two bytes a cell, a kind (0..15) and a tile number (0..4095, the picture), so a
+  chunk is 2 KB.
+- **Things:** numbers the game chooses, kept in a second sparse hash of per-cell stacks,
+  bottom first.
 
-## The rules
+## Kinds
 
-- **Heights:** height counts in steps: a table is 2, a chair 1, a layer 3. The hero steps up at
-  most 1 and down any amount.
-- **Climbing a layer:** a table with a chair on top (3) is the way up a layer, and back down
-  onto it from the floor above.
-- **Pushing** (`walk(w, dx, dy)`): walking into a thing at the hero's level pushes it one cell.
-  A chair or a table that cannot move is climbed onto instead.
-- **Pulling** (`pull(w, dx, dy)`): the hero walks one cell and drags what is behind it. A chair
-  standing on the floor can be pulled up onto a table the hero stands on.
-- **Carts:** carts run on rails, and a line of carts moves as a train. The hero pushes up to 3
-  carts and pulls up to 2.
-- **Rocks and anvils:** pushed only, never pulled, and never by a cart or another rock. On the
-  rails they block trains.
-- **Light:** a wizard's staff is a light.  Fixed to a wall it is a torch: walking into
-  that wall takes it, and walking into a bare wall while holding it fixes it there; on the
-  floor it is picked up by walking onto it.  The open sky (nothing on the layer above) is
-  daylight.  Each cell is one shade darker per step from the nearest light, down to
-  `DARKEST`; a wall is lit but passes no light on.
-- **Green potion:** walking onto one gives +2 strength for 60000 ms of the world's clock
-  (`tick(w, ms)`).
+The game declares each terrain kind and each thing; the routines read only what it declared.
+
+```loft
+w = tile_world::world();
+tile_world::terrain_kind(w, FLOOR, true, false, false, ".");   // walk, opaque, light, glyph
+tile_world::terrain_kind(w, WALL, false, true, false, "#");
+tile_world::thing_kind(w, TABLE, 2, true, false, false, "T");  // height, blocks, opaque, light, glyph
+tile_world::thing_kind(w, TORCH, 0, false, false, true, "i");
+```
+
+- **Undeclared terrain:** a terrain kind nobody declared (other than void) is a wall: not
+  walkable, and opaque.
+- **Undeclared things:** a thing nobody declared is 1 high, blocks, and is not opaque.
+
+## API
 
 | Function | |
 |---|---|
-| `world()`, `set_terrain`, `fill`, `terrain`, `tile`, `chunk_count` | the grid |
-| `place`, `things`, `top`, `height`, `train` | the stacks |
-| `put_hero`, `walk`, `pull`, `play(w, "s s d pa …")` | moving |
-| `tick`, `boosted`, `push_strength`, `pull_strength` | strength and time |
-| `shades(w, x0, y0, x1, y1, z)`, `light_source`, `open_sky`, `DARKEST` | light: 0 at a light, one shade darker a step, never black |
-| `view(w, x0, y0, x1, y1, z)` | a layer as text |
-| `first_climb()`, `reached_ledge(w)`; `the_cellar()`, `in_daylight(w)` | the demo levels |
-
-## Play
-
-```sh
-loft examples/first_climb.loft
-```
-
-`w a s d` walk, `pw pa ps pd` pull. Reach the ledge above the tables.
+| `world()`, `terrain_kind`, `thing_kind` | a world, and what its kinds are |
+| `set_terrain`, `fill`, `terrain`, `tile`, `open_sky`, `chunk_count`, `chunk_of`, `inside` | the grid |
+| `place`, `take`, `things`, `top`, `height` | the stacks |
+| `passable`, `opaque`, `lit` | questions about one cell |
+| `shortest_path(w, x0, y0, x1, y1, z, limit = 64) -> vector<(integer, integer)>` | breadth-first over passable cells; the goal may be a thing to walk up to |
+| `line_of_sight(w, x0, y0, x1, y1, z) -> boolean` | no opaque cell between (Bresenham); a wall itself is seen |
+| `shades(w, x0, y0, x1, y1, z, lights = []) -> vector<integer>` | 0 at a light, one shade darker per step, up to `DARKEST` (7) and never black; the open sky is daylight, opaque cells are lit but pass no light on, `lights` adds what figures carry |
+| `view(w, x0, y0, x1, y1, z, marks = [])` | a layer as text, from the declared glyphs |
 
 ## Tests
 
-`tests/rules.loft` covers every rule as a small scene with hand-worked results.
-`tests/first_climb.loft` replays the demo level's solution, and shows that a wrong first move
-makes it unsolvable. The suite passes on the interpreter and `--native`, and the C backend
-matches it on x86-64, 32-bit x86 and 32-bit RISC-V.
+`tests/world.loft` covers each routine over a neutral set of kinds (floor, wall, window;
+box, lamp, curtain), with hand-worked answers.
