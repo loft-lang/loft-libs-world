@@ -51,6 +51,7 @@ tile_world::thing_kind(w, TORCH, 0, false, false, true, "i");
 |---|---|
 | `world()`, `terrain_kind`, `thing_kind` | a world, and what its kinds are |
 | `set_terrain`, `fill`, `terrain`, `tile`, `open_sky`, `chunk_count`, `chunk_of`, `inside` | the grid |
+| `layers(w)`, `chunks(w, z)`, `stacks(w)` | what the world holds, in a fixed order: for saving it, or walking all of it |
 | `place`, `take`, `things`, `top`, `height` | the stacks |
 | `passable`, `opaque`, `lit` | questions about one cell |
 | `shortest_path(w, x0, y0, x1, y1, z, limit = 64) -> vector<(integer, integer)>` | breadth-first over passable cells; the goal may be a thing to walk up to |
