@@ -262,6 +262,17 @@ pub fn set_ground(w: World, z: integer, kind: integer, tile: integer = 0) {
   if kind != VOID { w.grounds += [Ground { gz: z, kind: kind & 15, tile: tile & 4095 }]; }
 }
 
+/// The layers that have a ground, lowest first — with `layers`, what saving a world walks.
+pub fn ground_layers(w: const World) -> vector<integer> {
+  out: vector<integer> = [];
+  for g in w.grounds {
+    at = 0;
+    while at < len(out) && (out[at] ?? 0) < g.gz { at += 1; }
+    out.insert(at, g.gz);
+  }
+  out
+}
+
 /// Layer z's ground kind, VOID when it has none.
 pub fn ground(w: const World, z: integer) -> integer {
   g = w.grounds[z];
