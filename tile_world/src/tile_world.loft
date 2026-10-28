@@ -16,7 +16,14 @@
 // and north of the origin as it does east and south.
 //
 // A cell's TERRAIN is two bytes: a kind (0..15) in the top four bits and a tile number (the
-// picture, 0..4095) in the low twelve.  A chunk is 2 KB.  A cell nobody set is kind 0, void.
+// picture, 0..4095) in the low twelve.  A chunk is 2 KB.  A cell nobody set reads as its
+// layer's GROUND (`set_ground`: open land that costs no memory), or void when the layer has
+// none; a cell set to void stays void (a pit in the ground), and `clear` makes it unset again.
+//
+// A cell can also carry its two EDGES — the north and the west one; the east and the south
+// edge are its neighbours' west and north — and a RISE, its own height in steps (a hillside).
+// They share one 32-bit word a cell, in an array a chunk gets only when one of its cells first
+// has an edge or a rise.
 //
 // THINGS move, so they are not in the terrain: each cell that holds any has a STACK (bottom
 // first) in a second hash keyed on (x, y, z), removed when it empties.  A thing is a number
@@ -24,11 +31,12 @@
 //
 // ── Kinds ────────────────────────────────────────────────────────────
 //
-// The game declares what each terrain kind and each thing is, and the routines read only
-// that: whether it can be walked on (or, for a thing, walked through), whether it is opaque
-// (stops sight and light), whether it gives light, how high a thing stands, and a glyph for
-// `view`.  An undeclared terrain kind other than void is a wall: not walkable, opaque.  An
-// undeclared thing is 1 high, blocks, and is not opaque.
+// The game declares what each terrain kind, each thing and each edge kind is, and the routines
+// read only that: whether it can be walked on (or, for a thing, walked through; for an edge,
+// walked across), whether it is opaque (stops sight and light), whether it gives light, how
+// high a thing stands, and a glyph for `view`.  An undeclared terrain kind other than void is
+// a wall: not walkable, opaque.  An undeclared thing is 1 high, blocks, and is not opaque.  An
+// undeclared edge kind is a wall: not crossed, opaque.
 
 /// Void: a cell nobody set.  Nothing stands there; sight and light pass.
 pub const VOID = 0;
@@ -36,13 +44,26 @@ pub const VOID = 0;
 /// The darkest shade `shades` gives: a cell this many steps or more from every light.
 pub const DARKEST = 7;
 
+/// The four sides of a cell, for its edges.
+pub const NORTH = 0;
+pub const EAST = 1;
+pub const SOUTH = 2;
+pub const WEST = 3;
+
+// A cell's raw terrain: 0 is unset (the layer's ground), 1 is void set on purpose.
+const UNSET = 0;
+const SET_VOID = 1;
+
 const CHUNK = 32;
 
 struct Chunk {
   const cx: integer,
   const cy: integer,
   const z: integer,
-  cells: vector<u16>
+  cells: vector<u16>,
+  // One word a cell — north edge (bits 0..7), west edge (8..15), rise (16..19) — or empty
+  // while no cell of the chunk has any.
+  extra: vector<u32>
 }
 
 // The things on one cell, bottom first.
@@ -63,6 +84,20 @@ struct TerrainKind {
   glyph: text
 }
 
+struct EdgeKind {
+  const kd: integer,
+  walk: boolean,
+  opaque: boolean,
+  glyph: text
+}
+
+// What an unset cell of layer `gz` reads as.
+struct Ground {
+  const gz: integer,
+  kind: integer,
+  tile: integer
+}
+
 struct ThingKind {
   const kd: integer,
   walk: boolean,
@@ -77,12 +112,14 @@ pub struct World {
   chunks: hash<Chunk[cx, cy, z]>,
   stacks: hash<Stack[x, y, z]>,
   terrains: hash<TerrainKind[kd]>,
-  objects: hash<ThingKind[kd]>
+  objects: hash<ThingKind[kd]>,
+  edges: hash<EdgeKind[kd]>,
+  grounds: hash<Ground[gz]>
 }
 
 /// An empty world: every cell void, no kinds declared.
 pub fn world() -> World {
-  World { chunks: [], stacks: [], terrains: [], objects: [] }
+  World { chunks: [], stacks: [], terrains: [], objects: [], edges: [], grounds: [] }
 }
 
 // --- Kinds ---
@@ -102,6 +139,14 @@ pub fn thing_kind(w: World, thing: integer, height: integer, blocks: boolean,
                   opaque: boolean = false, light: boolean = false, glyph: text = "?") {
   w.objects[thing] = null;
   w.objects += [ThingKind { kd: thing, walk: !blocks, opaque: opaque, light: light, height: height, glyph: glyph }];
+}
+
+/// Declare edge kind `kind` (1..255): whether it can be walked across (an open doorway) and
+/// whether it stops sight and light (a wall, a closed door; not a fence or a window), and its
+/// glyph.
+pub fn edge_kind(w: World, kind: integer, walk: boolean, opaque: boolean, glyph: text = "|") {
+  w.edges[kind] = null;
+  w.edges += [EdgeKind { kd: kind, walk: walk, opaque: opaque, glyph: glyph }];
 }
 
 /// Can terrain kind `kind` be walked on: as declared; void and an undeclared kind cannot.
@@ -180,15 +225,55 @@ fn before(ay: integer, ax: integer, by: integer, bx: integer) -> boolean {
 
 // --- Terrain ---
 
-/// Set a cell's terrain: a kind (0..15) and, for the picture, a tile number (0..4095).
-pub fn set_terrain(w: World, x: integer, y: integer, z: integer, kind: integer, tile: integer = 0) {
+// Make the chunk holding (x, y, z) when it does not exist yet.
+fn ensure_chunk(w: World, x: integer, y: integer, z: integer) {
   cx = chunk_of(x);
   cy = chunk_of(y);
   if !w.chunks[cx, cy, z] {
-    w.chunks += [Chunk { cx: cx, cy: cy, z: z, cells: [0 as u16; CHUNK * CHUNK] }];
+    w.chunks += [Chunk { cx: cx, cy: cy, z: z, cells: [0 as u16; CHUNK * CHUNK], extra: [] }];
   }
-  c = w.chunks[cx, cy, z];
-  c.cells[inside(y) * CHUNK + inside(x)] = ((kind & 15) * 4096 + (tile & 4095)) as u16;
+}
+
+/// Set a cell's terrain: a kind (0..15) and, for the picture, a tile number (0..4095).  VOID
+/// makes the cell void even on a layer with a ground — a pit, a hole; `clear` unsets it.
+pub fn set_terrain(w: World, x: integer, y: integer, z: integer, kind: integer, tile: integer = 0) {
+  ensure_chunk(w, x, y, z);
+  c = w.chunks[chunk_of(x), chunk_of(y), z];
+  v = if kind == VOID { SET_VOID } else { (kind & 15) * 4096 + (tile & 4095) };
+  c.cells[inside(y) * CHUNK + inside(x)] = (v & 65535) as u16;
+}
+
+/// Make a cell unset again: it reads as its layer's ground, or as void.
+pub fn clear(w: World, x: integer, y: integer, z: integer) {
+  c = w.chunks[chunk_of(x), chunk_of(y), z];
+  if !c { return; }
+  c.cells[inside(y) * CHUNK + inside(x)] = UNSET as u16;
+}
+
+/// Was this cell set (to anything, void included), rather than read from the ground?
+pub fn is_set(w: const World, x: integer, y: integer, z: integer) -> boolean {
+  raw(w, x, y, z) != UNSET
+}
+
+/// Give layer z a ground: every cell of it nobody set reads as terrain `kind` with picture
+/// `tile` — open land that costs no memory.  Kind VOID takes the ground away.
+pub fn set_ground(w: World, z: integer, kind: integer, tile: integer = 0) {
+  w.grounds[z] = null;
+  if kind != VOID { w.grounds += [Ground { gz: z, kind: kind & 15, tile: tile & 4095 }]; }
+}
+
+/// Layer z's ground kind, VOID when it has none.
+pub fn ground(w: const World, z: integer) -> integer {
+  g = w.grounds[z];
+  if !g { return VOID; }
+  g.kind
+}
+
+/// Layer z's ground tile, 0 when it has none.
+pub fn ground_tile(w: const World, z: integer) -> integer {
+  g = w.grounds[z];
+  if !g { return 0; }
+  g.tile
 }
 
 /// Set a rectangle of terrain, corners included.
@@ -205,14 +290,99 @@ fn raw(w: const World, x: integer, y: integer, z: integer) -> integer {
   (c.cells[inside(y) * CHUNK + inside(x)] ?? 0) as integer
 }
 
-/// A cell's terrain kind; void where nothing was set.
+/// A cell's terrain kind: what it was set to, or its layer's ground when it was not.
 pub fn terrain(w: const World, x: integer, y: integer, z: integer) -> integer {
-  raw(w, x, y, z) / 4096
+  r = raw(w, x, y, z);
+  if r == UNSET { return ground(w, z); }
+  if r == SET_VOID { return VOID; }
+  r / 4096
 }
 
-/// A cell's tile number, its picture.
+/// A cell's tile number, its picture: what it was set to, or its layer's ground tile.
 pub fn tile(w: const World, x: integer, y: integer, z: integer) -> integer {
-  raw(w, x, y, z) % 4096
+  r = raw(w, x, y, z);
+  if r == UNSET { return ground_tile(w, z); }
+  if r == SET_VOID { return 0; }
+  r % 4096
+}
+
+// --- Edges and rise ---
+
+fn word(w: const World, x: integer, y: integer, z: integer) -> integer {
+  c = w.chunks[chunk_of(x), chunk_of(y), z];
+  if !c { return 0; }
+  if len(c.extra) == 0 { return 0; }
+  (c.extra[inside(y) * CHUNK + inside(x)] ?? 0) as integer
+}
+
+fn set_word(w: World, x: integer, y: integer, z: integer, v: integer) {
+  ensure_chunk(w, x, y, z);
+  c = w.chunks[chunk_of(x), chunk_of(y), z];
+  if !c { return; }
+  if len(c.extra) == 0 { c.extra = [0 as u32; CHUNK * CHUNK]; }
+  c.extra[inside(y) * CHUNK + inside(x)] = (v & 2147483647) as u32;
+}
+
+// Which cell holds the edge on `side` of (x, y), and in which byte: (x, y, shift).
+fn edge_home(x: integer, y: integer, side: integer) -> (integer, integer, integer) {
+  if side == NORTH { return (x, y, 0); }
+  if side == SOUTH { return (x, y + 1, 0); }
+  if side == WEST { return (x, y, 8); }
+  (x + 1, y, 8)
+}
+
+/// Put edge kind `kind` (1..255) on `side` (NORTH, EAST, SOUTH, WEST) of cell (x, y, z); 0
+/// takes the edge away.  The east edge of a cell is its east neighbour's west edge, and the
+/// same edge: setting one sets both.
+pub fn set_edge(w: World, x: integer, y: integer, z: integer, side: integer, kind: integer) {
+  h = edge_home(x, y, side);
+  v = word(w, h.0, h.1, z);
+  set_word(w, h.0, h.1, z, (v & ~(255 << h.2)) | ((kind & 255) << h.2));
+}
+
+/// The edge kind on `side` of cell (x, y, z), 0 for none.
+pub fn edge(w: const World, x: integer, y: integer, z: integer, side: integer) -> integer {
+  h = edge_home(x, y, side);
+  (word(w, h.0, h.1, z) >> h.2) & 255
+}
+
+// The edge crossed stepping from (x, y) by (dx, dy), one of the four directions.
+fn between(w: const World, x: integer, y: integer, z: integer, dx: integer, dy: integer) -> integer {
+  side = if dx > 0 { EAST } else if dx < 0 { WEST } else if dy > 0 { SOUTH } else { NORTH };
+  edge(w, x, y, z, side)
+}
+
+/// Can a walker step from (x, y, z) by (dx, dy) — one of the four directions — across the edge
+/// between: no edge, or one declared walkable.  Whether the cell it lands on can be stood on is
+/// `passable`'s question.
+pub fn crossable(w: const World, x: integer, y: integer, z: integer, dx: integer, dy: integer) -> boolean {
+  e = between(w, x, y, z, dx, dy);
+  if e == 0 { return true; }
+  k = w.edges[e];
+  if !k { return false; }
+  k.walk
+}
+
+/// Do sight and light pass from (x, y, z) by (dx, dy) across the edge between.
+pub fn see_through(w: const World, x: integer, y: integer, z: integer, dx: integer, dy: integer) -> boolean {
+  e = between(w, x, y, z, dx, dy);
+  if e == 0 { return true; }
+  k = w.edges[e];
+  if !k { return false; }
+  !k.opaque
+}
+
+/// Give cell (x, y, z) a rise of `steps` (0..15): its own height, under whatever stands on it.
+/// A hillside is cells rising one step at a time, so a walker that steps up one at a time walks
+/// up it.
+pub fn set_rise(w: World, x: integer, y: integer, z: integer, steps: integer) {
+  v = word(w, x, y, z);
+  set_word(w, x, y, z, (v & ~(15 << 16)) | ((steps & 15) << 16));
+}
+
+/// A cell's rise in steps, 0 for a flat one.
+pub fn rise(w: const World, x: integer, y: integer, z: integer) -> integer {
+  (word(w, x, y, z) >> 16) & 15
 }
 
 /// Is (x, y, z) under the open sky: nothing set on the layer above it.
@@ -264,11 +434,11 @@ pub fn top(w: const World, x: integer, y: integer, z: integer) -> integer {
   if n == 0 { 0 } else { s.things[n - 1] ?? 0 }
 }
 
-/// The height of a cell's stack: the sum of its things' declared heights.
+/// The height of a cell in steps: its rise and the declared heights of the things on it.
 pub fn height(w: const World, x: integer, y: integer, z: integer) -> integer {
   s = w.stacks[x, y, z];
-  if !s { return 0; }
-  h = 0;
+  if !s { return rise(w, x, y, z); }
+  h = rise(w, x, y, z);
   for t in s.things { h += thing_height(w, t); }
   h
 }
@@ -318,7 +488,7 @@ pub fn lit(w: const World, x: integer, y: integer, z: integer) -> boolean {
 // --- Routines ---
 
 /// The shortest walk from (x0, y0) to (x1, y1) on layer z, in steps to the four neighbours over
-/// `passable` cells: the cells passed through, the goal last, the start left out.  Empty when
+/// `passable` cells and `crossable` edges: the cells passed through, the goal last, the start left out.  Empty when
 /// the goal cannot be reached within `limit` steps (or is the start).  The goal itself need
 /// not be passable, so a path can lead up to a thing to act on.
 pub fn shortest_path(w: const World, x0: integer, y0: integer, x1: integer, y1: integer,
@@ -344,6 +514,7 @@ pub fn shortest_path(w: const World, x0: integer, y0: integer, x1: integer, y1: 
       nx = n.0;
       ny = n.1;
       if nx < 0 || nx >= gw || ny < 0 || ny >= gw || (from[ny * gw + nx] ?? 0) >= 0 { continue; }
+      if !crossable(w, gx + cx, gy + cy, z, nx - cx, ny - cy) { continue; }
       goal = gx + nx == x1 && gy + ny == y1;
       if !goal && !passable(w, gx + nx, gy + ny, z) { continue; }
       from[ny * gw + nx] = c;
@@ -372,7 +543,7 @@ pub fn shortest_path(w: const World, x0: integer, y0: integer, x1: integer, y1: 
 }
 
 /// Can (x1, y1) be seen from (x0, y0) on layer z: no opaque cell on the straight line between
-/// them (Bresenham's).  The two ends themselves do not count, so a wall is seen, and an eye
+/// them (Bresenham's), and no opaque edge it crosses.  The two ends themselves do not count, so a wall is seen, and an eye
 /// in a doorway sees out.
 pub fn line_of_sight(w: const World, x0: integer, y0: integer, x1: integer, y1: integer,
                      z: integer) -> boolean {
@@ -386,11 +557,24 @@ pub fn line_of_sight(w: const World, x0: integer, y0: integer, x1: integer, y1: 
   while x != x1 || y != y1 {
     if (x != x0 || y != y0) && opaque(w, x, y, z) { return false; }
     e2 = 2 * err;
-    if e2 >= dy {
+    mx = e2 >= dy;
+    my = e2 <= dx;
+    // The edges the step crosses: a diagonal step sees past a corner when either way round it
+    // is open.
+    if mx && my {
+      round_x = see_through(w, x, y, z, sx, 0) && see_through(w, x + sx, y, z, 0, sy);
+      round_y = see_through(w, x, y, z, 0, sy) && see_through(w, x, y + sy, z, sx, 0);
+      if !round_x && !round_y { return false; }
+    } else if mx {
+      if !see_through(w, x, y, z, sx, 0) { return false; }
+    } else if my {
+      if !see_through(w, x, y, z, 0, sy) { return false; }
+    }
+    if mx {
       err += dy;
       x += sx;
     }
-    if e2 <= dx {
+    if my {
       err += dx;
       y += sy;
     }
@@ -402,7 +586,7 @@ pub fn line_of_sight(w: const World, x0: integer, y0: integer, x1: integer, y1: 
 /// shade darker for each step from the nearest one, up to `DARKEST`, never black.  A light is
 /// a `lit` cell or one of `lights` (cells the game says give light now: what a figure carries).
 /// Light spreads over every cell but an opaque one, which is lit but passes no light on unless
-/// it is itself a light.  A light up to `DARKEST` cells outside the rectangle counts.
+/// it is itself a light, and never across an opaque edge.  A light up to `DARKEST` cells outside the rectangle counts.
 pub fn shades(w: const World, x0: integer, y0: integer, x1: integer, y1: integer, z: integer,
               lights: const vector<(integer, integer)> = []) -> vector<integer> {
   gx = x0 - DARKEST;
@@ -439,7 +623,8 @@ pub fn shades(w: const World, x0: integer, y0: integer, x1: integer, y1: integer
     for n in [(cx - 1, cy), (cx + 1, cy), (cx, cy - 1), (cx, cy + 1)] {
       nx = n.0;
       ny = n.1;
-      if nx >= 0 && nx < gw && ny >= 0 && ny < gh && (dist[ny * gw + nx] ?? 0) > d + 1 {
+      if nx >= 0 && nx < gw && ny >= 0 && ny < gh && (dist[ny * gw + nx] ?? 0) > d + 1
+          && see_through(w, gx + cx, gy + cy, z, nx - cx, ny - cy) {
         dist[ny * gw + nx] = d + 1;
         queue += [ny * gw + nx];
       }
