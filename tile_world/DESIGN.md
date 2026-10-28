@@ -58,6 +58,11 @@ This is what the game built on tile_world should be.
     (slice 1).
 - **Rocks and anvils.** Pushed only, never pulled, and never by a cart or another rock. On the
   rails they block trains (slice 1).
+- **Chests.**
+  - A chest is pushed like a rock: pushed only, never pulled, never by a cart or another
+    rock, and on the rails it blocks trains.
+  - It is climbed like a table (height 2), but nothing stands on it: a chair is not lifted
+    onto it.
 - **Chairs.**
   - A chair slides on the floor or along tables.
   - It is pulled up onto a table the hero stands on (slice 1).
@@ -81,6 +86,15 @@ This is what the game built on tile_world should be.
     - It moves every movable thing beside it one cell away.
     - It breaks chairs and other fragile things.
     - It damages enemies.
+
+## Goals: chests and points
+
+- **A point per chest.**  Opening a chest gives its money and one point.  A region or a
+  dungeon has a fixed number of chests, so the points it can give are limited.
+- **A chest is never hidden.**  It may stand out of the direct route — a door behind a tree is
+  a fair way to it — but never behind or beside a wall where it cannot be seen.
+- **The signpost counts.**  Walking into a farm signpost lists how many of the region's chests
+  are still unopened.
 
 ## Enemies
 
@@ -126,6 +140,6 @@ This is what the game built on tile_world should be.
 | slice | content | state |
 |---|---|---|
 | 1 | layers and chunks, walls, rails, carts and trains, rocks, chairs and tables, potion, demo level | shipped (0.1.0) |
-| 2 | 4-step layers and falls, ceilings, fence, tree, one held item (sword, axe), enemies that flee and heal, guards and doors, wells and safe points | open |
+| 2 | 4-step layers and falls, ceilings, fence, tree, one held item (sword, axe), chests and the signpost, enemies that flee and heal, guards and doors, wells and safe points | open |
 | 3 | bow and aim, bomb, the depth renderer with Kenney tiles | open |
 | later | growth: carried weapons, armour, stats — never required (the principle above) | open |
