@@ -1,0 +1,14 @@
+[package]
+name    = "tile_world"
+version = "0.1.0"
+loft    = ">=2026.10.0"
+repository = "loft-libs-world"
+description = "An unbounded, layered square-grid world, and the traversal rules of a small puzzle game"
+categories  = ["game", "world"]
+
+# ⚠ FIRST release, so both floors are this release itself.
+api_compatible_with  = "0.1.0"   # oldest own release this is a drop-in for
+data_compatible_with = "0.1.0"   # oldest own release whose stored data this reads
+
+[library]
+entry = "src/tile_world.loft"
