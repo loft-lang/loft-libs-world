@@ -67,6 +67,8 @@ pub const ROCK = 4;
 pub const ANVIL = 5;
 /// A green potion: lies on the floor, used by walking onto it.
 pub const POTION = 6;
+/// A wizard's staff: a light.  Fixed to a wall it is a torch; the hero carries one.
+pub const STAFF = 7;
 
 /// How many carts in a row the hero pushes, and pulls; a potion adds `POTION_BOOST` to each for
 /// `POTION_MS` milliseconds.
@@ -106,7 +108,9 @@ pub struct World {
   pub hero_h: integer,
   /// The world's clock in milliseconds (`tick`), and until when a potion's strength lasts.
   pub now: integer,
-  pub boost_until: integer
+  pub boost_until: integer,
+  /// What the hero holds: 0 for nothing, or a thing (`STAFF`).
+  pub hero_item: integer
 }
 
 /// What a step did.
@@ -115,12 +119,15 @@ pub enum Step {
   Walked,
   Pushed,
   Pulled,
-  Climbed
+  Climbed,
+  /// The hero took the staff off a wall, or fixed the one it held to a wall.
+  Took,
+  Placed
 }
 
 /// An empty world: every cell void, the hero at the origin of layer 0.
 pub fn world() -> World {
-  World { hero_x: 0, hero_y: 0, hero_z: 0, hero_h: 0, now: 0, boost_until: 0 }
+  World { hero_x: 0, hero_y: 0, hero_z: 0, hero_h: 0, now: 0, boost_until: 0, hero_item: 0 }
 }
 
 // --- Addressing ---
@@ -186,7 +193,12 @@ pub fn walkable(kind: integer) -> boolean {
 
 /// How many height steps a thing adds to its stack.
 pub fn thing_height(thing: integer) -> integer {
-  if thing == TABLE { 2 } else if thing == 0 || thing == POTION { 0 } else { 1 }
+  if thing == TABLE { 2 } else if thing == 0 || item(thing) { 0 } else { 1 }
+}
+
+/// Is this a thing the hero walks onto rather than into: a potion or a staff on the floor.
+pub fn item(thing: integer) -> boolean {
+  thing == POTION || thing == STAFF
 }
 
 /// Can the hero stand on this thing: a chair or a table.
@@ -272,7 +284,8 @@ fn fits(w: const World, thing: integer, x: integer, y: integer, z: integer, base
   surface == 0 || top(w, x, y, z) == TABLE
 }
 
-// Move the hero to (x, y, z), standing on the stack there; a potion on that floor is used.
+// Move the hero to (x, y, z), standing on the stack there.  A potion on that floor is used; a
+// staff there is picked up, and what the hero held is put down in its place.
 fn arrive(w: World, x: integer, y: integer, z: integer) {
   w.hero_x = x;
   w.hero_y = y;
@@ -281,6 +294,10 @@ fn arrive(w: World, x: integer, y: integer, z: integer) {
   if w.hero_h == 0 && top(w, x, y, z) == POTION {
     take(w, x, y, z);
     w.boost_until = w.now + POTION_MS;
+  } else if w.hero_h == 0 && top(w, x, y, z) == STAFF {
+    take(w, x, y, z);
+    if w.hero_item != 0 { place(w, x, y, z, w.hero_item); }
+    w.hero_item = STAFF;
   }
 }
 
@@ -342,9 +359,22 @@ pub fn walk(w: World, dx: integer, dy: integer) -> Step {
   tx = w.hero_x + dx;
   ty = w.hero_y + dy;
   z = w.hero_z;
+  // A wall: take the staff fixed to it with an empty hand, or fix the held staff to a bare one.
+  if terrain(w, tx, ty, z) == WALL {
+    if top(w, tx, ty, z) == STAFF && w.hero_item == 0 {
+      take(w, tx, ty, z);
+      w.hero_item = STAFF;
+      return Step.Took;
+    }
+    if top(w, tx, ty, z) == 0 && w.hero_item == STAFF {
+      place(w, tx, ty, z, STAFF);
+      w.hero_item = 0;
+      return Step.Placed;
+    }
+  }
   if !walkable(terrain(w, tx, ty, z)) { return Step.Blocked; }
   thing = top(w, tx, ty, z);
-  if thing == 0 || thing == POTION {
+  if thing == 0 || item(thing) {
     arrive(w, tx, ty, z);
     return Step.Walked;
   }
@@ -395,7 +425,7 @@ pub fn pull(w: World, dx: integer, dy: integer) -> Step {
   by = fy - dy;
   if !walkable(terrain(w, tx, ty, z)) { return Step.Blocked; }
   target = top(w, tx, ty, z);
-  if (target != 0 && target != POTION && !standable(target)) || height(w, tx, ty, z) > w.hero_h {
+  if (target != 0 && !item(target) && !standable(target)) || height(w, tx, ty, z) > w.hero_h {
     return Step.Blocked;
   }
   thing = top(w, bx, by, z);
@@ -429,6 +459,77 @@ pub fn pull(w: World, dx: integer, dy: integer) -> Step {
   Step.Pulled
 }
 
+// --- Light ---
+
+/// The darkest shade: a cell this many steps or more from every light.  Never black, so a
+/// thing moving in the dark can still be seen.
+pub const DARKEST = 7;
+
+/// Is (x, y, z) under the open sky: nothing on the layer above it.  It is day, so the open
+/// sky is always light.
+pub fn open_sky(w: const World, x: integer, y: integer, z: integer) -> boolean {
+  terrain(w, x, y, z + 1) == VOID
+}
+
+/// Is (x, y, z) a light: a cell under the open sky, a staff on it (on the floor, or fixed to
+/// a wall), or the hero carrying a staff.
+pub fn light_source(w: const World, x: integer, y: integer, z: integer) -> boolean {
+  if terrain(w, x, y, z) == VOID { return false; }
+  if w.hero_item == STAFF && w.hero_x == x && w.hero_y == y && w.hero_z == z { return true; }
+  if open_sky(w, x, y, z) { return true; }
+  for t in things(w, x, y, z) {
+    if t == STAFF { return true; }
+  }
+  false
+}
+
+/// How dark each cell of (x0, y0) .. (x1, y1) on layer z is, row by row: 0 at a light, one
+/// shade darker for each step from the nearest one, up to `DARKEST`.  Light spreads over
+/// everything but walls: a wall is lit, but passes no light on (unless it holds the staff).
+/// A light up to `DARKEST` cells outside the rectangle counts.
+pub fn shades(w: const World, x0: integer, y0: integer, x1: integer, y1: integer,
+              z: integer) -> vector<integer> {
+  gx = x0 - DARKEST;
+  gy = y0 - DARKEST;
+  gw = x1 - x0 + 1 + 2 * DARKEST;
+  gh = y1 - y0 + 1 + 2 * DARKEST;
+  dist: vector<integer> = [DARKEST; gw * gh];
+  queue: vector<integer> = [];
+  for j in 0..gh {
+    for i in 0..gw {
+      if light_source(w, gx + i, gy + j, z) {
+        dist[j * gw + i] = 0;
+        queue += [j * gw + i];
+      }
+    }
+  }
+  at = 0;
+  while at < len(queue) {
+    c = queue[at] ?? 0;
+    at += 1;
+    d = dist[c] ?? DARKEST;
+    if d + 1 >= DARKEST { continue; }
+    cx = c % gw ?? 0;
+    cy = c / gw ?? 0;
+    if d > 0 && terrain(w, gx + cx, gy + cy, z) == WALL { continue; }
+    for n in [(cx - 1, cy), (cx + 1, cy), (cx, cy - 1), (cx, cy + 1)] {
+      nx = n.0;
+      ny = n.1;
+      if nx >= 0 && nx < gw && ny >= 0 && ny < gh && (dist[ny * gw + nx] ?? 0) > d + 1 {
+        dist[ny * gw + nx] = d + 1;
+        queue += [ny * gw + nx];
+      }
+    }
+  }
+  out: vector<integer> = [];
+  for y in y0..=y1 {
+    for x in x0..=x1 {
+      out += [dist[(y - gy) * gw + (x - gx)] ?? DARKEST];
+    }
+  }
+  out
+}
+
 // --- Views ---
 
 fn glyph(w: const World, x: integer, y: integer, z: integer) -> text {
@@ -438,6 +539,7 @@ fn glyph(w: const World, x: integer, y: integer, z: integer) -> text {
   if t == ROCK { return "o"; }
   if t == ANVIL { return "a"; }
   if t == POTION { return "g"; }
+  if t == STAFF { return "i"; }
   if t == TABLE { return "T"; }
   if t == CHAIR {
     if height(w, x, y, z) >= LAYER_HEIGHT { return "H"; }
@@ -519,5 +621,33 @@ pub fn first_climb() -> World {
 /// Is the hero up on the first climb's ledge?
 pub fn reached_ledge(w: const World) -> boolean {
   w.hero_z == 1
+}
+
+/// "The cellar", a dark level: a corridor under a ceiling, its torch at the west end, a rock in
+/// the way, and the daylight of an open yard at the east end.
+///
+///      x 0123456789012
+///   y0   #############        @ hero, ! the staff fixed to the wall (a torch),
+///   y1   !@...#.......        o rock.  Everything but the yard (x 12, open sky) has a
+///   y2   #....o.......        ceiling: layer 1 is floor over it.
+///   y3   #############
+///
+/// Solved when the hero stands in the yard (`in_daylight`).
+pub fn the_cellar() -> World {
+  w = world();
+  fill(w, 0, 0, 12, 3, 0, WALL);
+  fill(w, 1, 1, 11, 2, 0, FLOOR);
+  set_terrain(w, 5, 1, 0, WALL);
+  fill(w, 12, 1, 12, 2, 0, FLOOR);
+  fill(w, 0, 0, 11, 3, 1, FLOOR);
+  place(w, 0, 1, 0, STAFF);
+  place(w, 5, 2, 0, ROCK);
+  put_hero(w, 1, 1, 0);
+  w
+}
+
+/// Is the hero out in the open, under the sky?
+pub fn in_daylight(w: const World) -> boolean {
+  open_sky(w, w.hero_x, w.hero_y, w.hero_z) && terrain(w, w.hero_x, w.hero_y, w.hero_z) != VOID
 }
 
