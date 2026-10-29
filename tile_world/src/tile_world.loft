@@ -680,3 +680,95 @@ pub fn view(w: const World, x0: integer, y0: integer, x1: integer, y1: integer, 
   }
   out
 }
+
+// --- Regions and stamps ---
+
+struct Seen {
+  const sx: integer,
+  const sy: integer
+}
+
+/// The cells of layer z connected to (x, y) that hold the same terrain as it — the same kind
+/// and tile, set or read from the ground — four ways, never across an edge between two cells:
+/// what a fill paints.  Nearest first (breadth first), (x, y) itself first, and at most `limit`
+/// of them, because a layer's ground has no end: a region exactly `limit` long may go on.
+pub fn region(w: const World, x: integer, y: integer, z: integer, limit: integer) -> vector<(integer, integer)> {
+  out: vector<(integer, integer)> = [];
+  if limit <= 0 { return out; }
+  kind = terrain(w, x, y, z);
+  t = tile(w, x, y, z);
+  seen: hash<Seen[sx, sy]> = [Seen { sx: x, sy: y }];
+  out += [(x, y)];
+  at = 0;
+  while at < len(out) && len(out) < limit {
+    c = out[at] ?? (x, y);
+    at += 1;
+    for d in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+      nx = c.0 + d.0;
+      ny = c.1 + d.1;
+      if len(out) >= limit || seen[nx, ny] { continue; }
+      if between(w, c.0, c.1, z, d.0, d.1) != 0 { continue; }
+      if terrain(w, nx, ny, z) != kind || tile(w, nx, ny, z) != t { continue; }
+      seen += [Seen { sx: nx, sy: ny }];
+      out += [(nx, ny)];
+    }
+  }
+  out
+}
+
+// Set a cell's raw terrain word (as `raw` reads it), making its chunk when needed.
+fn put_raw(w: World, x: integer, y: integer, z: integer, r: integer) {
+  ensure_chunk(w, x, y, z);
+  c = w.chunks[chunk_of(x), chunk_of(y), z];
+  if !c { return; }
+  c.cells[inside(y) * CHUNK + inside(x)] = (r & 65535) as u16;
+}
+
+/// A stamp: the cells of the box x0..x1, y0..y1 on layers z0..z1, corners included — terrain
+/// as set (an unset cell stays unset), rise, the north and west edges each cell holds, and the
+/// stacks — moved so the corner (x0, y0, z0) is (0, 0, 0).  The kinds come along: the stamp is
+/// a world of its own, to `paste` back or keep.
+pub fn copy(w: const World, x0: integer, y0: integer, x1: integer, y1: integer, z0: integer,
+            z1: integer) -> World {
+  out = world();
+  out.terrains = w.terrains;
+  out.objects = w.objects;
+  out.edges = w.edges;
+  for z in z0..=z1 {
+    for y in y0..=y1 {
+      for x in x0..=x1 {
+        r = raw(w, x, y, z);
+        if r != UNSET { put_raw(out, x - x0, y - y0, z - z0, r); }
+        v = word(w, x, y, z);
+        if v != 0 { set_word(out, x - x0, y - y0, z - z0, v); }
+        for t in things(w, x, y, z) { place(out, x - x0, y - y0, z - z0, t); }
+      }
+    }
+  }
+  out
+}
+
+/// Write stamp `from` (a `copy`) into `w` with its (0, 0, 0) at (x, y, z).  Each cell the stamp
+/// holds anything at replaces the cell there: its terrain when the stamp set it, its rise and
+/// north and west edges, and its stack (none when the stamp's cell has none).  A cell the
+/// stamp holds nothing at leaves `w` as it was.
+pub fn paste(w: World, from: const World, x: integer, y: integer, z: integer) {
+  for c in from.chunks {
+    for j in 0..CHUNK {
+      for i in 0..CHUNK {
+        fx = c.cx * CHUNK + i;
+        fy = c.cy * CHUNK + j;
+        r = raw(from, fx, fy, c.z);
+        v = word(from, fx, fy, c.z);
+        if r == UNSET && v == 0 { continue; }
+        if r != UNSET { put_raw(w, x + fx, y + fy, z + c.z, r); }
+        if v != 0 || word(w, x + fx, y + fy, z + c.z) != 0 { set_word(w, x + fx, y + fy, z + c.z, v); }
+        w.stacks[x + fx, y + fy, z + c.z] = null;
+      }
+    }
+  }
+  for s in from.stacks {
+    w.stacks[x + s.x, y + s.y, z + s.z] = null;
+    for t in s.things { place(w, x + s.x, y + s.y, z + s.z, t); }
+  }
+}

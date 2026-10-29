@@ -1,0 +1,113 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Regions and stamps: `region` (what a fill paints), `copy` and `paste` (a stamp).  Every
+// expected value is worked out by hand in its cell.
+use tile_world;
+
+const FLOOR = 1;
+const WALL = 2;
+const BOX = 1;
+const LAMP = 2;
+const FENCE = 1;
+
+fn kinds(w: tile_world::World) {
+  tile_world::terrain_kind(w, FLOOR, true, false, false, ".");
+  tile_world::terrain_kind(w, WALL, false, true, false, "#");
+  tile_world::thing_kind(w, BOX, 1, true, false, false, "b");
+  tile_world::thing_kind(w, LAMP, 0, false, false, true, "*");
+  tile_world::edge_kind(w, FENCE, false, false, "-");
+}
+
+// Floor x 0..4, y 0..2 on layer 0, with a wall at (2, 0) and (2, 1): the west part (x 0..1)
+// meets the east part (x 3..4) only through (2, 2).
+//
+//   . . # . .
+//   . . # . .
+//   . . . . .
+fn room() -> tile_world::World {
+  w = tile_world::world();
+  kinds(w);
+  tile_world::fill(w, 0, 0, 4, 2, 0, FLOOR);
+  tile_world::set_terrain(w, 2, 0, 0, WALL);
+  tile_world::set_terrain(w, 2, 1, 0, WALL);
+  w
+}
+
+fn show(cells: const vector<(integer, integer)>) -> text {
+  t = "";
+  for c in cells { t += "{c.0},{c.1} "; }
+  t
+}
+
+fn main() {
+  assert(len(tile_world::region(room(), 0, 0, 0, 100)) == 13, "the floor round the wall");
+}
+
+// Breadth first from (0, 0), east before west before south before north: (1, 0) and (0, 1)
+// come next.  The whole floor is 15 cells less the two walls: 13.  The wall's region is its
+// own two cells.
+fn test_a_region_is_the_connected_same_terrain() {
+  w = room();
+  assert(show(tile_world::region(w, 0, 0, 0, 3)) == "0,0 1,0 0,1 ", "the first three: {show(tile_world::region(w, 0, 0, 0, 3))}");
+  assert(len(tile_world::region(w, 0, 0, 0, 100)) == 13, "all of it");
+  assert(show(tile_world::region(w, 2, 0, 0, 100)) == "2,0 2,1 ", "the wall");
+  assert(len(tile_world::region(w, 0, 0, 0, 0)) == 0, "a limit of none");
+}
+
+// A fence edge west of (3, 2) cuts the only way east: the west part (6) and (2, 2) — 7.  A
+// different tile is a different terrain: (0, 1) with tile 7 is left out, and with it nothing
+// else, since (0, 2) and (1, 1) still connect the rest — 6.
+fn test_edges_and_tiles_bound_a_region() {
+  w = room();
+  tile_world::set_edge(w, 3, 2, 0, tile_world::WEST, FENCE);
+  assert(len(tile_world::region(w, 0, 0, 0, 100)) == 7, "fenced off: {len(tile_world::region(w, 0, 0, 0, 100))}");
+  tile_world::set_terrain(w, 0, 1, 0, FLOOR, 7);
+  assert(len(tile_world::region(w, 0, 0, 0, 100)) == 6, "a tile apart: {len(tile_world::region(w, 0, 0, 0, 100))}");
+}
+
+// An unset layer with a ground has no end: the limit is the answer.
+fn test_a_ground_region_stops_at_the_limit() {
+  w = tile_world::world();
+  kinds(w);
+  tile_world::set_ground(w, 0, FLOOR);
+  assert(len(tile_world::region(w, 5, 5, 0, 50)) == 50, "fifty");
+}
+
+// The room's corner x 0..1, y 0..1, with a rise 2 at (0, 0), a box at (1, 1) and a fence west
+// of (1, 0), stamped at (10, 10, 0) into an empty world: the four cells, the rise, the box and
+// the fence come along; (12, 10), outside the stamp, stays unset.
+fn test_a_stamp_is_copied_and_pasted() {
+  w = room();
+  tile_world::set_rise(w, 0, 0, 0, 2);
+  tile_world::place(w, 1, 1, 0, BOX);
+  tile_world::set_edge(w, 1, 0, 0, tile_world::WEST, FENCE);
+  stamp = tile_world::copy(w, 0, 0, 1, 1, 0, 0);
+  assert(tile_world::terrain(stamp, 1, 1, 0) == FLOOR && tile_world::rise(stamp, 0, 0, 0) == 2, "the stamp holds them");
+  t = tile_world::world();
+  kinds(t);
+  tile_world::paste(t, stamp, 10, 10, 0);
+  assert(tile_world::terrain(t, 10, 10, 0) == FLOOR && tile_world::terrain(t, 11, 11, 0) == FLOOR, "the floor");
+  assert(tile_world::rise(t, 10, 10, 0) == 2, "the rise");
+  assert(tile_world::top(t, 11, 11, 0) == BOX, "the box");
+  assert(tile_world::edge(t, 11, 10, 0, tile_world::WEST) == FENCE, "the fence");
+  assert(!tile_world::is_set(t, 12, 10, 0), "outside the stamp");
+}
+
+// Pasting over a stack replaces it: a lamp at (11, 11) under the stamp's box leaves the box
+// alone, and a lamp under a stamp cell with no stack (10, 11) is gone.  A cell the stamp left
+// unset keeps what was there: (2, 0) of a stamp of x 2..2 copied from an unset world.
+fn test_a_paste_replaces_what_it_covers() {
+  w = room();
+  tile_world::place(w, 1, 1, 0, BOX);
+  stamp = tile_world::copy(w, 0, 0, 1, 1, 0, 0);
+  t = room();
+  tile_world::place(t, 11, 11, 0, LAMP);
+  tile_world::place(t, 10, 11, 0, LAMP);
+  tile_world::paste(t, stamp, 10, 10, 0);
+  assert(len(tile_world::things(t, 11, 11, 0)) == 1 && tile_world::top(t, 11, 11, 0) == BOX, "the box alone");
+  assert(tile_world::top(t, 10, 11, 0) == 0, "the lamp gone");
+  empty = tile_world::world();
+  tile_world::paste(t, tile_world::copy(empty, 0, 0, 0, 0, 0, 0), 2, 0, 0);
+  assert(tile_world::terrain(t, 2, 0, 0) == WALL, "an unset stamp cell changes nothing");
+}

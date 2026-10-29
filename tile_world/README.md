@@ -71,6 +71,8 @@ tile_world::thing_kind(w, TORCH, 0, false, false, true, "i");
 | `line_of_sight(w, x0, y0, x1, y1, z) -> boolean` | no opaque cell or edge between (Bresenham; a diagonal step sees round either side of a corner); a wall itself is seen |
 | `shades(w, x0, y0, x1, y1, z, lights = []) -> vector<integer>` | 0 at a light, one shade darker per step, up to `DARKEST` (7) and never black; the open sky is daylight, opaque cells are lit but pass no light on, `lights` adds what figures carry |
 | `view(w, x0, y0, x1, y1, z, marks = [])` | a layer as text, from the declared glyphs |
+| `region(w, x, y, z, limit) -> vector<(integer, integer)>` | the cells connected to (x, y) holding the same kind and tile, four ways and never across an edge, nearest first, at most `limit` (a ground has no end): what a fill paints |
+| `copy(w, x0, y0, x1, y1, z0, z1) -> World`, `paste(w, from, x, y, z)` | a stamp: a box of cells, rises, north/west edges and stacks, moved to (0, 0, 0), with the kinds; pasted, each cell the stamp holds anything at replaces the cell there |
 
 ## Tests
 
