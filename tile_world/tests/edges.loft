@@ -133,6 +133,10 @@ fn test_a_ground_is_open_land_for_nothing() {
   assert(tile_world::terrain(v, 9, 9, 1) == tile_world::VOID, "layer 1 has no ground");
   tile_world::set_ground(v, 1, FLOOR);
   assert(!tile_world::open_sky(v, 3, 3, 0), "a ground on layer 1 is a ceiling");
+  tile_world::set_ground(v, -2, FLOOR);
+  gl = "";
+  for z in tile_world::ground_layers(v) { gl += "{z},"; }
+  assert(gl == "-2,0,1,", "the layers with a ground: {gl}");
   tile_world::set_ground(v, 0, tile_world::VOID);
   assert(tile_world::terrain(v, 500, -300, 0) == tile_world::VOID && tile_world::ground(v, 0) == tile_world::VOID, "taken away");
   assert(tile_world::terrain(w, 2, 2, 0) == FLOOR, "a world without a ground is as it was");
