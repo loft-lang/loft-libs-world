@@ -160,6 +160,29 @@ fn test_shades() {
   assert(row(w, none) == "1,0,1,2,1,0,1,", "the open sky over x 4 is a light: {row(w, none)}");
 }
 
+// Light along row y 0 from lights that start dimmer: the k-th light at shade `start[k]` (a torch
+// burning down), a missing entry full.
+fn dim_row(w: const tile_world::World, lights: const vector<(integer, integer)>,
+           start: const vector<integer>) -> text {
+  t = "";
+  for s in tile_world::shades(w, -1, 0, 5, 0, 0, lights, start) { t += "{s},"; }
+  t
+}
+
+fn test_dimmed_lights() {
+  w = room();
+  at0: vector<(integer, integer)> = [(0, 0)];
+  assert(dim_row(w, at0, [3]) == "4,3,4,5,6,7,7,", "a light at x 0 from shade 3: {dim_row(w, at0, [3])}");
+  // The dim one at x 0 keeps its 3 (the bright one at x 4 reaches it at 4); x 1 takes 3 from the
+  // bright side.  The second light has no entry: full.
+  both: vector<(integer, integer)> = [(0, 0), (4, 0)];
+  assert(dim_row(w, both, [3]) == "4,3,3,2,1,0,1,", "the brighter way wins: {dim_row(w, both, [3])}");
+  // A dim light on the wall itself (opaque) is a light: it spreads.
+  wall: vector<(integer, integer)> = [(-1, 0)];
+  assert(dim_row(w, wall, [2]) == "2,3,4,5,6,7,7,", "a wall light from shade 2: {dim_row(w, wall, [2])}");
+  assert(dim_row(w, at0, [7]) == "7,7,7,7,7,7,7,", "as dark as the dark: nothing");
+}
+
 fn test_view() {
   w = room();
   tile_world::place(w, 1, 0, 0, BOX);
