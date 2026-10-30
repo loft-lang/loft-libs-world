@@ -1,6 +1,6 @@
 [package]
 name    = "tile_world"
-version = "0.5.0"
+version = "0.6.0"
 loft    = ">=2026.10.0"
 repository = "loft-libs-world"
 description = "An unbounded, layered square-grid world, and the routines that answer questions about it: paths, sight and light"

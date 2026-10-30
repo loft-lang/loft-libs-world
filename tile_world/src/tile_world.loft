@@ -595,51 +595,63 @@ pub fn line_of_sight(w: const World, x0: integer, y0: integer, x1: integer, y1: 
 
 /// How dark each cell of (x0, y0) .. (x1, y1) on layer z is, row by row: 0 at a light, one
 /// shade darker for each step from the nearest one, up to `DARKEST`, never black.  A light is
-/// a `lit` cell or one of `lights` (cells the game says give light now: what a figure carries).
+/// a `lit` cell or one of `lights` (cells the game says give light now: what a figure carries,
+/// a torch).  A light of `lights` starts at its shade in `start` (0, the default, is full; a
+/// dimmer light — a torch burning down — reaches less far), the k-th entry for the k-th light.
 /// Light spreads over every cell but an opaque one, which is lit but passes no light on unless
 /// it is itself a light, and never across an opaque edge.  A light up to `DARKEST` cells outside the rectangle counts.
 pub fn shades(w: const World, x0: integer, y0: integer, x1: integer, y1: integer, z: integer,
-              lights: const vector<(integer, integer)> = []) -> vector<integer> {
+              lights: const vector<(integer, integer)> = [],
+              start: const vector<integer> = []) -> vector<integer> {
   gx = x0 - DARKEST;
   gy = y0 - DARKEST;
   gw = x1 - x0 + 1 + 2 * DARKEST;
   gh = y1 - y0 + 1 + 2 * DARKEST;
   dist: vector<integer> = [DARKEST; gw * gh];
-  queue: vector<integer> = [];
+  source: vector<boolean> = [false; gw * gh];
   for j in 0..gh {
     for i in 0..gw {
       if lit(w, gx + i, gy + j, z) {
         dist[j * gw + i] = 0;
-        queue += [j * gw + i];
+        source[j * gw + i] = true;
       }
     }
   }
-  for l in lights {
+  for k in 0..len(lights) {
+    l = lights[k];
     i = l.0 - gx;
     j = l.1 - gy;
-    if i >= 0 && i < gw && j >= 0 && j < gh && (dist[j * gw + i] ?? 0) > 0 {
-      dist[j * gw + i] = 0;
-      queue += [j * gw + i];
+    from = start[k] ?? 0;
+    if from < 0 { from = 0; }
+    if i >= 0 && i < gw && j >= 0 && j < gh && from < (dist[j * gw + i] ?? 0) {
+      dist[j * gw + i] = from;
+      source[j * gw + i] = true;
     }
   }
-  at = 0;
-  while at < len(queue) {
-    c = queue[at] ?? 0;
-    at += 1;
-    d = dist[c] ?? DARKEST;
-    if d + 1 >= DARKEST { continue; }
-    cx = c % gw ?? 0;
-    cy = c / gw ?? 0;
-    if d > 0 && opaque(w, gx + cx, gy + cy, z) { continue; }
-    for n in [(cx - 1, cy), (cx + 1, cy), (cx, cy - 1), (cx, cy + 1)] {
-      nx = n.0;
-      ny = n.1;
-      if nx >= 0 && nx < gw && ny >= 0 && ny < gh && (dist[ny * gw + nx] ?? 0) > d + 1
-          && see_through(w, gx + cx, gy + cy, z, nx - cx, ny - cy) {
-        dist[ny * gw + nx] = d + 1;
-        queue += [ny * gw + nx];
+  // Shade by shade, so a cell takes its light from the brightest way first: the cells a shade
+  // reached, with the lights that start at that shade, spread one shade darker.
+  frontier: vector<integer> = [];
+  for s in 0..DARKEST - 1 {
+    for c in 0..gw * gh {
+      if (source[c] ?? false) && (dist[c] ?? DARKEST) == s { frontier += [c]; }
+    }
+    next: vector<integer> = [];
+    for c in frontier {
+      if (dist[c] ?? DARKEST) != s { continue; }
+      cx = c % gw ?? 0;
+      cy = c / gw ?? 0;
+      if !(source[c] ?? false) && opaque(w, gx + cx, gy + cy, z) { continue; }
+      for n in [(cx - 1, cy), (cx + 1, cy), (cx, cy - 1), (cx, cy + 1)] {
+        nx = n.0;
+        ny = n.1;
+        if nx >= 0 && nx < gw && ny >= 0 && ny < gh && (dist[ny * gw + nx] ?? 0) > s + 1
+            && see_through(w, gx + cx, gy + cy, z, nx - cx, ny - cy) {
+          dist[ny * gw + nx] = s + 1;
+          next += [ny * gw + nx];
+        }
       }
     }
+    frontier = next;
   }
   out: vector<integer> = [];
   for y in y0..=y1 {
