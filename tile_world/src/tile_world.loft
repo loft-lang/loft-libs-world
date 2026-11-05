@@ -481,12 +481,12 @@ pub fn opaque(w: const World, x: integer, y: integer, z: integer) -> boolean {
   false
 }
 
-/// Does a cell give light: under the open sky (it is day), lit terrain, or a lit thing on it.
-/// A void cell gives none.
-pub fn lit(w: const World, x: integer, y: integer, z: integer) -> boolean {
+/// Does a cell give light: under the open sky (by day: `daylight`, the default), lit terrain, or a
+/// lit thing on it.  A void cell gives none.
+pub fn lit(w: const World, x: integer, y: integer, z: integer, daylight: boolean = true) -> boolean {
   kind = terrain(w, x, y, z);
   if kind == VOID { return false; }
-  if open_sky(w, x, y, z) { return true; }
+  if daylight && open_sky(w, x, y, z) { return true; }
   k = w.terrains[kind];
   if k && k.light { return true; }
   for t in things(w, x, y, z) {
@@ -600,9 +600,11 @@ pub fn line_of_sight(w: const World, x0: integer, y0: integer, x1: integer, y1: 
 /// dimmer light — a torch burning down — reaches less far), the k-th entry for the k-th light.
 /// Light spreads over every cell but an opaque one, which is lit but passes no light on unless
 /// it is itself a light, and never across an opaque edge.  A light up to `DARKEST` cells outside the rectangle counts.
+/// `daylight` false: the open sky is no light — night, when only what gives light of itself (a
+/// lamp, a lit terrain) and `lights` light the world.
 pub fn shades(w: const World, x0: integer, y0: integer, x1: integer, y1: integer, z: integer,
               lights: const vector<(integer, integer)> = [],
-              start: const vector<integer> = []) -> vector<integer> {
+              start: const vector<integer> = [], daylight: boolean = true) -> vector<integer> {
   gx = x0 - DARKEST;
   gy = y0 - DARKEST;
   gw = x1 - x0 + 1 + 2 * DARKEST;
@@ -611,7 +613,7 @@ pub fn shades(w: const World, x0: integer, y0: integer, x1: integer, y1: integer
   source: vector<boolean> = [false; gw * gh];
   for j in 0..gh {
     for i in 0..gw {
-      if lit(w, gx + i, gy + j, z) {
+      if lit(w, gx + i, gy + j, z, daylight) {
         dist[j * gw + i] = 0;
         source[j * gw + i] = true;
       }

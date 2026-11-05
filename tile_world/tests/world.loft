@@ -160,6 +160,22 @@ fn test_shades() {
   assert(row(w, none) == "1,0,1,2,1,0,1,", "the open sky over x 4 is a light: {row(w, none)}");
 }
 
+// Night: `daylight` false, the open sky gives no light — the cells open to it are as dark as any,
+// and only a lamp or a light the game passes in lights them.
+fn test_night() {
+  w = room();
+  none: vector<(integer, integer)> = [];
+  tile_world::set_terrain(w, 4, 0, 1, tile_world::VOID);
+  assert(row(w, none) == "5,4,3,2,1,0,1,", "by day the open sky over x 4 is a light: {row(w, none)}");
+  t = "";
+  for s in tile_world::shades(w, -1, 0, 5, 0, 0, none, [], false) { t += "{s},"; }
+  assert(t == "7,7,7,7,7,7,7,", "by night it is not: {t}");
+  tile_world::place(w, 0, 0, 0, LAMP);
+  t = "";
+  for s in tile_world::shades(w, -1, 0, 5, 0, 0, none, [], false) { t += "{s},"; }
+  assert(t == "1,0,1,2,3,4,5,", "a lamp still lights by night: {t}");
+}
+
 // Light along row y 0 from lights that start dimmer: the k-th light at shade `start[k]` (a torch
 // burning down), a missing entry full.
 fn dim_row(w: const tile_world::World, lights: const vector<(integer, integer)>,
