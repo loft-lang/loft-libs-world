@@ -323,7 +323,7 @@ fn word(w: const World, x: integer, y: integer, z: integer) -> integer {
   c = w.chunks[chunk_of(x), chunk_of(y), z];
   if !c { return 0; }
   if len(c.extra) == 0 { return 0; }
-  (c.extra[inside(y) * CHUNK + inside(x)] ?? 0) as integer
+  ((c.extra[inside(y) * CHUNK + inside(x)] ?? 0) & 2147483647) as integer
 }
 
 fn set_word(w: World, x: integer, y: integer, z: integer, v: integer) {
@@ -459,7 +459,9 @@ pub fn height(w: const World, x: integer, y: integer, z: integer) -> integer {
 /// Can a cell be walked into: walkable terrain and nothing on it that blocks.
 pub fn passable(w: const World, x: integer, y: integer, z: integer) -> boolean {
   if !walkable_kind(w, terrain(w, x, y, z)) { return false; }
-  for t in things(w, x, y, z) {
+  s = w.stacks[x, y, z];
+  if !s { return true; }
+  for t in s.things {
     k = w.objects[t];
     if !k || !k.walk { return false; }
   }
@@ -474,7 +476,9 @@ pub fn opaque(w: const World, x: integer, y: integer, z: integer) -> boolean {
     k = w.terrains[kind];
     if !k || k.opaque { return true; }
   }
-  for t in things(w, x, y, z) {
+  s = w.stacks[x, y, z];
+  if !s { return false; }
+  for t in s.things {
     o = w.objects[t];
     if o && o.opaque { return true; }
   }
