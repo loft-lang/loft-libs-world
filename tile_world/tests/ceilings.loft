@@ -1,0 +1,89 @@
+// A cell's ceiling: how many steps it hangs below the floor of the layer above, for a renderer that
+// draws ceilings.  It shares the cell's word with the edges, the rise and the slant, and no routine
+// reads it.  Every answer is worked out by hand in its cell.
+use tile_world;
+
+const FLOOR = 1;
+const WALL = 2;
+const LAMP = 1;
+const E_DOOR = 1;
+
+// A floor x 0 .. 4, y 0 .. 2 on layer 0, walled round, under a ceiling: layer 1 is wall over it.
+fn room() -> tile_world::World {
+  w = tile_world::world();
+  tile_world::terrain_kind(w, FLOOR, true, false, false, ".");
+  tile_world::terrain_kind(w, WALL, false, true, false, "#");
+  tile_world::thing_kind(w, LAMP, 0, false, false, true, "*");
+  tile_world::edge_kind(w, E_DOOR, true, true, "+");
+  tile_world::fill(w, -1, -1, 5, 3, 0, WALL);
+  tile_world::fill(w, 0, 0, 4, 2, 0, FLOOR);
+  tile_world::fill(w, -1, -1, 5, 3, 1, WALL);
+  w
+}
+
+fn main() {
+  w = room();
+  assert(tile_world::ceiling(w, 2, 1, 0) == 0, "no lowered ceiling to start with");
+}
+
+// Each height reads back; past 15 it is 15, below 0 it is 0; far out it makes its chunk.
+fn test_a_ceiling_reads_back() {
+  w = room();
+  for s in [1, 3, 15, 0] {
+    tile_world::set_ceiling(w, 2, 1, 0, s);
+    assert(tile_world::ceiling(w, 2, 1, 0) == s, "{s} steps");
+  }
+  tile_world::set_ceiling(w, 1, 1, 0, 40);
+  assert(tile_world::ceiling(w, 1, 1, 0) == 15, "40 is 15");
+  tile_world::set_ceiling(w, 1, 1, 0, -2);
+  assert(tile_world::ceiling(w, 1, 1, 0) == 0, "-2 is 0");
+  tile_world::set_ceiling(w, 90, -50, -3, 2);
+  assert(tile_world::ceiling(w, 90, -50, -3) == 2 && tile_world::ceiling(w, 91, -50, -3) == 0, "far out, its neighbour none");
+}
+
+// All five in one word at their highest — north and west edge 255, rise 15, slant 4 (north-west),
+// ceiling 15 — each reads back; taking the ceiling away keeps the other four, and setting them
+// keeps the ceiling.
+fn test_a_ceiling_keeps_the_rest_of_the_word() {
+  w = room();
+  tile_world::set_edge(w, 3, 1, 0, tile_world::NORTH, 255);
+  tile_world::set_edge(w, 3, 1, 0, tile_world::WEST, 255);
+  tile_world::set_rise(w, 3, 1, 0, 15);
+  tile_world::set_slant(w, 3, 1, 0, tile_world::NORTH_WEST);
+  tile_world::set_ceiling(w, 3, 1, 0, 15);
+  assert(tile_world::edge(w, 3, 1, 0, tile_world::NORTH) == 255 && tile_world::edge(w, 3, 1, 0, tile_world::WEST) == 255, "the edges");
+  assert(tile_world::rise(w, 3, 1, 0) == 15 && tile_world::slant(w, 3, 1, 0) == 4, "the rise and the slant");
+  assert(tile_world::ceiling(w, 3, 1, 0) == 15, "the ceiling");
+  tile_world::set_ceiling(w, 3, 1, 0, 0);
+  assert(tile_world::rise(w, 3, 1, 0) == 15 && tile_world::slant(w, 3, 1, 0) == 4
+         && tile_world::edge(w, 3, 1, 0, tile_world::WEST) == 255, "the ceiling taken away: the rest kept");
+  tile_world::set_ceiling(w, 3, 1, 0, 9);
+  tile_world::set_rise(w, 3, 1, 0, 0);
+  tile_world::set_slant(w, 3, 1, 0, 0);
+  tile_world::set_edge(w, 3, 1, 0, tile_world::NORTH, 0);
+  assert(tile_world::ceiling(w, 3, 1, 0) == 9, "the rest taken away: the ceiling kept");
+}
+
+// No routine reads it: walking, sight, light and the open sky are the same with every ceiling of
+// the room hung as low as it goes.
+fn test_no_routine_reads_a_ceiling() {
+  w = room();
+  tile_world::place(w, 0, 1, 0, LAMP);
+  path = tile_world::shortest_path(w, 0, 0, 4, 2, 0);
+  lit = tile_world::shades(w, 0, 0, 4, 2, 0);
+  for y in 0..3 { for x in 0..5 { tile_world::set_ceiling(w, x, y, 0, 15); } }
+  assert(tile_world::shortest_path(w, 0, 0, 4, 2, 0) == path && len(path) == 6, "the same path, 6 steps");
+  assert(tile_world::shades(w, 0, 0, 4, 2, 0) == lit, "the same light");
+  assert(tile_world::passable(w, 2, 1, 0) && !tile_world::opaque(w, 2, 1, 0), "still walked, still seen through");
+  assert(tile_world::line_of_sight(w, 0, 0, 4, 2, 0) && !tile_world::open_sky(w, 2, 1, 0), "sight, and under its ceiling");
+}
+
+// A stamp carries it, and pasting puts it at the stamp's place.
+fn test_a_ceiling_is_stamped() {
+  w = room();
+  tile_world::set_ceiling(w, 1, 0, 0, 3);
+  s = tile_world::copy(w, 0, 0, 2, 1, 0, 1);
+  assert(tile_world::ceiling(s, 1, 0, 0) == 3, "in the stamp at (1, 0)");
+  tile_world::paste(w, s, 20, 20, 4);
+  assert(tile_world::ceiling(w, 21, 20, 4) == 3 && tile_world::ceiling(w, 20, 20, 4) == 0, "pasted at (21, 20, 4) only");
+}
