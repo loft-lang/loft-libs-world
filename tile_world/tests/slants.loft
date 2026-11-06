@@ -1,0 +1,97 @@
+// A cell's slant: a 45-degree face, which corner its open half lies in.  A picture only: it is
+// kept apart from the edges and the rise in the cell's word, and walking, sight, light and the
+// stacks read a slanted cell as its kind, whole.  Every answer is worked out by hand in its cell.
+use tile_world;
+
+const FLOOR = 1;
+const WALL = 2;
+const BOX = 1;
+const E_DOOR = 1;
+
+// A floor x 0 .. 4, y 0 .. 2 on layer 0, walled round; the layer above is floor.
+fn room() -> tile_world::World {
+  w = tile_world::world();
+  tile_world::terrain_kind(w, FLOOR, true, false, false, ".");
+  tile_world::terrain_kind(w, WALL, false, true, false, "#");
+  tile_world::thing_kind(w, BOX, 1, true, false, false, "b");
+  tile_world::edge_kind(w, E_DOOR, true, true, "+");
+  tile_world::fill(w, -1, -1, 5, 3, 0, WALL);
+  tile_world::fill(w, 0, 0, 4, 2, 0, FLOOR);
+  w
+}
+
+fn main() {
+  w = room();
+  assert(tile_world::slant(w, -1, -1, 0) == 0, "no slant to start with");
+}
+
+// Each of the four ways reads back; 0 takes it away; a value outside the four is none.
+fn test_a_slant_reads_back() {
+  w = room();
+  tile_world::set_slant(w, -1, -1, 0, tile_world::SOUTH_EAST);
+  assert(tile_world::slant(w, -1, -1, 0) == tile_world::SOUTH_EAST, "south-east");
+  tile_world::set_slant(w, 5, -1, 0, tile_world::SOUTH_WEST);
+  tile_world::set_slant(w, 5, 3, 0, tile_world::NORTH_WEST);
+  tile_world::set_slant(w, -1, 3, 0, tile_world::NORTH_EAST);
+  assert(tile_world::slant(w, 5, -1, 0) == 3 && tile_world::slant(w, 5, 3, 0) == 4
+         && tile_world::slant(w, -1, 3, 0) == 1, "the other three: 3, 4 and 1");
+  assert(tile_world::slant(w, 0, -1, 0) == 0, "the neighbour keeps none");
+  tile_world::set_slant(w, -1, -1, 0, 0);
+  assert(tile_world::slant(w, -1, -1, 0) == 0, "0 takes it away");
+  tile_world::set_slant(w, 2, -1, 0, 9);
+  assert(tile_world::slant(w, 2, -1, 0) == 0, "9 is not a way: none");
+  tile_world::set_slant(w, -70, 40, 3, tile_world::NORTH_WEST);
+  assert(tile_world::slant(w, -70, 40, 3) == 4, "far out, in a new chunk, on another layer");
+}
+
+// The slant shares the cell's word with its north and west edges and its rise: setting any one
+// keeps the other three.
+fn test_a_slant_keeps_the_edges_and_the_rise() {
+  w = room();
+  tile_world::set_edge(w, 2, 0, 0, tile_world::NORTH, E_DOOR);
+  tile_world::set_edge(w, 2, 0, 0, tile_world::WEST, E_DOOR);
+  tile_world::set_rise(w, 2, 0, 0, 15);
+  tile_world::set_slant(w, 2, 0, 0, tile_world::NORTH_WEST);
+  assert(tile_world::edge(w, 2, 0, 0, tile_world::NORTH) == E_DOOR
+         && tile_world::edge(w, 2, 0, 0, tile_world::WEST) == E_DOOR, "the edges kept");
+  assert(tile_world::rise(w, 2, 0, 0) == 15, "the highest rise kept");
+  assert(tile_world::slant(w, 2, 0, 0) == 4, "the slant beside them");
+  tile_world::set_rise(w, 2, 0, 0, 0);
+  tile_world::set_edge(w, 2, 0, 0, tile_world::NORTH, 0);
+  assert(tile_world::slant(w, 2, 0, 0) == 4, "taking the rise and an edge away keeps the slant");
+  tile_world::set_slant(w, 2, 0, 0, 0);
+  assert(tile_world::edge(w, 2, 0, 0, tile_world::WEST) == E_DOOR, "taking the slant away keeps the west edge");
+}
+
+// A slanted wall is a wall: not walked into, opaque; a slanted floor is still walked on.  A path
+// round a slanted corner takes the same steps as round a whole one.
+fn test_a_slanted_cell_is_its_kind() {
+  w = room();
+  tile_world::set_slant(w, 2, -1, 0, tile_world::SOUTH_EAST);
+  assert(!tile_world::passable(w, 2, -1, 0), "a slanted wall is not walked into");
+  assert(tile_world::opaque(w, 2, -1, 0), "a slanted wall stops sight");
+  tile_world::fill(w, 2, 1, 2, 1, 0, WALL);
+  before = tile_world::shortest_path(w, 1, 1, 3, 1, 0);
+  tile_world::set_slant(w, 2, 1, 0, tile_world::NORTH_EAST);
+  after = tile_world::shortest_path(w, 1, 1, 3, 1, 0);
+  assert(len(before) == 4 && len(after) == 4, "round the wall in 4 steps, slanted or not: {len(before)} {len(after)}");
+  assert(!tile_world::line_of_sight(w, 1, 1, 3, 1, 0), "the slanted wall between still blocks sight");
+  tile_world::set_slant(w, 0, 0, 0, tile_world::NORTH_WEST);
+  assert(tile_world::passable(w, 0, 0, 0), "a slanted floor is still floor");
+  tile_world::place(w, 0, 0, 0, BOX);
+  assert(tile_world::height(w, 0, 0, 0) == 1 && tile_world::slant(w, 0, 0, 0) == 4, "a stack on it; the slant kept");
+}
+
+// The slant goes with the cell when the terrain changes, and with a stamp.
+fn test_a_slant_is_kept_and_stamped() {
+  w = room();
+  tile_world::set_slant(w, 0, -1, 0, tile_world::SOUTH_WEST);
+  tile_world::fill(w, 0, -1, 0, -1, 0, FLOOR);
+  assert(tile_world::slant(w, 0, -1, 0) == 3, "kept when the terrain changes");
+  tile_world::fill(w, 0, -1, 0, -1, 0, WALL);
+  s = tile_world::copy(w, -1, -1, 1, 0, 0, 0);
+  assert(tile_world::slant(s, 1, 0, 0) == 3, "in the stamp at (1, 0)");
+  tile_world::paste(w, s, 10, 10, 2);
+  assert(tile_world::slant(w, 11, 10, 2) == 3, "pasted at (11, 10, 2)");
+  assert(tile_world::slant(w, 10, 10, 2) == 0 && !tile_world::passable(w, 11, 10, 2), "its neighbour none; still a wall");
+}

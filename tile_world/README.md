@@ -33,6 +33,9 @@ declares its kinds here and moves things with `place` and `take`.
   neighbours'), so walls, fences, doors and windows can stand BETWEEN cells; and a rise, its own
   height in steps, for slopes.  They share one 32-bit word a cell, in an array a chunk gets only
   when one of its cells first has an edge or a rise.
+- **Slant:** the same word holds a cell's 45-degree face, which corner its open half lies in, so
+  a game can draw a wall or a rock face running at 45 degrees.  It is a picture only: walking,
+  sight, light and standing on the cell read it as its kind, whole.
 - **Things:** numbers the game chooses, kept in a second sparse hash of per-cell stacks,
   bottom first.
 
@@ -65,6 +68,7 @@ tile_world::thing_kind(w, TORCH, 0, false, false, true, "i");
 | `set_ground(w, z, kind, tile)`, `ground`, `ground_tile`, `ground_layers`, `clear`, `is_set` | a layer's open land, and unset versus set-to-void |
 | `edge_kind`, `set_edge(w, x, y, z, side, kind)`, `edge`, `crossable`, `see_through` | edges between cells (`NORTH`, `EAST`, `SOUTH`, `WEST`) |
 | `set_rise(w, x, y, z, steps)`, `rise` | a cell's own height, 0..15 steps; `height` adds it under the things |
+| `set_slant(w, x, y, z, toward)`, `slant` | a 45-degree face: which corner (`NORTH_EAST`, `SOUTH_EAST`, `SOUTH_WEST`, `NORTH_WEST`; 0 none) the cell's open half lies in — a picture only, every routine reads the cell as its kind |
 | `place`, `take`, `things`, `top`, `height` | the stacks |
 | `passable`, `opaque`, `lit` | questions about one cell |
 | `shortest_path(w, x0, y0, x1, y1, z, limit = 64) -> vector<(integer, integer)>` | breadth-first over passable cells and crossable edges; the goal may be a thing to walk up to |
@@ -72,10 +76,10 @@ tile_world::thing_kind(w, TORCH, 0, false, false, true, "i");
 | `shades(w, x0, y0, x1, y1, z, lights = [], start = [], daylight = true) -> vector<integer>` | 0 at a light, one shade darker per step, up to `DARKEST` (7) and never black; the open sky is daylight, opaque cells are lit but pass no light on, `lights` adds what figures carry; `start[k]` is the shade the k-th of them starts at (0, full, when missing): a torch burning down reaches less far; `daylight` false is night — the open sky gives no light, lamps and `lights` still do |
 | `view(w, x0, y0, x1, y1, z, marks = [])` | a layer as text, from the declared glyphs |
 | `region(w, x, y, z, limit) -> vector<(integer, integer)>` | the cells connected to (x, y) holding the same kind and tile, four ways and never across an edge, nearest first, at most `limit` (a ground has no end): what a fill paints |
-| `copy(w, x0, y0, x1, y1, z0, z1) -> World`, `paste(w, from, x, y, z)` | a stamp: a box of cells, rises, north/west edges and stacks, moved to (0, 0, 0), with the kinds; pasted, each cell the stamp holds anything at replaces the cell there |
+| `copy(w, x0, y0, x1, y1, z0, z1) -> World`, `paste(w, from, x, y, z)` | a stamp: a box of cells, rises, slants, north/west edges and stacks, moved to (0, 0, 0), with the kinds; pasted, each cell the stamp holds anything at replaces the cell there |
 
 ## Tests
 
 `tests/world.loft` and `tests/edges.loft` cover each routine, the edges, the ground and the
-rise over a neutral set of kinds (floor, wall, window;
+rise, the slant over a neutral set of kinds (floor, wall, window;
 box, lamp, curtain), with hand-worked answers.

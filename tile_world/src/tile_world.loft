@@ -23,7 +23,9 @@
 // A cell can also carry its two EDGES — the north and the west one; the east and the south
 // edge are its neighbours' west and north — and a RISE, its own height in steps (a hillside).
 // They share one 32-bit word a cell, in an array a chunk gets only when one of its cells first
-// has an edge or a rise.
+// has an edge or a rise.  The same word holds the cell's SLANT: a 45-degree face, which way its
+// open half looks (`set_slant`) — a picture only, for the game to draw its kind cut along a
+// diagonal; every routine reads the cell as its kind, whole.
 //
 // THINGS move, so they are not in the terrain: each cell that holds any has a STACK (bottom
 // first) in a second hash keyed on (x, y, z), removed when it empties.  A thing is a number
@@ -50,6 +52,13 @@ pub const EAST = 1;
 pub const SOUTH = 2;
 pub const WEST = 3;
 
+/// The four ways a cell's slant can look (`set_slant`): the corner its open half lies in.  0 is
+/// none, a whole cell.
+pub const NORTH_EAST = 1;
+pub const SOUTH_EAST = 2;
+pub const SOUTH_WEST = 3;
+pub const NORTH_WEST = 4;
+
 // A cell's raw terrain: 0 is unset (the layer's ground), 1 is void set on purpose.
 const UNSET = 0;
 const SET_VOID = 1;
@@ -61,7 +70,8 @@ struct Chunk {
   const cy: integer,
   const z: integer,
   cells: vector<u16>,
-  // One word a cell — north edge (bits 0..7), west edge (8..15), rise (16..19) — or empty
+  // One word a cell — north edge (bits 0..7), west edge (8..15), rise (16..19), slant (20..22)
+  // — or empty
   // while no cell of the chunk has any.
   extra: vector<u32>
 }
@@ -394,6 +404,23 @@ pub fn set_rise(w: World, x: integer, y: integer, z: integer, steps: integer) {
 /// A cell's rise in steps, 0 for a flat one.
 pub fn rise(w: const World, x: integer, y: integer, z: integer) -> integer {
   (word(w, x, y, z) >> 16) & 15
+}
+
+/// Give cell (x, y, z) a slant: a 45-degree face looking `toward` (`NORTH_EAST`, `SOUTH_EAST`,
+/// `SOUTH_WEST`, `NORTH_WEST`; 0 takes it away), so the game draws its kind filling only the half
+/// away from that corner — a rock face or a wall running at 45 degrees.  A picture only: walking,
+/// sight, light and standing on it read the cell as its kind, whole.  Kept when the terrain
+/// changes, like the edges and the rise.
+pub fn set_slant(w: World, x: integer, y: integer, z: integer, toward: integer) {
+  t = if toward < 0 || toward > NORTH_WEST { 0 } else { toward };
+  v = word(w, x, y, z);
+  if t == 0 && (v & (7 << 20)) == 0 { return; }
+  set_word(w, x, y, z, (v & ~(7 << 20)) | (t << 20));
+}
+
+/// Which way cell (x, y, z)'s slant looks, 0 for a whole cell.
+pub fn slant(w: const World, x: integer, y: integer, z: integer) -> integer {
+  (word(w, x, y, z) >> 20) & 7
 }
 
 /// Is (x, y, z) under the open sky: nothing set on the layer above it.
@@ -739,8 +766,8 @@ fn put_raw(w: World, x: integer, y: integer, z: integer, r: integer) {
 }
 
 /// A stamp: the cells of the box x0..x1, y0..y1 on layers z0..z1, corners included — terrain
-/// as set (an unset cell stays unset), rise, the north and west edges each cell holds, and the
-/// stacks — moved so the corner (x0, y0, z0) is (0, 0, 0).  The kinds come along: the stamp is
+/// as set (an unset cell stays unset), rise, slant, the north and west edges each cell holds, and
+/// the stacks — moved so the corner (x0, y0, z0) is (0, 0, 0).  The kinds come along: the stamp is
 /// a world of its own, to `paste` back or keep.
 pub fn copy(w: const World, x0: integer, y0: integer, x1: integer, y1: integer, z0: integer,
             z1: integer) -> World {
@@ -763,8 +790,8 @@ pub fn copy(w: const World, x0: integer, y0: integer, x1: integer, y1: integer, 
 }
 
 /// Write stamp `from` (a `copy`) into `w` with its (0, 0, 0) at (x, y, z).  Each cell the stamp
-/// holds anything at replaces the cell there: its terrain when the stamp set it, its rise and
-/// north and west edges, and its stack (none when the stamp's cell has none).  A cell the
+/// holds anything at replaces the cell there: its terrain when the stamp set it, its rise, slant
+/// and north and west edges, and its stack (none when the stamp's cell has none).  A cell the
 /// stamp holds nothing at leaves `w` as it was.
 pub fn paste(w: World, from: const World, x: integer, y: integer, z: integer) {
   for c in from.chunks {
