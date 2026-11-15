@@ -1,0 +1,123 @@
+// `shades` read through its window (the cells read once): a cell's shade does not hang on the box
+// it is asked over — across chunk borders and west and north of the origin — and each thing the
+// window reads counts as `lit`, `opaque` and `see_through` say.  Kinds: floor, wall, lava (a light);
+// a crate (opaque), a lamp (a light); edges: a door (opaque), a window (seen through).  Every
+// answer worked out by hand.
+use tile_world;
+
+const FLOOR = 1;
+const WALL = 2;
+const LAVA = 3;
+const CRATE = 1;
+const LAMP = 2;
+const E_DOOR = 1;
+const E_WINDOW = 2;
+
+// A floor x -40 .. 40, y -40 .. 40 on layer 0, roofed on layer 1 but for a hole at (30, 30); a
+// door on the west side of (1, 5) and a window on the west side of (1, -5); lava at (-30, -30); a
+// crate at (33, 3); a lamp on void at (-20, 20).
+fn world() -> tile_world::World {
+  w = tile_world::world();
+  tile_world::terrain_kind(w, FLOOR, true, false, false, ".");
+  tile_world::terrain_kind(w, WALL, false, true, false, "#");
+  tile_world::terrain_kind(w, LAVA, true, false, true, "~");
+  tile_world::thing_kind(w, CRATE, 1, true, true, false, "c");
+  tile_world::thing_kind(w, LAMP, 0, false, false, true, "*");
+  tile_world::edge_kind(w, E_DOOR, true, true, "+");
+  tile_world::edge_kind(w, E_WINDOW, false, false, "=");
+  tile_world::fill(w, -40, -40, 40, 40, 0, FLOOR);
+  tile_world::fill(w, -40, -40, 40, 40, 1, WALL);
+  tile_world::clear(w, 30, 30, 1);
+  tile_world::set_terrain(w, 30, 30, 1, tile_world::VOID);
+  tile_world::set_terrain(w, -30, -30, 0, LAVA);
+  tile_world::place(w, 33, 3, 0, CRATE);
+  tile_world::set_terrain(w, -20, 20, 0, tile_world::VOID);
+  tile_world::place(w, -20, 20, 0, LAMP);
+  tile_world::set_edge(w, 1, 5, 0, tile_world::WEST, E_DOOR);
+  tile_world::set_edge(w, 1, -5, 0, tile_world::WEST, E_WINDOW);
+  w
+}
+
+fn main() {
+  w = world();
+  assert(len(tile_world::shades(w, 0, 0, 3, 3, 0)) == 16, "a box of 16");
+}
+
+// The same cells asked over a big box and over small ones, by day and by night, with a light the
+// game carries at (5, 0): the same shades.
+fn test_a_shade_does_not_hang_on_the_box() {
+  w = world();
+  for day in [true, false] {
+    big = tile_world::shades(w, -36, -36, 36, 36, 0, [(5, 0)], [1], day);
+    for b in [(-36, -36, -30, -30), (-2, -8, 5, 8), (28, 28, 33, 33), (31, 1, 34, 5), (-22, 18, -18, 22), (-1, -1, 0, 0)] {
+      small = tile_world::shades(w, b.0, b.1, b.2, b.3, 0, [(5, 0)], [1], day);
+      i = 0;
+      for y in b.1..=b.3 {
+        for x in b.0..=b.2 {
+          s = small[i] ?? -1;
+          l = big[(y + 36) * 73 + (x + 36)] ?? -2;
+          assert(s == l, "({x}, {y}) day {day}: {s} in a small box, {l} in the big one");
+          i += 1;
+        }
+      }
+    }
+  }
+}
+
+// Cell (x, y)'s shade of the box -40 .. 40 both ways.
+fn at(sh: const vector<integer>, x: integer, y: integer) -> integer {
+  sh[(y + 40) * 81 + (x + 40)] ?? -1
+}
+
+// What the window reads, each as its routine says.
+fn test_the_window_reads_what_the_routines_say() {
+  w = world();
+  sh = tile_world::shades(w, -40, -40, 40, 40, 0);
+  // The hole in the roof is the open sky by day: a light; not by night.
+  assert(at(sh, 30, 30) == 0, "under the hole: {at(sh, 30, 30)}");
+  assert(at(sh, 30, 33) == 3, "three cells from it: {at(sh, 30, 33)}");
+  night = tile_world::shades(w, 30, 30, 30, 30, 0, [], [], false);
+  assert((night[0] ?? -1) == tile_world::DARKEST, "the hole by night: {night[0] ?? -1}");
+  // Lava gives light.
+  assert(at(sh, -30, -30) == 0 && at(sh, -30, -27) == 3, "lava: {at(sh, -30, -30)}, {at(sh, -30, -27)}");
+  // A lamp on void gives none: a void cell is no light.
+  assert(at(sh, -20, 20) == tile_world::DARKEST, "the lamp on void: {at(sh, -20, 20)}");
+  // The crate is opaque: lit by a light beside it, but passing none on — the cell past it is lit
+  // round it, (32, 4), (33, 4), (34, 4), (34, 3): 4, not 2.  By night, the roof's hole no light.
+  crate = tile_world::shades(w, 33, 3, 34, 3, 0, [(32, 3)], [], false);
+  assert((crate[0] ?? -1) == 1 && (crate[1] ?? -1) == 4, "the crate, past it: {crate[0] ?? -1}, {crate[1] ?? -1}");
+  // A light at (2, 5): the door (opaque) keeps it from crossing to (0, 5), which is lit round it,
+  // (1, 4), (0, 4), (0, 5): 4, not 2; the window lets a light at (2, -5) through to (0, -5): 2.
+  d = tile_world::shades(w, 0, 5, 1, 5, 0, [(2, 5)]);
+  assert((d[1] ?? -1) == 1 && (d[0] ?? -1) == 4, "round the door, not through it: {d[0] ?? -1}");
+  v = tile_world::shades(w, 0, -5, 1, -5, 0, [(2, -5)]);
+  assert((v[0] ?? -1) == 2, "through the window: {v[0] ?? -1}");
+}
+
+// `block` answers what `terrain`, `rise`, `slant`, `ceiling`, `edge` and `top` answer, cell by
+// cell, across chunk borders and west and north of the origin.
+fn test_a_block_reads_what_each_cell_answers() {
+  w = world();
+  tile_world::set_rise(w, -33, 2, 0, 3);
+  tile_world::set_slant(w, 31, -1, 0, tile_world::SOUTH_WEST);
+  tile_world::set_ceiling(w, 32, 0, 0, 15);
+  tile_world::set_edge(w, -1, -33, 0, tile_world::NORTH, E_DOOR);
+  for z in [0, 1, 2] {
+    b = tile_world::block(w, -34, -34, 34, 6, z);
+    i = 0;
+    for y in -34..=6 {
+      for x in -34..=34 {
+        v = b[i] ?? -1;
+        assert((v & 15) == tile_world::terrain(w, x, y, z), "({x}, {y}, {z}) kind");
+        assert(((v >> 4) & 15) == tile_world::rise(w, x, y, z), "({x}, {y}, {z}) rise");
+        assert(((v >> 8) & 7) == tile_world::slant(w, x, y, z), "({x}, {y}, {z}) slant");
+        assert(((v >> 11) & 15) == tile_world::ceiling(w, x, y, z), "({x}, {y}, {z}) ceiling");
+        assert(((v >> 15) & 255) == tile_world::edge(w, x, y, z, tile_world::NORTH), "({x}, {y}, {z}) north");
+        assert(((v >> 23) & 255) == tile_world::edge(w, x, y, z, tile_world::WEST), "({x}, {y}, {z}) west");
+        assert((((v >> 31) & 1) == 1) == (len(tile_world::things(w, x, y, z)) > 0), "({x}, {y}, {z}) things");
+        i += 1;
+      }
+    }
+    assert(i == len(b), "one number a cell");
+  }
+}

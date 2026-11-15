@@ -80,11 +80,12 @@ tile_world::thing_kind(w, TORCH, 0, false, false, true, "i");
 | `shades(w, x0, y0, x1, y1, z, lights = [], start = [], daylight = true) -> vector<integer>` | 0 at a light, one shade darker per step, up to `DARKEST` (7) and never black; the open sky is daylight, opaque cells are lit but pass no light on, `lights` adds what figures carry; `start[k]` is the shade the k-th of them starts at (0, full, when missing): a torch burning down reaches less far; `daylight` false is night — the open sky gives no light, lamps and `lights` still do |
 | `view(w, x0, y0, x1, y1, z, marks = [])` | a layer as text, from the declared glyphs |
 | `region(w, x, y, z, limit) -> vector<(integer, integer)>` | the cells connected to (x, y) holding the same kind and tile, four ways and never across an edge, nearest first, at most `limit` (a ground has no end): what a fill paints |
+| `block(w, x0, y0, x1, y1, z) -> vector<integer>` | a box of cells read at once, one number a cell — kind, rise, slant, ceiling, north and west edge, things or not — each cell's chunk looked up once: what a renderer reading a box wants, where asking each question of each cell looks the chunk up every time |
 | `changes(w) -> integer`, `changed_since(w, x0, y0, x1, y1, z0, z1, since) -> boolean` | every change counts one (a write that leaves a cell as it was, none); has the box changed after the count `since` — told by blocks of 8 x 8 cells on a layer, a layer's ground and a kind reaching everything: what a view that keeps something built from the world asks before building it again |
 | `copy(w, x0, y0, x1, y1, z0, z1) -> World`, `paste(w, from, x, y, z)` | a stamp: a box of cells, rises, slants, ceilings, north/west edges and stacks, moved to (0, 0, 0), with the kinds; pasted, each cell the stamp holds anything at replaces the cell there |
 
 ## Tests
 
-`tests/world.loft` and `tests/edges.loft` cover each routine (`tests/changes.loft` the changes), the edges, the ground and the
+`tests/world.loft` and `tests/edges.loft` cover each routine (`tests/changes.loft` the changes, `tests/light.loft` the shades read through their window and `block`), the edges, the ground and the
 rise, the slant, the ceiling over a neutral set of kinds (floor, wall, window;
 box, lamp, curtain), with hand-worked answers.

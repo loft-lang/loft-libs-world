@@ -553,6 +553,35 @@ pub fn ceiling(w: const World, x: integer, y: integer, z: integer) -> integer {
   (word(w, x, y, z) >> 23) & 15
 }
 
+/// What each cell of x0 ..= x1, y0 ..= y1 on layer z holds, row by row, one number a cell: its
+/// terrain kind (bits 0..3, as `terrain` reads it), rise (4..7), slant (8..10), ceiling (11..14),
+/// north edge (15..22), west edge (23..30), and bit 31 when things lie on it.  Read once for the box
+/// — the cell's chunk and its stack looked up once each — where asking `terrain`, `rise`, `edge`
+/// and the rest of each cell asks for its chunk again every time: what a renderer reading a box of
+/// cells (a mesh's halo, a tile of faces) wants.
+pub fn block(w: const World, x0: integer, y0: integer, x1: integer, y1: integer, z: integer) -> vector<integer> {
+  out: vector<integer> = [];
+  g = ground(w, z);
+  for y in y0..=y1 {
+    for x in x0..=x1 {
+      ix = inside(y) * CHUNK + inside(x);
+      c = w.chunks[chunk_of(x), chunk_of(y), z];
+      r = UNSET;
+      wd = 0;
+      if c {
+        r = (c.cells[ix] ?? 0) as integer;
+        if len(c.extra) > 0 { wd = (c.extra[ix] ?? 0) as integer; }
+      }
+      kind = if r == UNSET { g } else if r == SET_VOID { VOID } else { r / 4096 };
+      v = kind + ((wd >> 16) & 15) * 16 + ((wd >> 20) & 7) * 256 + ((wd >> 23) & 15) * 2048
+          + (wd & 255) * 32768 + ((wd >> 8) & 255) * 8388608;
+      if w.stacks[x, y, z] { v += 2147483648; }
+      out += [v];
+    }
+  }
+  out
+}
+
 /// Is (x, y, z) under the open sky: nothing set on the layer above it.
 pub fn open_sky(w: const World, x: integer, y: integer, z: integer) -> boolean {
   terrain(w, x, y, z + 1) == VOID
@@ -768,14 +797,13 @@ pub fn shades(w: const World, x0: integer, y0: integer, x1: integer, y1: integer
   gy = y0 - DARKEST;
   gw = x1 - x0 + 1 + 2 * DARKEST;
   gh = y1 - y0 + 1 + 2 * DARKEST;
+  win = window(w, gx, gy, gw, gh, z, daylight);
   dist: vector<integer> = [DARKEST; gw * gh];
   source: vector<boolean> = [false; gw * gh];
-  for j in 0..gh {
-    for i in 0..gw {
-      if lit(w, gx + i, gy + j, z, daylight) {
-        dist[j * gw + i] = 0;
-        source[j * gw + i] = true;
-      }
+  for c in 0..gw * gh {
+    if win.lit[c] ?? false {
+      dist[c] = 0;
+      source[c] = true;
     }
   }
   for k in 0..len(lights) {
@@ -801,12 +829,12 @@ pub fn shades(w: const World, x0: integer, y0: integer, x1: integer, y1: integer
       if (dist[c] ?? DARKEST) != s { continue; }
       cx = c % gw ?? 0;
       cy = c / gw ?? 0;
-      if !(source[c] ?? false) && opaque(w, gx + cx, gy + cy, z) { continue; }
+      if !(source[c] ?? false) && (win.opq[c] ?? false) { continue; }
       for n in [(cx - 1, cy), (cx + 1, cy), (cx, cy - 1), (cx, cy + 1)] {
         nx = n.0;
         ny = n.1;
         if nx >= 0 && nx < gw && ny >= 0 && ny < gh && (dist[ny * gw + nx] ?? 0) > s + 1
-            && see_through(w, gx + cx, gy + cy, z, nx - cx, ny - cy) {
+            && sees(w, win, c, ny * gw + nx, nx - cx, ny - cy) {
           dist[ny * gw + nx] = s + 1;
           next += [ny * gw + nx];
         }
@@ -821,6 +849,83 @@ pub fn shades(w: const World, x0: integer, y0: integer, x1: integer, y1: integer
     }
   }
   out
+}
+
+// What `shades` asks of each cell of its window, read once: whether it is a light (`lit`),
+// whether it is opaque (`opaque`), and its word (the edges `see_through` reads).  Asking each
+// question of the world looked the cell's chunk up again every time — about ten hash lookups a
+// cell — so the window is read as a halo grid is (moros's hex_mesh): its chunk once, the layer
+// above once by day, its stack once.  The answers are `lit`'s, `opaque`'s and `see_through`'s.
+struct Window {
+  lit: vector<boolean>,
+  opq: vector<boolean>,
+  word: vector<integer>
+}
+
+fn window(w: const World, gx: integer, gy: integer, gw: integer, gh: integer, z: integer, daylight: boolean) -> Window {
+  n = gw * gh;
+  win = Window { lit: [false; n], opq: [false; n], word: [0; n] };
+  // Each kind's light and opacity, asked once; an undeclared kind is opaque.
+  klit: vector<boolean> = [];
+  kopq: vector<boolean> = [];
+  for k in 0..16 {
+    d = w.terrains[k];
+    klit += [if d { d.light } else { false }];
+    kopq += [if d { d.opaque } else { true }];
+  }
+  g0 = ground(w, z);
+  g1 = ground(w, z + 1);
+  for j in 0..gh {
+    y = gy + j;
+    for i in 0..gw {
+      x = gx + i;
+      at = j * gw + i;
+      ix = inside(y) * CHUNK + inside(x);
+      c = w.chunks[chunk_of(x), chunk_of(y), z];
+      r = UNSET;
+      if c {
+        r = (c.cells[ix] ?? 0) as integer;
+        if len(c.extra) > 0 { win.word[at] = (c.extra[ix] ?? 0) as integer; }
+      }
+      kind = if r == UNSET { g0 } else if r == SET_VOID { VOID } else { r / 4096 };
+      lt = false;
+      op = false;
+      if kind != VOID {
+        op = kopq[kind] ?? true;
+        lt = klit[kind] ?? false;
+        if daylight && !lt {
+          a = w.chunks[chunk_of(x), chunk_of(y), z + 1];
+          ra = if a { (a.cells[ix] ?? 0) as integer } else { UNSET };
+          above = if ra == UNSET { g1 } else if ra == SET_VOID { VOID } else { ra / 4096 };
+          if above == VOID { lt = true; }
+        }
+      }
+      s = w.stacks[x, y, z];
+      if s {
+        for t in s.things {
+          o = w.objects[t];
+          if o {
+            if o.opaque { op = true; }
+            if o.light && kind != VOID { lt = true; }
+          }
+        }
+      }
+      win.lit[at] = lt;
+      win.opq[at] = op;
+    }
+  }
+  win
+}
+
+// Do sight and light pass from window cell c to its neighbour n, (dx, dy) away: `see_through`,
+// from the words read.  The edge between is the north or west one of the cell that holds it.
+fn sees(w: const World, win: const Window, c: integer, n: integer, dx: integer, dy: integer) -> boolean {
+  e = if dx > 0 { ((win.word[n] ?? 0) >> 8) & 255 } else if dx < 0 { ((win.word[c] ?? 0) >> 8) & 255 }
+      else if dy > 0 { (win.word[n] ?? 0) & 255 } else { (win.word[c] ?? 0) & 255 };
+  if e == 0 { return true; }
+  k = w.edges[e];
+  if !k { return false; }
+  !k.opaque
 }
 
 /// A layer as text, one line per row: each cell's top thing's glyph, or its terrain's, or a
