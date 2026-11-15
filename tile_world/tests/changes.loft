@@ -1,0 +1,128 @@
+// The world's changes counted (`changes`, `changed_since`): what counts, what does not, and where
+// a change is told — by blocks of 8 x 8 cells on a layer, a layer's ground and the kinds
+// everywhere.  Kinds: floor, wall; a box; an edge wall.  Every answer worked out by hand.
+use tile_world;
+
+const FLOOR = 1;
+const WALL = 2;
+const BOX = 1;
+const E_WALL = 1;
+
+// A floor x 0 .. 15, y 0 .. 15 on layer 0; the count remembered after it.
+fn floor() -> tile_world::World {
+  w = tile_world::world();
+  tile_world::terrain_kind(w, FLOOR, true, false, false, ".");
+  tile_world::terrain_kind(w, WALL, false, true, false, "#");
+  tile_world::thing_kind(w, BOX, 1, true, false, false, "b");
+  tile_world::edge_kind(w, E_WALL, false, true, "|");
+  tile_world::fill(w, 0, 0, 15, 15, 0, FLOOR);
+  w
+}
+
+fn main() {
+  w = floor();
+  assert(tile_world::changes(w) == 4 + 256, "four kinds and 256 cells: {tile_world::changes(w)}");
+}
+
+fn test_a_new_world_has_no_changes() {
+  w = tile_world::world();
+  assert(tile_world::changes(w) == 0, "none");
+  assert(!tile_world::changed_since(w, -100, -100, 100, 100, -5, 5, 0), "nothing changed");
+}
+
+// Each kind declared and each cell set counts one.
+fn test_every_change_counts_one() {
+  w = floor();
+  assert(tile_world::changes(w) == 260, "four kinds, 256 cells: {tile_world::changes(w)}");
+  n = tile_world::changes(w);
+  tile_world::set_terrain(w, 3, 3, 0, WALL);
+  tile_world::set_edge(w, 3, 3, 0, tile_world::NORTH, E_WALL);
+  tile_world::set_rise(w, 4, 3, 0, 2);
+  tile_world::set_slant(w, 5, 3, 0, tile_world::NORTH_EAST);
+  tile_world::set_ceiling(w, 6, 3, 0, 1);
+  tile_world::place(w, 7, 3, 0, BOX);
+  _ = tile_world::take(w, 7, 3, 0);
+  tile_world::clear(w, 3, 3, 0);
+  assert(tile_world::changes(w) == n + 8, "eight changes: {tile_world::changes(w) - n}");
+}
+
+// Setting a cell to what it is, clearing an unset one, taking from an empty cell: no change.
+fn test_a_write_that_changes_nothing_counts_nothing() {
+  w = floor();
+  n = tile_world::changes(w);
+  tile_world::set_terrain(w, 3, 3, 0, FLOOR);
+  tile_world::fill(w, 0, 0, 15, 15, 0, FLOOR);
+  tile_world::set_rise(w, 4, 3, 0, 0);
+  tile_world::set_edge(w, 3, 3, 0, tile_world::WEST, 0);
+  tile_world::clear(w, 40, 40, 0);
+  _ = tile_world::take(w, 7, 3, 0);
+  assert(tile_world::changes(w) == n, "nothing changed: {tile_world::changes(w) - n}");
+  assert(!tile_world::changed_since(w, 0, 0, 15, 15, 0, 0, n), "nor anywhere");
+}
+
+// A change is told in its block of 8 x 8 cells on its layer: a box that overlaps the block hears
+// it, though the cell is outside the box; one beside the block, or on another layer, does not.
+fn test_a_change_is_told_by_its_block() {
+  w = floor();
+  n = tile_world::changes(w);
+  tile_world::set_terrain(w, 10, 3, 0, WALL);
+  assert(tile_world::changed_since(w, 10, 3, 10, 3, 0, 0, n), "the cell itself");
+  assert(tile_world::changed_since(w, 8, 0, 8, 0, 0, 0, n), "the block's corner (8, 0) .. (15, 7)");
+  assert(tile_world::changed_since(w, 0, 0, 8, 7, 0, 0, n), "a box reaching into the block");
+  assert(!tile_world::changed_since(w, 0, 0, 7, 15, 0, 0, n), "the blocks west of it");
+  assert(!tile_world::changed_since(w, 8, 8, 15, 15, 0, 0, n), "the block south of it");
+  assert(!tile_world::changed_since(w, 10, 3, 10, 3, 1, 1, n), "the layer above");
+  assert(!tile_world::changed_since(w, 10, 3, 10, 3, 0, 0, n + 1), "nothing after it");
+}
+
+// West and north of the origin the blocks are the floor of a coordinate over 8: -1 is in the block
+// -8 .. -1, not with 0.
+fn test_the_blocks_west_of_the_origin() {
+  w = floor();
+  n = tile_world::changes(w);
+  tile_world::set_terrain(w, -1, -1, 0, WALL);
+  assert(tile_world::changed_since(w, -8, -8, -8, -8, 0, 0, n), "the block -8 .. -1");
+  assert(!tile_world::changed_since(w, 0, 0, 0, 0, 0, 0, n), "not the block 0 .. 7");
+}
+
+// A thing put down or taken, and an edge, are changes of their cell.
+fn test_things_and_edges_are_told_at_their_cell() {
+  w = floor();
+  n = tile_world::changes(w);
+  tile_world::place(w, 12, 12, 0, BOX);
+  assert(tile_world::changed_since(w, 12, 12, 12, 12, 0, 0, n), "put down");
+  assert(!tile_world::changed_since(w, 0, 0, 7, 7, 0, 0, n), "not elsewhere");
+  m = tile_world::changes(w);
+  _ = tile_world::take(w, 12, 12, 0);
+  assert(tile_world::changed_since(w, 12, 12, 12, 12, 0, 0, m), "taken");
+  // The east edge of (7, 0) is held by (8, 0): its block is (8, 0) .. (15, 7).
+  k = tile_world::changes(w);
+  tile_world::set_edge(w, 7, 0, 0, tile_world::EAST, E_WALL);
+  assert(tile_world::changed_since(w, 8, 0, 8, 0, 0, 0, k), "the edge's cell");
+}
+
+// A layer's ground reaches every cell of it; a kind, every cell of every layer.
+fn test_a_ground_or_a_kind_changes_everything_it_reaches() {
+  w = floor();
+  n = tile_world::changes(w);
+  tile_world::set_ground(w, 2, FLOOR);
+  assert(tile_world::changed_since(w, 500, 500, 500, 500, 2, 2, n), "anywhere on layer 2");
+  assert(!tile_world::changed_since(w, 500, 500, 500, 500, 0, 1, n), "not on layers 0 and 1");
+  m = tile_world::changes(w);
+  tile_world::thing_kind(w, BOX, 2, true, false, false, "B");
+  assert(tile_world::changed_since(w, -900, -900, -900, -900, -7, -7, m), "a kind: everywhere");
+}
+
+// A pasted stamp is a change of each cell it replaces, and of each stack it takes away.
+fn test_a_paste_counts_what_it_replaces() {
+  w = floor();
+  tile_world::place(w, 20, 20, 0, BOX);
+  st = tile_world::copy(w, 0, 0, 1, 1, 0, 0);
+  n = tile_world::changes(w);
+  tile_world::paste(w, st, 0, 0, 0);
+  assert(tile_world::changes(w) == n, "the same cells pasted on themselves: no change");
+  tile_world::set_terrain(st, 0, 0, 0, WALL);
+  tile_world::paste(w, st, 20, 20, 0);
+  assert(tile_world::changed_since(w, 20, 20, 20, 20, 0, 0, n), "the cell replaced, its box gone");
+  assert(tile_world::terrain(w, 20, 20, 0) == WALL && tile_world::top(w, 20, 20, 0) == 0, "as pasted");
+}

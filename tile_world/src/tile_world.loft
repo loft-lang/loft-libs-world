@@ -34,6 +34,17 @@
 // first) in a second hash keyed on (x, y, z), removed when it empties.  A thing is a number
 // the game chooses.
 //
+// ── Changes ──────────────────────────────────────────────────────────
+//
+// Every change to the world counts one (`changes`): a cell's terrain, edge, rise, slant or ceiling
+// set to something else, a thing put down or taken, a layer's ground, a kind declared.  A write
+// that leaves a cell as it was counts nothing.  Each BLOCK of 8 x 8 cells on a layer keeps the
+// count after the last change in it, each layer the count after its ground last changed, and the
+// kinds theirs, so a view that keeps something built from the world (a mesh, a picture, faces)
+// remembers the count it built at and asks `changed_since` of the box it read: nothing needs
+// building again until the answer is yes, and then only where it is.  A new world counts from 0;
+// one that counts less than a view remembers is another world.
+//
 // ── Kinds ────────────────────────────────────────────────────────────
 //
 // The game declares what each terrain kind, each thing and each edge kind is, and the routines
@@ -79,6 +90,22 @@ struct Chunk {
   extra: vector<u32>
 }
 
+// The count after the last change in a block of MARK x MARK cells on a layer, and after a layer's
+// ground last changed.
+const MARK = 8;
+
+struct Mark {
+  const bx: integer,
+  const by: integer,
+  const bz: integer,
+  at: integer
+}
+
+struct LayerMark {
+  const lz: integer,
+  at: integer
+}
+
 // The things on one cell, bottom first.
 struct Stack {
   const x: integer,
@@ -120,19 +147,88 @@ struct ThingKind {
   glyph: text
 }
 
-/// The world: its chunks, its stacks, and the kinds the game declared.
+/// The world: its chunks, its stacks, the kinds the game declared, and what changed when.
 pub struct World {
   chunks: hash<Chunk[cx, cy, z]>,
   stacks: hash<Stack[x, y, z]>,
   terrains: hash<TerrainKind[kd]>,
   objects: hash<ThingKind[kd]>,
   edges: hash<EdgeKind[kd]>,
-  grounds: hash<Ground[gz]>
+  grounds: hash<Ground[gz]>,
+  changes: integer,
+  marks: hash<Mark[bx, by, bz]>,
+  layer_marks: hash<LayerMark[lz]>,
+  kinds_at: integer
 }
 
-/// An empty world: every cell void, no kinds declared.
+/// An empty world: every cell void, no kinds declared, no changes counted.
 pub fn world() -> World {
-  World { chunks: [], stacks: [], terrains: [], objects: [], edges: [], grounds: [] }
+  World { chunks: [], stacks: [], terrains: [], objects: [], edges: [], grounds: [], changes: 0, marks: [],
+          layer_marks: [], kinds_at: 0 }
+}
+
+// --- Changes ---
+
+/// How many changes the world has had (the header's § Changes): remembered, it tells whether
+/// anything changed since.
+pub fn changes(w: const World) -> integer {
+  w.changes
+}
+
+/// Has anything in cells x0 ..= x1, y0 ..= y1 on layers z0 ..= z1 changed after the world counted
+/// `since` (a `changes` remembered)?  Told by blocks of 8 x 8 cells: a change in a block the box
+/// overlaps counts, though it was outside the box.  A layer's ground set, or a kind declared,
+/// after `since` changes every cell it reaches: yes.
+pub fn changed_since(w: const World, x0: integer, y0: integer, x1: integer, y1: integer, z0: integer, z1: integer,
+                     since: integer) -> boolean {
+  if w.changes <= since { return false; }
+  if w.kinds_at > since { return true; }
+  for z in z0..=z1 {
+    l = w.layer_marks[z];
+    if l && l.at > since { return true; }
+    for by in block_of(y0)..=block_of(y1) {
+      for bx in block_of(x0)..=block_of(x1) {
+        m = w.marks[bx, by, z];
+        if m && m.at > since { return true; }
+      }
+    }
+  }
+  false
+}
+
+// floor(v / MARK): the block a coordinate is in.
+fn block_of(v: integer) -> integer {
+  if v >= 0 { v / MARK ?? 0 } else { 0 - ((MARK - 1 - v) / MARK ?? 0) }
+}
+
+// A change to cell (x, y, z), counted.
+fn mark(w: World, x: integer, y: integer, z: integer) {
+  w.changes += 1;
+  bx = block_of(x);
+  by = block_of(y);
+  m = w.marks[bx, by, z];
+  if m {
+    m.at = w.changes;
+    return;
+  }
+  w.marks += [Mark { bx: bx, by: by, bz: z, at: w.changes }];
+}
+
+// A change to layer z's ground, counted.
+fn mark_layer(w: World, z: integer) {
+  w.changes += 1;
+  l = w.layer_marks[z];
+  if l {
+    l.at = w.changes;
+    return;
+  }
+  w.layer_marks += [LayerMark { lz: z, at: w.changes }];
+}
+
+// A kind declared, counted.
+fn mark_kinds(w: World) {
+  w.changes += 1;
+  w.kinds_at = w.changes;
 }
 
 // --- Kinds ---
@@ -143,6 +239,7 @@ pub fn terrain_kind(w: World, kind: integer, walk: boolean, opaque: boolean,
                     light: boolean = false, glyph: text = "?") {
   w.terrains[kind] = null;
   w.terrains += [TerrainKind { kd: kind, walk: walk, opaque: opaque, light: light, glyph: glyph }];
+  mark_kinds(w);
 }
 
 /// Declare thing `thing`: how many height steps it adds to its stack, whether it blocks a cell
@@ -152,6 +249,7 @@ pub fn thing_kind(w: World, thing: integer, height: integer, blocks: boolean,
                   opaque: boolean = false, light: boolean = false, glyph: text = "?") {
   w.objects[thing] = null;
   w.objects += [ThingKind { kd: thing, walk: !blocks, opaque: opaque, light: light, height: height, glyph: glyph }];
+  mark_kinds(w);
 }
 
 /// Declare edge kind `kind` (1..255): whether it can be walked across (an open doorway) and
@@ -160,6 +258,7 @@ pub fn thing_kind(w: World, thing: integer, height: integer, blocks: boolean,
 pub fn edge_kind(w: World, kind: integer, walk: boolean, opaque: boolean, glyph: text = "|") {
   w.edges[kind] = null;
   w.edges += [EdgeKind { kd: kind, walk: walk, opaque: opaque, glyph: glyph }];
+  mark_kinds(w);
 }
 
 /// Can terrain kind `kind` be walked on: as declared; void and an undeclared kind cannot.
@@ -253,14 +352,20 @@ pub fn set_terrain(w: World, x: integer, y: integer, z: integer, kind: integer, 
   ensure_chunk(w, x, y, z);
   c = w.chunks[chunk_of(x), chunk_of(y), z];
   v = if kind == VOID { SET_VOID } else { (kind & 15) * 4096 + (tile & 4095) };
-  c.cells[inside(y) * CHUNK + inside(x)] = (v & 65535) as u16;
+  i = inside(y) * CHUNK + inside(x);
+  if ((c.cells[i] ?? 0) as integer) == (v & 65535) { return; }
+  c.cells[i] = (v & 65535) as u16;
+  mark(w, x, y, z);
 }
 
 /// Make a cell unset again: it reads as its layer's ground, or as void.
 pub fn clear(w: World, x: integer, y: integer, z: integer) {
   c = w.chunks[chunk_of(x), chunk_of(y), z];
   if !c { return; }
-  c.cells[inside(y) * CHUNK + inside(x)] = UNSET as u16;
+  i = inside(y) * CHUNK + inside(x);
+  if ((c.cells[i] ?? 0) as integer) == UNSET { return; }
+  c.cells[i] = UNSET as u16;
+  mark(w, x, y, z);
 }
 
 /// Was this cell set (to anything, void included), rather than read from the ground?
@@ -273,6 +378,7 @@ pub fn is_set(w: const World, x: integer, y: integer, z: integer) -> boolean {
 pub fn set_ground(w: World, z: integer, kind: integer, tile: integer = 0) {
   w.grounds[z] = null;
   if kind != VOID { w.grounds += [Ground { gz: z, kind: kind & 15, tile: tile & 4095 }]; }
+  mark_layer(w, z);
 }
 
 /// The layers that have a ground, lowest first — with `layers`, what saving a world walks.
@@ -344,7 +450,10 @@ fn set_word(w: World, x: integer, y: integer, z: integer, v: integer) {
   c = w.chunks[chunk_of(x), chunk_of(y), z];
   if !c { return; }
   if len(c.extra) == 0 { c.extra = [0 as u32; CHUNK * CHUNK]; }
-  c.extra[inside(y) * CHUNK + inside(x)] = (v & 2147483647) as u32;
+  i = inside(y) * CHUNK + inside(x);
+  if ((c.extra[i] ?? 0) as integer) == (v & 2147483647) { return; }
+  c.extra[i] = (v & 2147483647) as u32;
+  mark(w, x, y, z);
 }
 
 // Which cell holds the edge on `side` of (x, y), and in which byte: (x, y, shift).
@@ -458,6 +567,7 @@ pub fn place(w: World, x: integer, y: integer, z: integer, thing: integer) {
   }
   s = w.stacks[x, y, z];
   s.things += [thing];
+  mark(w, x, y, z);
 }
 
 /// Take the top thing off a cell's stack and answer it; 0 when the cell has none.  The stack
@@ -473,6 +583,7 @@ pub fn take(w: World, x: integer, y: integer, z: integer) -> integer {
   } else {
     s.things = s.things[0..n - 1];
   }
+  mark(w, x, y, z);
   t
 }
 
@@ -783,7 +894,10 @@ fn put_raw(w: World, x: integer, y: integer, z: integer, r: integer) {
   ensure_chunk(w, x, y, z);
   c = w.chunks[chunk_of(x), chunk_of(y), z];
   if !c { return; }
-  c.cells[inside(y) * CHUNK + inside(x)] = (r & 65535) as u16;
+  i = inside(y) * CHUNK + inside(x);
+  if ((c.cells[i] ?? 0) as integer) == (r & 65535) { return; }
+  c.cells[i] = (r & 65535) as u16;
+  mark(w, x, y, z);
 }
 
 /// A stamp: the cells of the box x0..x1, y0..y1 on layers z0..z1, corners included — terrain
@@ -825,12 +939,19 @@ pub fn paste(w: World, from: const World, x: integer, y: integer, z: integer) {
         if r == UNSET && v == 0 { continue; }
         if r != UNSET { put_raw(w, x + fx, y + fy, z + c.z, r); }
         if v != 0 || word(w, x + fx, y + fy, z + c.z) != 0 { set_word(w, x + fx, y + fy, z + c.z, v); }
-        w.stacks[x + fx, y + fy, z + c.z] = null;
+        unstack(w, x + fx, y + fy, z + c.z);
       }
     }
   }
   for s in from.stacks {
-    w.stacks[x + s.x, y + s.y, z + s.z] = null;
+    unstack(w, x + s.x, y + s.y, z + s.z);
     for t in s.things { place(w, x + s.x, y + s.y, z + s.z, t); }
   }
+}
+
+// A cell's stack gone, the change counted when there was one.
+fn unstack(w: World, x: integer, y: integer, z: integer) {
+  if !w.stacks[x, y, z] { return; }
+  w.stacks[x, y, z] = null;
+  mark(w, x, y, z);
 }
