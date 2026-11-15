@@ -442,7 +442,8 @@ fn word(w: const World, x: integer, y: integer, z: integer) -> integer {
   c = w.chunks[chunk_of(x), chunk_of(y), z];
   if !c { return 0; }
   if len(c.extra) == 0 { return 0; }
-  (c.extra[inside(y) * CHUNK + inside(x)] ?? 0) as integer
+  // Masked to the 31 bits a word holds (`set_word`): so it is an integer under `#width 32` too.
+  ((c.extra[inside(y) * CHUNK + inside(x)] ?? 0) & 2147483647) as integer
 }
 
 fn set_word(w: World, x: integer, y: integer, z: integer, v: integer) {
@@ -451,7 +452,7 @@ fn set_word(w: World, x: integer, y: integer, z: integer, v: integer) {
   if !c { return; }
   if len(c.extra) == 0 { c.extra = [0 as u32; CHUNK * CHUNK]; }
   i = inside(y) * CHUNK + inside(x);
-  if ((c.extra[i] ?? 0) as integer) == (v & 2147483647) { return; }
+  if (((c.extra[i] ?? 0) & 2147483647) as integer) == (v & 2147483647) { return; }
   c.extra[i] = (v & 2147483647) as u32;
   mark(w, x, y, z);
 }
@@ -553,12 +554,13 @@ pub fn ceiling(w: const World, x: integer, y: integer, z: integer) -> integer {
   (word(w, x, y, z) >> 23) & 15
 }
 
-/// What each cell of x0 ..= x1, y0 ..= y1 on layer z holds, row by row, one number a cell: its
-/// terrain kind (bits 0..3, as `terrain` reads it), rise (4..7), slant (8..10), ceiling (11..14),
-/// north edge (15..22), west edge (23..30), and bit 31 when things lie on it.  Read once for the box
-/// — the cell's chunk and its stack looked up once each — where asking `terrain`, `rise`, `edge`
-/// and the rest of each cell asks for its chunk again every time: what a renderer reading a box of
-/// cells (a mesh's halo, a tile of faces) wants.
+/// What each cell of x0 ..= x1, y0 ..= y1 on layer z holds, row by row, two numbers a cell: first
+/// its terrain kind (bits 0..3, as `terrain` reads it), rise (4..7), slant (8..10), ceiling
+/// (11..14), and bit 15 when things lie on it; then its north edge (bits 0..7) and west edge
+/// (8..15).  Two numbers, not one: under `#width 32` an integer holds 31 bits.  Read once for the
+/// box — the cell's chunk and its stack looked up once each — where asking `terrain`, `rise`,
+/// `edge` and the rest of each cell asks for its chunk again every time: what a renderer reading a
+/// box of cells (a mesh's halo, a tile of faces) wants.
 pub fn block(w: const World, x0: integer, y0: integer, x1: integer, y1: integer, z: integer) -> vector<integer> {
   out: vector<integer> = [];
   g = ground(w, z);
@@ -570,13 +572,12 @@ pub fn block(w: const World, x0: integer, y0: integer, x1: integer, y1: integer,
       wd = 0;
       if c {
         r = (c.cells[ix] ?? 0) as integer;
-        if len(c.extra) > 0 { wd = (c.extra[ix] ?? 0) as integer; }
+        if len(c.extra) > 0 { wd = ((c.extra[ix] ?? 0) & 2147483647) as integer; }
       }
       kind = if r == UNSET { g } else if r == SET_VOID { VOID } else { r / 4096 };
-      v = kind + ((wd >> 16) & 15) * 16 + ((wd >> 20) & 7) * 256 + ((wd >> 23) & 15) * 2048
-          + (wd & 255) * 32768 + ((wd >> 8) & 255) * 8388608;
-      if w.stacks[x, y, z] { v += 2147483648; }
-      out += [v];
+      v = kind + ((wd >> 16) & 15) * 16 + ((wd >> 20) & 7) * 256 + ((wd >> 23) & 15) * 2048;
+      if w.stacks[x, y, z] { v += 32768; }
+      out += [v, (wd & 255) + ((wd >> 8) & 255) * 256];
     }
   }
   out
@@ -885,7 +886,7 @@ fn window(w: const World, gx: integer, gy: integer, gw: integer, gh: integer, z:
       r = UNSET;
       if c {
         r = (c.cells[ix] ?? 0) as integer;
-        if len(c.extra) > 0 { win.word[at] = (c.extra[ix] ?? 0) as integer; }
+        if len(c.extra) > 0 { win.word[at] = ((c.extra[ix] ?? 0) & 2147483647) as integer; }
       }
       kind = if r == UNSET { g0 } else if r == SET_VOID { VOID } else { r / 4096 };
       lt = false;
