@@ -78,6 +78,7 @@ tile_world::thing_kind(w, TORCH, 0, false, false, true, "i");
 | `shortest_path(w, x0, y0, x1, y1, z, limit = 64) -> vector<(integer, integer)>` | breadth-first over passable cells and crossable edges; the goal may be a thing to walk up to |
 | `line_of_sight(w, x0, y0, x1, y1, z) -> boolean` | no opaque cell or edge between (Bresenham; a diagonal step sees round either side of a corner); a wall itself is seen |
 | `shades(w, x0, y0, x1, y1, z, lights = [], start = [], daylight = true) -> vector<integer>` | 0 at a light, one shade darker per step, up to `DARKEST` (7) and never black; the open sky is daylight, opaque cells are lit but pass no light on, `lights` adds what figures carry; `start[k]` is the shade the k-th of them starts at (0, full, when missing): a torch burning down reaches less far; `daylight` false is night — the open sky gives no light, lamps and `lights` still do |
+| `reach(w, x, y, z, start = 0) -> vector<integer>` | the shades one light at (x, y) gives alone, spread as `shades` spreads it, over the square of `DARKEST` cells round it (row by row, `2 * DARKEST + 1` a side): what a GPU lights a torch by apart from the others.  `shades` with lights is, cell by cell, the brightest of `shades` without them and each reach — except where a light stands on an opaque cell another light reaches more brightly than it starts |
 | `view(w, x0, y0, x1, y1, z, marks = [])` | a layer as text, from the declared glyphs |
 | `region(w, x, y, z, limit) -> vector<(integer, integer)>` | the cells connected to (x, y) holding the same kind and tile, four ways and never across an edge, nearest first, at most `limit` (a ground has no end): what a fill paints |
 | `block(w, x0, y0, x1, y1, z) -> vector<integer>` | a box of cells read at once, two numbers a cell — kind, rise, slant, ceiling and things or not; then the north and west edge — each cell's chunk looked up once (two numbers: a 32-bit integer holds 31 bits): what a renderer reading a box wants, where asking each question of each cell looks the chunk up every time |
@@ -86,6 +87,6 @@ tile_world::thing_kind(w, TORCH, 0, false, false, true, "i");
 
 ## Tests
 
-`tests/world.loft` and `tests/edges.loft` cover each routine (`tests/changes.loft` the changes, `tests/light.loft` the shades read through their window and `block`), the edges, the ground and the
+`tests/world.loft` and `tests/edges.loft` cover each routine (`tests/changes.loft` the changes, `tests/light.loft` the shades read through their window, each light's reach and `block`), the edges, the ground and the
 rise, the slant, the ceiling over a neutral set of kinds (floor, wall, window;
 box, lamp, curtain), with hand-worked answers.

@@ -122,3 +122,69 @@ fn test_a_block_reads_what_each_cell_answers() {
     assert(2 * i == len(b), "two numbers a cell");
   }
 }
+
+// `shades` with lights, rebuilt from `shades` without them and each light's `reach`: cell by cell
+// the brightest.  Lights by the door, by the window, in the open, two of them overlapping, one
+// burnt down (start 3), by day and by night, over a box round them all.
+fn rebuilt(w: const tile_world::World, ls: const vector<(integer, integer)>, starts: const vector<integer>,
+           day: boolean, x0: integer, y0: integer, x1: integer, y1: integer) -> vector<integer> {
+  out = tile_world::shades(w, x0, y0, x1, y1, 0, [], [], day);
+  d = tile_world::DARKEST;
+  for k in 0..len(ls) {
+    l = ls[k];
+    r = tile_world::reach(w, l.0, l.1, 0, starts[k] ?? 0);
+    for j in 0..2 * d + 1 {
+      for i in 0..2 * d + 1 {
+        x = l.0 - d + i;
+        y = l.1 - d + j;
+        if x < x0 || x > x1 || y < y0 || y > y1 { continue; }
+        c = (y - y0) * (x1 - x0 + 1) + (x - x0);
+        s = r[j * (2 * d + 1) + i] ?? d;
+        if s < (out[c] ?? d) { out[c] = s; }
+      }
+    }
+  }
+  out
+}
+
+fn test_the_shades_are_the_brightest_of_each_lights_reach() {
+  w = world();
+  ls = [(3, 5), (-1, -5), (8, 0), (10, 2), (20, -12)];
+  starts = [0, 1, 0, 3, 2];
+  for day in [true, false] {
+    want = tile_world::shades(w, -12, -24, 32, 12, 0, ls, starts, day);
+    got = rebuilt(w, ls, starts, day, -12, -24, 32, 12);
+    differ = 0;
+    for c in 0..len(want) { if (want[c] ?? 0) != (got[c] ?? 0) { differ += 1; } }
+    assert(differ == 0, "day {day}: {differ} cells differ");
+  }
+}
+
+// One light alone: full at its cell, a shade darker a step, not through the door west of (1, 5).
+fn test_a_lights_reach_is_its_own() {
+  w = world();
+  d = tile_world::DARKEST;
+  side = 2 * d + 1;
+  r = tile_world::reach(w, 1, 5, 0);
+  assert(len(r) == side * side, "a square of {side}: {len(r)}");
+  assert(r[d * side + d] == 0 && r[d * side + d + 1] == 1 && r[(d + 2) * side + d] == 2, "0, then 1, 2 steps away");
+  // West of the door: the long way round it, or not at all.
+  assert(r[d * side + d - 1] > 1, "the door passes no light: {r[d * side + d - 1]}");
+  dim = tile_world::reach(w, 1, 5, 0, 3);
+  assert(dim[d * side + d] == 3 && dim[d * side + d + 1] == 4, "burnt down: from 3");
+  assert(tile_world::reach(w, 1, 5, 0, d)[d * side + d] == d, "a light that starts at DARKEST gives none");
+}
+
+// The exception `reach` names: a light on an opaque cell (the crate at (33, 3)) that another light
+// reaches more brightly than it starts.  `shades` passes the brighter light on from the crate;
+// the crate's own reach starts at its start.
+fn test_a_light_on_an_opaque_cell_passes_on_only_its_own() {
+  w = world();
+  ls = [(33, 3), (32, 3)];
+  starts = [4, 0];
+  want = tile_world::shades(w, 28, 0, 38, 6, 0, ls, starts, false);
+  got = rebuilt(w, ls, starts, false, 28, 0, 38, 6);
+  differ = 0;
+  for c in 0..len(want) { if (want[c] ?? 0) != (got[c] ?? 0) { differ += 1; } }
+  assert(differ > 0, "the crate passes on the brighter light in shades");
+}
