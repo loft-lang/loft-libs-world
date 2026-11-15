@@ -94,8 +94,8 @@ fn test_the_window_reads_what_the_routines_say() {
   assert((v[0] ?? -1) == 2, "through the window: {v[0] ?? -1}");
 }
 
-// `block` answers what `terrain`, `rise`, `slant`, `ceiling`, `edge` and `top` answer, cell by
-// cell, across chunk borders and west and north of the origin.
+// `block` answers what `terrain`, `rise`, `slant`, `ceiling`, `edge` and `things` answer, cell by
+// cell, two numbers a cell, across chunk borders and west and north of the origin.
 fn test_a_block_reads_what_each_cell_answers() {
   w = world();
   tile_world::set_rise(w, -33, 2, 0, 3);
@@ -107,17 +107,18 @@ fn test_a_block_reads_what_each_cell_answers() {
     i = 0;
     for y in -34..=6 {
       for x in -34..=34 {
-        v = b[i] ?? -1;
+        v = b[2 * i] ?? -1;
+        e = b[2 * i + 1] ?? -1;
         assert((v & 15) == tile_world::terrain(w, x, y, z), "({x}, {y}, {z}) kind");
         assert(((v >> 4) & 15) == tile_world::rise(w, x, y, z), "({x}, {y}, {z}) rise");
         assert(((v >> 8) & 7) == tile_world::slant(w, x, y, z), "({x}, {y}, {z}) slant");
         assert(((v >> 11) & 15) == tile_world::ceiling(w, x, y, z), "({x}, {y}, {z}) ceiling");
-        assert(((v >> 15) & 255) == tile_world::edge(w, x, y, z, tile_world::NORTH), "({x}, {y}, {z}) north");
-        assert(((v >> 23) & 255) == tile_world::edge(w, x, y, z, tile_world::WEST), "({x}, {y}, {z}) west");
-        assert((((v >> 31) & 1) == 1) == (len(tile_world::things(w, x, y, z)) > 0), "({x}, {y}, {z}) things");
+        assert((((v >> 15) & 1) == 1) == (len(tile_world::things(w, x, y, z)) > 0), "({x}, {y}, {z}) things");
+        assert((e & 255) == tile_world::edge(w, x, y, z, tile_world::NORTH), "({x}, {y}, {z}) north");
+        assert(((e >> 8) & 255) == tile_world::edge(w, x, y, z, tile_world::WEST), "({x}, {y}, {z}) west");
         i += 1;
       }
     }
-    assert(i == len(b), "one number a cell");
+    assert(2 * i == len(b), "two numbers a cell");
   }
 }
