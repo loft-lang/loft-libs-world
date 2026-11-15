@@ -818,6 +818,44 @@ pub fn shades(w: const World, x0: integer, y0: integer, x1: integer, y1: integer
       source[j * gw + i] = true;
     }
   }
+  spread(w, win, gw, gh, dist, source);
+  out: vector<integer> = [];
+  for y in y0..=y1 {
+    for x in x0..=x1 {
+      out += [dist[(y - gy) * gw + (x - gx)] ?? DARKEST];
+    }
+  }
+  out
+}
+
+/// The shades one light gives alone, as `shades` spreads it, over the square of DARKEST cells
+/// round it on layer z, row by row (2 * DARKEST + 1 a side, its corner at (x - DARKEST,
+/// y - DARKEST)): `start` at the light, one darker a step, DARKEST where it does not reach.  What
+/// a GPU lights a torch by, apart from the others (the scene contract's torches): `shades` with
+/// these lights is, cell by cell, the brightest of `shades` without them and each light's reach,
+/// but where a light stands on an opaque cell another light reaches more brightly than it starts
+/// — there `shades` passes that light on, a light's reach does not.
+pub fn reach(w: const World, x: integer, y: integer, z: integer, start: integer = 0) -> vector<integer> {
+  gx = x - DARKEST;
+  gy = y - DARKEST;
+  gw = 2 * DARKEST + 1;
+  gh = gw;
+  win = window(w, gx, gy, gw, gh, z, false);
+  dist: vector<integer> = [DARKEST; gw * gh];
+  source: vector<boolean> = [false; gw * gh];
+  from = if start < 0 { 0 } else { start };
+  if from < DARKEST {
+    dist[DARKEST * gw + DARKEST] = from;
+    source[DARKEST * gw + DARKEST] = true;
+  }
+  spread(w, win, gw, gh, dist, source);
+  dist
+}
+
+// The light spread from its sources over a window gw x gh: `dist` holds each cell's shade (a
+// source's own, DARKEST elsewhere), lowered as the light reaches it.
+fn spread(w: const World, win: const Window, gw: integer, gh: integer, dist: vector<integer>,
+          source: const vector<boolean>) {
   // Shade by shade, so a cell takes its light from the brightest way first: the cells a shade
   // reached, with the lights that start at that shade, spread one shade darker.
   frontier: vector<integer> = [];
@@ -843,13 +881,6 @@ pub fn shades(w: const World, x0: integer, y0: integer, x1: integer, y1: integer
     }
     frontier = next;
   }
-  out: vector<integer> = [];
-  for y in y0..=y1 {
-    for x in x0..=x1 {
-      out += [dist[(y - gy) * gw + (x - gx)] ?? DARKEST];
-    }
-  }
-  out
 }
 
 // What `shades` asks of each cell of its window, read once: whether it is a light (`lit`),
