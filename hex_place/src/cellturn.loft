@@ -1,6 +1,6 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
-// hexturn — A STRUCTURE TURNED BY ANY NUMBER OF 30-DEGREE STEPS.
+// cellturn — A STRUCTURE TURNED BY ANY NUMBER OF 30-DEGREE STEPS.
 //
 // `hex_field::stencil_rotate` turns a stencil by 60 degrees, exactly: a 60-degree turn is a
 // symmetry of the lattice.  `stencil_rotate_deg` REFUSES anything else, and it is right to: an

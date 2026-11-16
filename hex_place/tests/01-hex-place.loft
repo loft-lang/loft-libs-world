@@ -51,7 +51,7 @@ fn test_arbitration_is_fail_safe_toward_solid() {
   assert(!arb_solid(false, false), "gap over gap is gap");
 }
 
-// ── hexturn: a structure turned by any number of 30-degree steps ────────────
+// ── cellturn: a structure turned by any number of 30-degree steps ────────────
 
 // Is `p` (a coordinate along heading `head`, scaled) between the lines `lo` and `hi` half steps out?
 fn turn_between(head: integer, p: integer, lo: integer, hi: integer) -> boolean {

@@ -6,8 +6,8 @@
 // by "mark all, then cut once", which is order-free and fuses their shared edge; and a stencil
 // is SEATED on terrain by writing the height slot alone, so its footprint is untouched.
 //
-// Entry point: re-exports `hexframe`, `hexseat`, `hexcombine`, `hexturn`.
+// Entry point: re-exports `hexframe`, `hexseat`, `hexcombine`, `cellturn`.
 pub use hexframe::*;
 pub use hexseat::*;
 pub use hexcombine::*;
-pub use hexturn::*;
+pub use cellturn::*;
