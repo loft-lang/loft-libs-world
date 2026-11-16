@@ -365,9 +365,16 @@ pub fn ground_sharpen(g: Ground, sharp: Heights, areas: const vector<GroundBox>,
 // The height of the corner at doubled coordinates (k, m): the mean of the cells round it that
 // the ground's window holds, 0 when it holds none.  (k, m) must be a corner of the lattice.
 pub fn ground_corner_height(g: const Ground, k: integer, m: integer) -> float {
-  // the three cells whose corner this is, each as a corner offset back from it
-  qs: vector<integer> = [];
-  rs: vector<integer> = [];
+  // the three cells whose corner this is, each a corner offset back from it; those the window
+  // holds are kept in row order, then along the row, so the sum is taken in one order whoever
+  // asks (no list is built: this is asked six times a cell when a ground is drawn)
+  n = 0;
+  qa = 0;
+  ra = 0;
+  qb = 0;
+  rb = 0;
+  qc = 0;
+  rc = 0;
   for i in 0..6 {
     ck = k - corner_k(i);
     cm = m - corner_m(i);
@@ -375,30 +382,41 @@ pub fn ground_corner_height(g: const Ground, k: integer, m: integer) -> float {
     (q, r) = lattice_to_cell(ck, cm);
     if lattice_k(q, r) != ck || lattice_m(q, r) != cm { continue; }
     if q < g.gr_q0 || q >= g.gr_q0 + g.gr_w || r < g.gr_r0 || r >= g.gr_r0 + g.gr_h { continue; }
-    // kept in row order, then along the row: the sum is taken in one order whoever asks
-    at = len(qs);
-    for j in 0..len(qs) {
-      if at == len(qs) && (r < (rs[j] ?? 0) || (r == (rs[j] ?? 0) && q < (qs[j] ?? 0))) { at = j; }
-    }
-    nq: vector<integer> = [];
-    nr: vector<integer> = [];
-    for j in 0..len(qs) + 1 {
-      if j == at {
-        nq += [q];
-        nr += [r];
+    if n == 0 {
+      qa = q;
+      ra = r;
+    } else if n == 1 {
+      if r < ra || (r == ra && q < qa) {
+        qb = qa;
+        rb = ra;
+        qa = q;
+        ra = r;
+      } else {
+        qb = q;
+        rb = r;
       }
-      if j < len(qs) {
-        nq += [qs[j] ?? 0];
-        nr += [rs[j] ?? 0];
-      }
+    } else if r < ra || (r == ra && q < qa) {
+      qc = qb;
+      rc = rb;
+      qb = qa;
+      rb = ra;
+      qa = q;
+      ra = r;
+    } else if r < rb || (r == rb && q < qb) {
+      qc = qb;
+      rc = rb;
+      qb = q;
+      rb = r;
+    } else {
+      qc = q;
+      rc = r;
     }
-    qs = nq;
-    rs = nr;
+    n += 1;
   }
-  n = len(qs);
   if n == 0 { return 0.0; }
-  sum = height_get(g.gr_heights, qs[0] ?? 0, rs[0] ?? 0);
-  for j in 1..n { sum += height_get(g.gr_heights, qs[j] ?? 0, rs[j] ?? 0); }
+  sum = height_get(g.gr_heights, qa, ra);
+  if n > 1 { sum += height_get(g.gr_heights, qb, rb); }
+  if n > 2 { sum += height_get(g.gr_heights, qc, rc); }
   (sum / (n as float)) ?? 0.0
 }
 
