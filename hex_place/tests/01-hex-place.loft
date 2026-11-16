@@ -507,3 +507,67 @@ fn test_a_corridor_one_cell_wide_stays_one_room() {
     assert(got[1] >= sizes[1] / 2 && got[0] * 10 >= sizes[0] * 8 && got[2] * 10 >= sizes[2] * 8, "at {30 * s}: the corridor {got[1]} of {sizes[1]} cells, the rooms {got[0]} of {sizes[0]} and {got[2]} of {sizes[2]}");
   }
 }
+
+// ── a stencil as text ───────────────────────────────────────────────────────
+
+fn hall_legend() -> StencilLegend {
+  StencilLegend { sl_cells: "abc", sl_labels: [0, 1, 2], sl_edges: "#:D", sl_mats: [OUTER, INNER, hex_draw::OPEN_DOOR] }
+}
+
+// Three cells drawn by hand: a and b side by side, c above and between them.  A wall between a
+// and b, a door between a and c, nothing between b and c; an outer wall west of a and east of b.
+fn test_a_stencil_is_read_from_its_text() {
+  rows = ["    c",
+          "   D",
+          "# a : b #"];
+  got = stencil_read(rows, hall_legend(), 2, 2);
+  assert(len(got.sr_errors) == 0, "read whole: {got.sr_errors}");
+  st = got.sr_stencil;
+  assert(hexset_count(st.sn_cells) == 3 && hexset_get(st.sn_cells, 0, 0) && hexset_get(st.sn_cells, 1, 0) && hexset_get(st.sn_cells, 0, 1), "cells (0,0), (1,0) and (0,1)");
+  assert(label_get(st.sn_labels, 0, 0) == 0 && label_get(st.sn_labels, 1, 0) == 1 && label_get(st.sn_labels, 0, 1) == 2, "their labels");
+  // c touches both a and b: it is drawn between them, a row up
+  touches = 0;
+  for d in 0..6 {
+    if nb_q(0, 1, d) == 0 && nb_r(0, 1, d) == 0 { touches += 1; }
+    if nb_q(0, 1, d) == 1 && nb_r(0, 1, d) == 0 { touches += 1; }
+  }
+  assert(touches == 2, "the cell drawn above and between touches both");
+  assert(edge_mat(st.sn_edges, 0, 0, 1, 0) == INNER, "the wall between a and b");
+  assert(edge_mat(st.sn_edges, 0, 0, 0, 1) == hex_draw::OPEN_DOOR, "the door between a and c");
+  assert(edge_mat(st.sn_edges, 1, 0, 0, 1) == 0, "nothing between b and c");
+  assert(edge_mat(st.sn_edges, 0, 0, -1, 0) == OUTER && edge_mat(st.sn_edges, 1, 0, 2, 0) == OUTER, "the outer walls west and east");
+  assert(edgeset_count_all(st.sn_edges) == 4, "four marks in all: {edgeset_count_all(st.sn_edges)}");
+  // what cannot be read is said, a line each
+  bad = stencil_read(["    c", "  D", "# a z b #  :"], hall_legend(), 2, 2);
+  assert(len(bad.sr_errors) == 3, "an edge between the grid's places, a cell not of the legend, an edge that touches no cell: {bad.sr_errors}");
+}
+
+// Written and read again a stencil is the same: the hall of three rooms with its doors, drawn and
+// turned 30 degrees — every cell, every label, every mark.  And the text of what was read is the
+// text it was read from.
+fn test_a_stencil_written_reads_back_the_same() {
+  for s in 0..2 {
+    st = stencil_turn(hall_stencil(5, true), s).tu_stencil;
+    w = stencil_rows(st, hall_legend());
+    got = stencil_read(w.sw_rows, hall_legend(), w.sw_line, w.sw_col);
+    assert(len(got.sr_errors) == 0, "at {30 * s}: read whole: {got.sr_errors}");
+    back = got.sr_stencil;
+    assert(hexset_count(back.sn_cells) == hexset_count(st.sn_cells) && hexset_count(st.sn_cells) > 100, "at {30 * s}: as many cells");
+    marks = 0;
+    for r in hexset_r0(st.sn_cells)..hexset_r0(st.sn_cells) + hexset_h(st.sn_cells) {
+      for q in hexset_q0(st.sn_cells)..hexset_q0(st.sn_cells) + hexset_w(st.sn_cells) {
+        if !hexset_get(st.sn_cells, q, r) { continue; }
+        assert(hexset_get(back.sn_cells, q, r) && label_get(back.sn_labels, q, r) == label_get(st.sn_labels, q, r), "at {30 * s}: cell ({q}, {r}) and its label");
+        for d in 0..6 {
+          m = edge_mat(st.sn_edges, q, r, nb_q(q, r, d), nb_r(q, r, d));
+          assert(edge_mat(back.sn_edges, q, r, nb_q(q, r, d), nb_r(q, r, d)) == m, "at {30 * s}: the mark on side {d} of ({q}, {r})");
+          if m != 0 { marks += 1; }
+        }
+      }
+    }
+    assert(marks > 100, "at {30 * s}: marks compared: {marks}");
+    again = stencil_rows(back, hall_legend());
+    assert(len(again.sw_rows) == len(w.sw_rows) && again.sw_line == w.sw_line && again.sw_col == w.sw_col, "at {30 * s}: the same lines about the same place");
+    for i in 0..len(w.sw_rows) { assert(again.sw_rows[i] == w.sw_rows[i], "at {30 * s}: line {i} the same"); }
+  }
+}

@@ -31,6 +31,10 @@ slot alone, so its footprint is untouched. Arbitration fails safe toward solid.
   as the straight boundaries of its rooms — closed where they were closed, each room in one piece (a room one cell wide is widened where an odd
   heading would leave its cells apart).  `tu_lost` counts marked
   edges that bounded no room and could not come through an odd step
+- **draw a stencil as text, read one from text** — `stencil_read`, `stencil_rows` (`stenciltext`): a
+  place template a person can write: a cell every four columns, the rows shifted as hex rows are,
+  the edges between cells where they lie; what a character means is the caller's `StencilLegend`.
+  What cannot be read is told, a line each
 - **arbitrate overlapping solids** — `arb_solid` (fail-safe toward solid) · `arb_owner` (lowest id, `-1` for none)
 
 A guide that runs: [`docs/01-getting-started.loft`](docs/01-getting-started.loft); and for the turn and
