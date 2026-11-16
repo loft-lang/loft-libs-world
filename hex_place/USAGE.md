@@ -28,7 +28,8 @@ slot alone, so its footprint is untouched. Arbitration fails safe toward solid.
   says by how much — `hex_field::stencil_rotate_deg` still refuses it, being the exact routine
 - **arbitrate overlapping solids** — `arb_solid` (fail-safe toward solid) · `arb_owner` (lowest id, `-1` for none)
 
-A guide that runs: [`docs/01-getting-started.loft`](docs/01-getting-started.loft).
+A guide that runs: [`docs/01-getting-started.loft`](docs/01-getting-started.loft); and for the turn and
+the blended seat, [`docs/02-turning.loft`](docs/02-turning.loft).
 
 ## The worked examples, in the tests
 

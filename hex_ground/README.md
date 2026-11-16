@@ -17,6 +17,8 @@ straight sides a bank and a cliff run along) and `hex_place` (the seat).
 
 ## Using it
 
+A guide: [docs/01-getting-started.loft](docs/01-getting-started.loft).
+
 Add the dependency and `use hex_ground;`. [`USAGE.md`](USAGE.md) is the map of the surface, with
 every claim a passing assertion in `tests/01-hex-ground.loft`.
 

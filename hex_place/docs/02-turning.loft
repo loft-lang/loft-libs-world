@@ -1,0 +1,158 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @NAME: Turning A Structure
+// @TITLE: Turn a house by 30 degrees, carry its door and a point on it through the turn, and seat it without a step in the ground.
+//
+// A hex lattice has six-fold symmetry.  Turn a set of cells by 60 degrees and every cell
+// lands on a cell: `hex_field::stencil_rotate` does that, exactly, and `stencil_rotate_deg`
+// refuses any other angle — rightly, for an exact routine must not round.
+//
+// But a house is wanted at twelve angles, not six, and "refused" is no answer to somebody
+// placing one.  `cells_turn` is the answer: exact where the lattice allows it, and where it
+// does not, the closest structure that still looks like the one drawn — the same walls, each
+// straight, each square to the next — with what it had to give up reported, not hidden.
+use hex_place::*;
+use hex_draw::*;
+use hex_form::*;
+use hex_field::*;
+
+// A house as cells: 10 hex steps by 8, about cell (0, 0), drawn at 0 degrees.
+fn a_house() -> HexSet {
+  cells = hexset_chunk(-20, -20, 41, 41);
+  types = labels_new(-20, -20, 41, 41);
+  draw_floor(plan_new(0, 0, 10, 8, 0, false), cells, types, 1);
+  cells
+}
+
+fn main() {
+  drawn = a_house();
+  for steps in [2, 1] {
+    t = cells_turn(drawn, 0, 0, steps);
+    walls = len(cells_built(t.tn_cells, 7, steps).cw_walls);
+    println("{30 * steps} degrees: {hexset_count(t.tn_cells)} cells, {walls} walls, moved by ({t.tn_sx:.3}, {t.tn_sy:.3})");
+  }
+
+  // Every section below is a function, and `main` calls each one: a section nothing calls
+  // still compiles, but its assertions never run.
+  what_an_odd_step_gives_up();
+  a_point_through_the_turn();
+  a_door_through_the_turn();
+  seated_without_a_step();
+}
+
+// That prints (the drawn house has 95 cells):
+//
+//     60 degrees: 95 cells, 4 walls, moved by (0.000, 0.000)
+//     30 degrees: 96 cells, 4 walls, moved by (0.433, 0.750)
+//
+// ## What an odd step gives up
+//
+// Sixty degrees: the same 95 cells, each where the lattice's own turn puts it.  Thirty
+// degrees: 96.  The walls of the turned house cannot stand where the drawn ones would land —
+// a wall stands midway between two rows of cell centres, and the turned lattice's rows lie
+// elsewhere — so each wall goes to the nearest line it CAN stand on, and the cells inside are
+// the house.  A wall may move by up to half a row, so the room between two walls may be a row
+// wider or narrower, and the count of cells changes with it.
+//
+// What is kept, at every step: as many walls, each exactly along a heading, each square to the
+// next, and every cell centre clearly inside or outside them.
+//
+// ⚠ Turn from the drawing, every time.  Two odd steps are two approximations; `cells_turn`
+// of the drawing by 2 is exact, `cells_turn` of a 30-degree result by another 1 is not it.
+
+fn what_an_odd_step_gives_up() {
+  drawn = a_house();
+  for steps in 0..12 {
+    t = cells_turn(drawn, 0, 0, steps);
+    b = cells_built(t.tn_cells, 7, steps);
+    assert(len(b.cw_walls) == 4, "{30 * steps} degrees: four walls");
+    for i in 0..4 {
+      w = b.cw_walls[i]!;
+      nx = b.cw_walls[(i + 1) % 4 ?? 0]!;
+      assert(vec_dot_4(w.ws_dk, w.ws_dm, nx.ws_dk, nx.ws_dm) == 0, "{30 * steps} degrees: square corners");
+    }
+    if steps % 2 == 0 { assert(hexset_count(t.tn_cells) == hexset_count(drawn), "an even step keeps every cell"); }
+  }
+}
+
+// ## A point through the turn
+//
+// To bring its walls nearest their lines an odd step may MOVE the structure: by nothing, or by
+// half a row, along each of its two axes.  That offset comes back in the `Turned` (`tn_sx`,
+// `tn_sy`), and `turned_point` uses it: give it a point of the drawn structure — a lamp by the
+// door, the corner of a yard — and it answers where that point is once the structure is turned.
+//
+// The turn is worked out once.  `turned_point` is a few multiplications, so carry a hundred
+// points through one `Turned` rather than turning a hundred times.
+
+fn a_point_through_the_turn() {
+  drawn = a_house();
+  t = cells_turn(drawn, 0, 0, 3);                     // a quarter turn: three steps of 30 degrees
+  (x, y) = turned_point(t, 4.0, 0.0);                 // a point 4 units east of the pivot
+  (px, py) = turned_point(t, 0.0, 0.0);               // the pivot itself
+  println("the pivot lands at ({px:.3}, {py:.3}); 4 east of it lands {x - px:.3} east, {y - py:.3} north of that");
+  d = sqrt((x - px) * (x - px) + (y - py) * (y - py)) ?? 0.0;
+  assert(d > 3.999999 && d < 4.000001, "a turn keeps distances");
+}
+
+// That prints — a quarter turn takes east to north, and this house's odd step moved it by
+// half a row, which the pivot shows:
+//
+//     the pivot lands at (-0.433, 0.750); 4 east of it lands 0.000 east, 4.000 north of that
+//
+// ## A door through the turn
+//
+// Doors and windows are marks on wall edges (`hex_draw`'s second guide).  `marked_turn` turns
+// the structure and its marks together.  Through 60 degrees the very edges turn with their
+// cells.  Through an odd step each opening's centre is carried through the turn and placed
+// again on the turned wall, so it stays on its wall and keeps its kind and its width; it may
+// slide a little along the wall, and the distance between two openings may change a little.
+
+fn a_door_through_the_turn() {
+  cells = a_house();
+  drawn = cells_built(cells, 7, 0);
+  d = Marked { mk_cells: cells, mk_marks: cells_no_marks(cells) };
+  sizes = opening_sizes_default();
+  a = drawn.cw_corners[3] ?? (0.0, 0.0);
+  b = drawn.cw_corners[0] ?? (0.0, 0.0);
+  cells_place_opening(drawn, d.mk_marks, OPEN_DOOR, (a.0 + b.0) * 0.5, (a.1 + b.1) * 0.5, sizes);
+  for steps in [0, 1, 2, 5] {
+    t = marked_turn(d, 0, 0, steps, TURN_BY_WALLS, 0, sizes);
+    built = cells_built(t.mk_cells, 7, steps);
+    found = cells_openings(built.cw_boundary, built.cw_runs, built.cw_walls, t.mk_marks, sizes);
+    assert(len(found) == 1 && found[0]!.op_kind == OPEN_DOOR, "{30 * steps} degrees: the door came through");
+    println("{30 * steps} degrees: the door on a wall along heading {surface_heading(built.cw_walls[found[0]!.op_wall]!)}");
+  }
+}
+
+// That prints — the door's wall turns a heading a step:
+//
+//     0 degrees: the door on a wall along heading 0
+//     30 degrees: the door on a wall along heading 1
+//     60 degrees: the door on a wall along heading 2
+//     150 degrees: the door on a wall along heading 5
+//
+// ## Seated without a step
+//
+// `seat_write` (the first guide) levels a footprint and leaves a step all round it.  A house
+// on a hillside stands on a levelled plot the hill runs smoothly into: `seat_blend` writes the
+// footprint the same way and then blends the ground round it, from the seat's height at the
+// footprint's edge back to the ground's own height `blend` away.  It answers the LOWEST the
+// ground was under the footprint — where the walls have to go down to.
+//
+// Distances are in your unit: `step` is the distance between two neighbouring cell centres
+// in it (1.5 for metres where a hex step is 1.5 m; sqrt(3) for the lattice's own unit).
+
+fn seated_without_a_step() {
+  cells = a_house();
+  ground = heights_new(-20, -20, 41, 41);
+  for r in -20..21 { for q in -20..21 { height_set(ground, q, r, 0.1 * (lattice_k(q, r) as float)); } }   // a slope rising east
+  lowest = seat_blend(cells, ground, 2.0, 3.0, 1.5);   // seat at 2.0, blend over 3.0, a hex step 1.5
+  println("lowest ground under the house {lowest:.2}; inside {height_get(ground, 0, 0):.2}, just outside {height_get(ground, 7, 0):.2}, far off {height_get(ground, 16, 0):.2}");
+  assert(height_get(ground, 0, 0) == 2.0, "the footprint is level at the seat");
+  assert(height_get(ground, 16, 0) == 0.1 * (lattice_k(16, 0) as float), "far off the ground is its own");
+}
+
+// That prints:
+//
+//     lowest ground under the house -1.00; inside 2.00, just outside 1.49, far off 3.20
