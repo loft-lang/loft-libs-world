@@ -21,6 +21,7 @@ geometry itself.
 - **count what a wall still holds** — `wall_edge_count`
 - **get a wall's collision surface** — `surface_of · surface_is_exact · surface_span`
 - **the mitered render quad** — `surface_quad`
+- **the corner of two walls that are not a `Plan`'s sides** — `surface_meet`, and `surface_dir` for a wall's direction
 
 A guide that runs: [`docs/01-getting-started.loft`](docs/01-getting-started.loft).
 

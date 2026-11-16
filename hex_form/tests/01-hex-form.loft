@@ -47,3 +47,34 @@ fn test_a_non_closing_walk_is_refused() {
   f = form_new(0, [1, 1, 1], [4, 4, 5]);
   assert(!form_admissible(f), "a walk whose turns miss closure is refused");
 }
+
+// The dot product of two doubled vectors, exact: a vector with itself is `vec_n2_4`, a step and
+// its perpendicular give 0, and two headings three steps apart are at a right angle.
+fn test_the_dot_product_is_exact() {
+  for h in 0..HEAD_N {
+    a = head_step(h);
+    b = head_step(h + 3);
+    assert(vec_dot_4(a.0, a.1, a.0, a.1) == vec_n2_4(a.0, a.1), "heading {h}: a step with itself is its length squared");
+    assert(vec_dot_4(a.0, a.1, perp_k(a.0, a.1), perp_m(a.0, a.1)) == 0, "heading {h}: a step and its perpendicular");
+    assert(vec_dot_4(a.0, a.1, b.0, b.1) == 0, "heading {h} and {h + 3}: a right angle");
+    c = head_step(h + 6);
+    assert(vec_dot_4(a.0, a.1, c.0, c.1) == 0 - vec_n2_4(a.0, a.1), "heading {h} and its opposite");
+  }
+}
+
+// The sign of a + b*sqrt(3) against the float it stands for, and where a float could not say:
+// 7 - 4*sqrt(3) is 0.0718 (49 against 48), 26 - 15*sqrt(3) is 0.019 (676 against 675).
+fn test_the_sign_of_a_plus_b_root3() {
+  assert(sign_root3(0, 0) == 0, "0 is 0");
+  assert(sign_root3(7, -4) == 1 && sign_root3(-7, 4) == -1, "7 - 4*sqrt(3) > 0");
+  assert(sign_root3(5, -3) == -1 && sign_root3(-5, 3) == 1, "5 - 3*sqrt(3) < 0");
+  assert(sign_root3(26, -15) == 1 && sign_root3(-26, 15) == -1, "26 - 15*sqrt(3) > 0");
+  assert(sign_root3(1351, -780) == 1, "1351 - 780*sqrt(3) > 0, by 0.00037");
+  for a in -9..10 {
+    for b in -9..10 {
+      v = (a as float) + (b as float) * 1.7320508075688772;
+      want = if v > 0.0 { 1 } else if v < 0.0 { -1 } else { 0 };
+      assert(sign_root3(a, b) == want, "the sign of {a} + {b}*sqrt(3)");
+    }
+  }
+}

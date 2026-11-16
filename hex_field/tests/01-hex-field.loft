@@ -72,3 +72,61 @@ fn test_negative_control_detects_one_cell() {
   assert(shoelace_total(v) != 12 * hexset_count(s),
          "one added cell must break the area round-trip");
 }
+
+// `trace_edges` is `trace` with each edge's two cells kept: the same corners, loops and starts,
+// exactly, and every edge between a cell of the set and one outside it, ending where the next
+// begins.  Over a disk, a circle, an octagon, a ring round a hole, a wall one cell wide between
+// a hole and the outside, and two pieces.
+fn test_trace_edges_is_trace_with_the_cells() {
+  forms: vector<HexSet> = [];
+  d = hexset_new(32);
+  hexdisk_into(d, 16, 16, 4);
+  forms += [d];
+  forms += [form_circle(40, 9.5)];
+  forms += [form_octagon(40, 8.0)];
+  ring = hexset_new(32);
+  hexdisk_into(ring, 16, 16, 5);
+  for hr in 14..19 { for hq in 14..19 { if hex_dist(hq, hr, 16, 16) <= 2 { hexset_set(ring, hq, hr, false); } } }
+  forms += [ring];
+  thin = hexset_new(32);
+  hexdisk_into(thin, 16, 16, 2);
+  hexset_set(thin, 16, 16, false);
+  hexset_set(thin, 17, 16, false);
+  forms += [thin];
+  two = hexset_new(40);
+  hexdisk_into(two, 10, 10, 3);
+  hexdisk_into(two, 28, 27, 2);
+  hexset_set(two, 3, 30, true);
+  forms += [two];
+  for fi in 0..len(forms) {
+    s = forms[fi]!;
+    v = trace(s);
+    e = trace_edges(s);
+    assert(e.em_loops == v.vm_loops, "form {fi}: {e.em_loops} loops, trace has {v.vm_loops}");
+    assert(e.em_k == v.vm_k && e.em_m == v.vm_m && e.em_start == v.vm_start, "form {fi}: the corners and starts are trace's");
+    assert(e.em_loops >= 1 && len(e.em_k) >= 6, "form {fi}: something traced");
+    for li in 0..e.em_loops {
+      a = e.em_start[li] ?? 0;
+      b = e.em_start[li + 1] ?? 0;
+      for j in a..b {
+        qa = e.em_qa[j] ?? 0;
+        ra = e.em_ra[j] ?? 0;
+        qb = e.em_qb[j] ?? 0;
+        rb = e.em_rb[j] ?? 0;
+        assert(hexset_get(s, qa, ra) && !hexset_get(s, qb, rb), "form {fi} edge {j}: a cell inside, a cell outside");
+        assert(hex_dist(qa, ra, qb, rb) == 1, "form {fi} edge {j}: neighbours");
+        // the edge's two corners are corners of both its cells: 4 x the squared distance to each centre is 4
+        nx = if j + 1 < b { j + 1 } else { a };
+        for c in [j, nx] {
+          for side in 0..2 {
+            cq = if side == 0 { qa } else { qb };
+            cr = if side == 0 { ra } else { rb };
+            dk = (e.em_k[c] ?? 0) - lattice_k(cq, cr);
+            dm = (e.em_m[c] ?? 0) - lattice_m(cq, cr);
+            assert(3 * dk * dk + dm * dm == 4, "form {fi} edge {j}: its corners are its cells' corners");
+          }
+        }
+      }
+    }
+  }
+}

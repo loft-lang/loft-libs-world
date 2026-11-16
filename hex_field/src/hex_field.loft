@@ -545,6 +545,131 @@ pub fn trace(s: HexSet) -> VecMap {
   VecMap { vm_k: vk, vm_m: vm, vm_start: st, vm_loops: nloops }
 }
 
+// The boundary as `trace` gives it, with each edge's two CELLS kept: loop i is the edges
+// [em_start[i], em_start[i+1]), edge j running from corner (em_k[j], em_m[j]) to the next edge's
+// corner (the loop's first after its last), between the cell (em_qa[j], em_ra[j]) inside the
+// set, on its left, and the cell (em_qb[j], em_rb[j]) outside it.
+pub struct EdgeMap {
+  pub em_k:     vector<integer>,
+  pub em_m:     vector<integer>,
+  pub em_qa:    vector<integer>,
+  pub em_ra:    vector<integer>,
+  pub em_qb:    vector<integer>,
+  pub em_rb:    vector<integer>,
+  pub em_start: vector<integer>,
+  pub em_loops: integer,
+}
+
+// The lattice step from a cell to the neighbour across its edge i (corner i -> corner i+1):
+// the inverse of `edge_of`.
+fn edge_dk(i: integer) -> integer {
+  if i == 0 { return -1; }
+  if i == 1 { return -2; }
+  if i == 2 { return -1; }
+  if i == 3 { return 1; }
+  if i == 4 { return 2; }
+  1
+}
+
+fn edge_dm(i: integer) -> integer {
+  if i == 0 { return 3; }
+  if i == 1 { return 0; }
+  if i == 2 { return -3; }
+  if i == 3 { return -3; }
+  if i == 4 { return 0; }
+  3
+}
+
+// `trace`, keeping which two cells each edge lies between — what a caller needs to cut the
+// boundary into walls, or to mark a door on some of its edges: the corners alone do not say
+// which stored edge they bound.  The corners, the loops and their order are `trace`'s exactly
+// (the same canonical start per loop), so the two can be used side by side.
+//
+// The walk needs no search.  At the corner an edge ends in, three cells meet: the cell inside
+// (A), the cell outside (O) and a third (T).  T outside: the boundary goes on round A, along its
+// next edge.  T inside: it goes on between T and O.  One step each, so the cost follows the
+// cells scanned and the edges walked, where `trace` looks through every edge for each.
+pub fn trace_edges(s: HexSet) -> EdgeMap {
+  used: vector<boolean> = [for _ in 0..s.hs_w * s.hs_h * 6 { false }];
+  ok: vector<integer> = [];
+  om: vector<integer> = [];
+  oqa: vector<integer> = [];
+  ora: vector<integer> = [];
+  oqb: vector<integer> = [];
+  orb: vector<integer> = [];
+  st: vector<integer> = [];
+  nloops = 0;
+  for r in s.hs_r0..s.hs_r0 + s.hs_h {
+    for q in s.hs_q0..s.hs_q0 + s.hs_w {
+      if !hexset_get(s, q, r) { continue; }
+      for d in 0..6 {
+        nq = nb_q(q, r, d);
+        nr = nb_r(q, r, d);
+        if hexset_get(s, nq, nr) { continue; }
+        i0 = edge_of(lattice_k(nq, nr) - lattice_k(q, r), lattice_m(nq, nr) - lattice_m(q, r));
+        if i0 < 0 || (used[((r - s.hs_r0) * s.hs_w + (q - s.hs_q0)) * 6 + i0] ?? true) { continue; }
+        // one loop, from this edge round to it again
+        lk: vector<integer> = [];
+        lm: vector<integer> = [];
+        lqa: vector<integer> = [];
+        lra: vector<integer> = [];
+        lqb: vector<integer> = [];
+        lrb: vector<integer> = [];
+        cq = q;
+        cr = r;
+        ci = i0;
+        // every edge is walked once at most, so no loop is longer than the edges there are
+        for _ in 0..s.hs_w * s.hs_h * 6 {
+          at = ((cr - s.hs_r0) * s.hs_w + (cq - s.hs_q0)) * 6 + ci;
+          if used[at] ?? true { break; }
+          used[at] = true;
+          k0 = lattice_k(cq, cr);
+          m0 = lattice_m(cq, cr);
+          (bq, br) = lattice_to_cell(k0 + edge_dk(ci), m0 + edge_dm(ci));
+          lk += [k0 + corner_k(ci)];
+          lm += [m0 + corner_m(ci)];
+          lqa += [cq];
+          lra += [cr];
+          lqb += [bq];
+          lrb += [br];
+          ni = ci + 1;
+          if ni > 5 { ni = 0; }
+          (tq, tr) = lattice_to_cell(k0 + edge_dk(ni), m0 + edge_dm(ni));
+          if hexset_get(s, tq, tr) {
+            ci = edge_of(lattice_k(bq, br) - lattice_k(tq, tr), lattice_m(bq, br) - lattice_m(tq, tr));
+            cq = tq;
+            cr = tr;
+          } else {
+            ci = ni;
+          }
+        }
+        // the canonical start, as `trace` takes it: the loop's smallest corner first
+        n = len(lk);
+        best = 0;
+        for cj in 1..n {
+          jk = lk[cj] ?? 0;
+          bk = lk[best] ?? 0;
+          if jk < bk || (jk == bk && (lm[cj] ?? 0) < (lm[best] ?? 0)) { best = cj; }
+        }
+        st += [len(ok)];
+        nloops = nloops + 1;
+        for rj in 0..n {
+          idx = best + rj;
+          if idx >= n { idx = idx - n; }
+          ok += [lk[idx] ?? 0];
+          om += [lm[idx] ?? 0];
+          oqa += [lqa[idx] ?? 0];
+          ora += [lra[idx] ?? 0];
+          oqb += [lqb[idx] ?? 0];
+          orb += [lrb[idx] ?? 0];
+        }
+      }
+    }
+  }
+  st += [len(ok)];
+  EdgeMap { em_k: ok, em_m: om, em_qa: oqa, em_ra: ora, em_qb: oqb, em_rb: orb, em_start: st, em_loops: nloops }
+}
+
 // Twice the signed area of loop i, in integer lattice units.  Exact.
 pub fn shoelace2(v: VecMap, i: integer) -> integer {
   a = v.vm_start[i] ?? 0;
