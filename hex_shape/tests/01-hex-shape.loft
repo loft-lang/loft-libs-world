@@ -496,3 +496,68 @@ fn test_a_vertexs_world_point_is_its_keys() {
 // assumed: the same sabotage against the suite as it stood one commit earlier gives **27
 // passed**. Nothing else here reads `wc_x` or `wc_y`, so a chain whose vertices were in the
 // right order at the wrong places was a green suite.
+
+// A plan of one rectangle, filled exactly, is `box_fill`'s cells: every size from 1 x 1 to 9 x 9
+// hex steps, all 12 rotations, mirrored and not, on an even and on an odd row.
+fn test_parts_fill_of_one_part_is_box_fill() {
+  differ = 0;
+  cases = 0;
+  for w in 1..10 {
+    for d in 1..10 {
+      for rot in 0..12 {
+        for mir in 0..2 {
+          for row in 0..2 {
+            want = hexset_chunk(-16, -16, 33, 33);
+            box_fill(box_new(0, row, w, d, rot, mir == 1), want);
+            got = hexset_chunk(-16, -16, 33, 33);
+            n = parts_fill(0, row, rot, mir == 1, [box_part(0 - w, 0 - d, w, d)], got);
+            cases = cases + 1;
+            same = n == hexset_count(want);
+            for r in -16..17 { for q in -16..17 { if hexset_get(want, q, r) != hexset_get(got, q, r) { same = false; } } }
+            if !same { differ = differ + 1; }
+          }
+        }
+      }
+    }
+  }
+  assert(cases == 3888, "every case tried: {cases}");
+  assert(differ == 0, "{differ} of {cases} boxes: the exact fill is not box_fill's cells");
+}
+
+// An L: its cells are the cells of its two rectangles, each filled alone; a part given twice or
+// lying inside another adds nothing; and a 60-degree turn of the plan is the lattice's own turn
+// of its cells (`cell_rot`), at every rotation.
+fn test_parts_fill_an_ell() {
+  ell = [box_part(-5, -3, 5, 3), box_part(-5, 3, -1, 7)];
+  for rot in 0..12 {
+    both = hexset_chunk(-16, -16, 33, 33);
+    n = parts_fill(0, 0, rot, false, ell, both);
+    a = hexset_chunk(-16, -16, 33, 33);
+    parts_fill(0, 0, rot, false, [box_part(-5, -3, 5, 3)], a);
+    b = hexset_chunk(-16, -16, 33, 33);
+    parts_fill(0, 0, rot, false, [box_part(-5, 3, -1, 7)], b);
+    union = 0;
+    for r in -16..17 {
+      for q in -16..17 {
+        in_either = hexset_get(a, q, r) || hexset_get(b, q, r);
+        if in_either { union = union + 1; }
+        assert(hexset_get(both, q, r) == in_either, "rot {rot}: the L is its two rectangles");
+      }
+    }
+    assert(n == union && n > hexset_count(a), "rot {rot}: {n} cells, the wing adding some");
+    again = hexset_chunk(-16, -16, 33, 33);
+    m = parts_fill(0, 0, rot, false, [box_part(-5, -3, 5, 3), box_part(-5, 3, -1, 7), box_part(-5, -3, 5, 3), box_part(-2, -1, 2, 1)], again);
+    assert(m == n, "rot {rot}: a part twice, a part inside another: the same {n} cells, got {m}");
+    turned = hexset_chunk(-16, -16, 33, 33);
+    parts_fill(0, 0, rot + 2, false, ell, turned);
+    for r in -16..17 {
+      for q in -16..17 {
+        if !hexset_get(both, q, r) { continue; }
+        (tq, tr) = cell_rot(q, r, 1);
+        assert(hexset_get(turned, tq, tr), "rot {rot}: turned 60 degrees, cell for cell");
+      }
+    }
+    assert(hexset_count(turned) == n, "rot {rot}: and no cell more");
+  }
+  assert(parts_reach(ell) == 10, "the L reaches 7 half steps, and 3: {parts_reach(ell)}");
+}

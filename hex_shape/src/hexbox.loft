@@ -157,6 +157,85 @@ pub fn box_fill(b: Box, cells: HexSet) -> integer {
   n
 }
 
+// ── A PLAN OF SEVERAL RECTANGLES, FILLED EXACTLY ───────────────────────────
+//
+// A house is seldom one box: an L, a T, a hall with wings.  A `BoxPart` is one rectangle of such
+// a plan in the plan's own frame, in HALF hex steps: u from `bp_u0` to `bp_u1` along the plan's
+// heading, v from `bp_v0` to `bp_v1` along the heading three steps on.  The box
+// `box_new(.., w, d, ..)` is the one part `box_part(-w, -d, w, d)`.
+//
+// The fill is `box_fill`'s rule — a cell is in when its CENTRE lies in a rectangle, the rim
+// counted in — decided without a float.  Along an even heading a centre's distance, scaled, is a
+// whole number and so is a plan line; along an odd heading the line is a whole number times
+// sqrt(3), and the comparison is `sign_root3`.  A rectangle's two axes are never of one kind (the
+// heading three steps on has the other parity), so each part takes one test of each.  No epsilon:
+// where `box_fill` adds 1e-9 so a column on the rim is not lost to the last bit, here the rim is
+// an equality of integers.  `parts_fill` of one part and `box_fill` give the same cells; the
+// tests sweep that.
+pub struct BoxPart {
+  pub bp_u0: integer,
+  pub bp_v0: integer,
+  pub bp_u1: integer,
+  pub bp_v1: integer,
+}
+
+// One rectangle of a plan, in half hex steps of the plan's frame.
+pub fn box_part(u0: integer, v0: integer, u1: integer, v1: integer) -> BoxPart {
+  BoxPart { bp_u0: u0, bp_v0: v0, bp_u1: u1, bp_v1: v1 }
+}
+
+// Is coordinate `p` — along heading `head`, scaled by 8 times that heading's step length —
+// between the plan lines `lo` and `hi` half steps out, the lines counted in?
+fn part_within(head: integer, p: integer, lo: integer, hi: integer) -> boolean {
+  if head_is_edge(head) { return p >= 12 * lo && p <= 12 * hi; }
+  sign_root3(p, -12 * lo) >= 0 && sign_root3(p, -12 * hi) <= 0
+}
+
+// Mark in `cells` every cell whose centre lies in one of `parts`, the plan's origin on cell
+// (cq, cr), its u along heading `rot` (0..11, thirty degrees a step), u flipped when `mir`.
+// Answers how many it marked.
+pub fn parts_fill(cq: integer, cr: integer, rot: integer, mir: boolean,
+                  parts: vector<BoxPart>, cells: HexSet) -> integer {
+  us = head_step(rot);
+  vs = head_step(rot + 3);
+  ck = lattice_k(cq, cr);
+  cm = lattice_m(cq, cr);
+  n = 0;
+  for fr in hexset_r0(cells)..hexset_r0(cells) + hexset_h(cells) {
+    for fq in hexset_q0(cells)..hexset_q0(cells) + hexset_w(cells) {
+      pk = 2 * (lattice_k(fq, fr) - ck);
+      pm = 2 * (lattice_m(fq, fr) - cm);
+      u = vec_dot_4(pk, pm, us.0, us.1);
+      if mir { u = 0 - u; }
+      v = vec_dot_4(pk, pm, vs.0, vs.1);
+      inside = false;
+      for pi in 0..len(parts) {
+        pt = parts[pi]!;
+        if part_within(rot, u, pt.bp_u0, pt.bp_u1) && part_within(rot + 3, v, pt.bp_v0, pt.bp_v1) { inside = true; }
+      }
+      if inside {
+        hexset_set(cells, fq, fr, true);
+        n = n + 1;
+      }
+    }
+  }
+  n
+}
+
+// How far from the plan's origin, in cells, a window must reach to hold the plan at any
+// rotation: its furthest line in half steps, and a margin.
+pub fn parts_reach(parts: vector<BoxPart>) -> integer {
+  r = 0;
+  for pi in 0..len(parts) {
+    pt = parts[pi]!;
+    for c in [pt.bp_u0, pt.bp_u1, pt.bp_v0, pt.bp_v1] {
+      a = if c < 0 { 0 - c } else { c };
+      if a > r { r = a; }
+    }
+  }
+  r + 3
+}
+
 // ── THE THICK WALL — a castle, not a cottage ───────────────────────────────
 //
 // A cottage wall is an EDGE: it costs no floor, and 27 cells of house stay 27 cells of

@@ -18,6 +18,8 @@ centre recovers exactly and whose radius quantises to a realisable shell `3k²+m
 
 - **fill an arc and read its shell back** — `arc_fill · arc_recover_centre · arc_shells_upto · arc_shell_max`
 - **select a box** — `box_new · box_fill`; `box_orbit` — 60° is a lattice symmetry, 30° is not
+- **select an L, a T, a hall with wings** — `box_part · parts_fill · parts_reach`: several rectangles
+  in one frame, filled by exact integer tests (one part is `box_fill`'s cells, with no epsilon)
 - **a thick wall, and whether it holds** — `box_ring_out · box_ring_in · flood_outside · leak_count`
   (`set_connected` says one chain, not closed)
 - **a wall along a line** — `wall_from_run · wall_write · wall_read_run`; `wall_is_exact` for the 12
