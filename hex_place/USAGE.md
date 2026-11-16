@@ -26,6 +26,10 @@ slot alone, so its footprint is untouched. Arbitration fails safe toward solid.
   an odd step moved them by), `turned_point` for anything standing on it, `marked_turn` to carry its
   doors and windows, `cells_middle` for a pivot.  60° steps are exact; an odd step is approximate and
   says by how much — `hex_field::stencil_rotate_deg` still refuses it, being the exact routine
+- **turn a whole stencil** — `stencil_turn`: its cells, what each holds (height, label, layers), its
+  outer walls with their materials and openings, and its INNER walls, which come through an odd step
+  as the straight boundaries of its rooms — closed where they were closed.  `tu_lost` counts marked
+  edges that bounded no room and could not come through an odd step
 - **arbitrate overlapping solids** — `arb_solid` (fail-safe toward solid) · `arb_owner` (lowest id, `-1` for none)
 
 A guide that runs: [`docs/01-getting-started.loft`](docs/01-getting-started.loft); and for the turn and

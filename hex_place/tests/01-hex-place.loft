@@ -225,3 +225,188 @@ fn test_a_seat_blends_the_ground_round_the_footprint() {
   flat = heights_new(-3, -3, 7, 7);
   assert(seat_blend(empty, flat, 5.0, 2.5, 1.5) == 5.0 && height_get(flat, 0, 0) == 0.0, "nothing to seat, nothing written");
 }
+
+// ── a stencil through a turn ────────────────────────────────────────────────
+
+const OUTER = 7;
+const INNER = 5;
+
+// A hall as a stencil: 24 hex steps by 16 about cell (0, 0), its outer walls of material 7, a
+// door in the middle of its first wall, and inner walls of material 5: one across it where the
+// doubled column passes `split`, with a door in it — and, when `tee`, one more down the east part
+// where the doubled row passes 0.  Each cell's label and its layer "room" are its room's number
+// (0 west; 1 east, or north-east; 2 south-east), its height its room's number and a half.
+fn hall_stencil(split: integer, tee: boolean) -> Stencil {
+  reach = 30;
+  cells = turn_drawn(24, 16, 0, reach);
+  edges = edgeset_new(0 - reach, 0 - reach, 2 * reach + 1, 2 * reach + 1);
+  hex_draw::draw_walls(cells, edges, OUTER);
+  hz = heights_new(0 - reach, 0 - reach, 2 * reach + 1, 2 * reach + 1);
+  lb = labels_new(0 - reach, 0 - reach, 2 * reach + 1, 2 * reach + 1);
+  for r in 0 - reach..reach + 1 {
+    for q in 0 - reach..reach + 1 {
+      if !hexset_get(cells, q, r) { continue; }
+      room = if lattice_k(q, r) < split { 0 } else if tee && lattice_m(q, r) < 0 { 2 } else { 1 };
+      label_set(lb, q, r, room);
+      height_set(hz, q, r, (room as float) + 0.5);
+    }
+  }
+  // the inner walls: wherever two cells of different rooms meet
+  for r in 0 - reach..reach + 1 {
+    for q in 0 - reach..reach + 1 {
+      if !hexset_get(cells, q, r) { continue; }
+      for d in 0..6 {
+        nq = nb_q(q, r, d);
+        nr = nb_r(q, r, d);
+        if hexset_get(cells, nq, nr) && label_get(lb, q, r) != label_get(lb, nq, nr) {
+          // a door in the wall across the hall, two edges of it just north of the middle
+          door = label_get(lb, q, r) + label_get(lb, nq, nr) == 1 && lattice_m(q, r) == 6 && lattice_m(nq, nr) == 6;
+          edge_set_mat(edges, q, r, nq, nr, if door { hex_draw::OPEN_DOOR } else { INNER });
+        }
+      }
+    }
+  }
+  built = hex_draw::cells_built(cells, OUTER, 0);
+  a = built.cw_corners[len(built.cw_corners) - 1] ?? (0.0, 0.0);
+  b = built.cw_corners[0] ?? (0.0, 0.0);
+  hex_draw::cells_place_opening(built, edges, hex_draw::OPEN_DOOR, (a.0 + b.0) * 0.5, (a.1 + b.1) * 0.5, hex_draw::opening_sizes_default());
+  st = stencil_with_edges(cells, hz, lb, edges, true, true);
+  layer_add(st.sn_layers, "room");
+  for r in 0 - reach..reach + 1 {
+    for q in 0 - reach..reach + 1 {
+      if hexset_get(cells, q, r) { layer_set(st.sn_layers, "room", q, r, label_get(lb, q, r)); }
+    }
+  }
+  st
+}
+
+// What a turned hall keeps.  Its rooms, counted afresh by walking from cell to cell wherever no
+// edge is marked, are `rooms`: no inner wall leaks and none is doubled.  In each such room every
+// cell has one label, one height and one "room" layer — the drawn room's — so what a cell holds
+// came through with its room.  The inner walls are there in their material with their door; the
+// outer walls in theirs with theirs.
+fn stencil_keeps(name: text, st: Stencil, t: StencilTurn, rooms: integer, step: integer) {
+  cells = t.tu_stencil.sn_cells;
+  edges = t.tu_stencil.sn_edges;
+  seen = labels_new(hexset_q0(cells), hexset_r0(cells), hexset_w(cells), hexset_h(cells));
+  found = 0;
+  inner = 0;
+  inner_doors = 0;
+  outer_doors = 0;
+  outer = 0;
+  for r in hexset_r0(cells)..hexset_r0(cells) + hexset_h(cells) {
+    for q in hexset_q0(cells)..hexset_q0(cells) + hexset_w(cells) {
+      if !hexset_get(cells, q, r) { continue; }
+      for d in 0..6 {
+        nq = nb_q(q, r, d);
+        nr = nb_r(q, r, d);
+        m = edge_mat(edges, q, r, nq, nr);
+        if !hexset_get(cells, nq, nr) {
+          assert(m == OUTER || m == hex_draw::OPEN_DOOR, "{name} at {30 * step}: an outer edge of material {m}");
+          outer += 1;
+          if m == hex_draw::OPEN_DOOR { outer_doors += 1; }
+        } else if m != 0 && (nr > r || (nr == r && nq > q)) {
+          assert(m == INNER || m == hex_draw::OPEN_DOOR, "{name} at {30 * step}: an inner edge of material {m}");
+          inner += 1;
+          if m == hex_draw::OPEN_DOOR { inner_doors += 1; }
+        }
+      }
+      if label_get(seen, q, r) >= 0 { continue; }
+      // a room: from this cell to every cell reached across no marked edge
+      label_set(seen, q, r, found);
+      want = label_get(t.tu_stencil.sn_labels, q, r);
+      sq: vector<integer> = [q];
+      sr: vector<integer> = [r];
+      at = 0;
+      while at < len(sq) {
+        cq = sq[at] ?? 0;
+        cr = sr[at] ?? 0;
+        at += 1;
+        assert(label_get(t.tu_stencil.sn_labels, cq, cr) == want, "{name} at {30 * step}: one label a room");
+        assert(height_get(t.tu_stencil.sn_heights, cq, cr) == (want as float) + 0.5, "{name} at {30 * step}: its room's height");
+        assert(layer_get(t.tu_stencil.sn_layers, "room", cq, cr) == want, "{name} at {30 * step}: its room's layer");
+        for d in 0..6 {
+          nq = nb_q(cq, cr, d);
+          nr = nb_r(cq, cr, d);
+          if !hexset_get(cells, nq, nr) || label_get(seen, nq, nr) >= 0 || edge_mat(edges, cq, cr, nq, nr) != 0 { continue; }
+          label_set(seen, nq, nr, found);
+          sq += [nq];
+          sr += [nr];
+        }
+      }
+      assert(len(sq) > 20, "{name} at {30 * step}: a room of {len(sq)} cells");
+      found += 1;
+    }
+  }
+  assert(found == rooms && t.tu_rooms == rooms, "{name} at {30 * step}: {rooms} rooms, walked {found}, told {t.tu_rooms}");
+  assert(t.tu_lost == 0, "{name} at {30 * step}: no wall lost");
+  assert(inner >= 14 && inner_doors >= 1 && inner_doors <= 3, "{name} at {30 * step}: the inner wall ({inner} edges) and its door ({inner_doors})");
+  assert(outer_doors >= 1 && outer_doors <= 3 && outer > 60, "{name} at {30 * step}: the outer wall ({outer} edges) and its door ({outer_doors})");
+  _ = st;
+}
+
+// A hall of two rooms and one of three (a wall meeting a wall), at all twelve steps.  An even
+// step is `stencil_rotate`, to the edge.
+fn test_a_stencil_turns_with_its_rooms() {
+  for tee in 0..2 {
+    st = hall_stencil(5, tee == 1);
+    name = if tee == 1 { "a hall of three rooms" } else { "a hall of two rooms" };
+    for s in 0..12 {
+      t = stencil_turn(st, s);
+      stencil_keeps(name, st, t, 2 + tee, s);
+      if s % 2 == 0 {
+        exact = stencil_rotate(st, s / 2 ?? 0);
+        assert(edgeset_equal(t.tu_stencil.sn_edges, exact.sn_edges), "{name} at {30 * s}: stencil_rotate's edges");
+        assert(hexset_count(t.tu_stencil.sn_cells) == hexset_count(exact.sn_cells), "{name} at {30 * s}: stencil_rotate's cells");
+      }
+    }
+  }
+}
+
+// The inner wall comes out straight.  Drawn, the wall across the hall runs north (heading 3);
+// turned `s` steps it runs along heading 3 + s, and every one of its edges' midpoints lies within
+// half a hex of one line along that heading.
+fn test_an_inner_wall_stays_straight() {
+  st = hall_stencil(5, false);
+  for s in 0..12 {
+    t = stencil_turn(st, s);
+    cells = t.tu_stencil.sn_cells;
+    a = ((3 + s) as float) * PI / 6.0;
+    lo = 1000000.0;
+    hi = -1000000.0;
+    n = 0;
+    for r in hexset_r0(cells)..hexset_r0(cells) + hexset_h(cells) {
+      for q in hexset_q0(cells)..hexset_q0(cells) + hexset_w(cells) {
+        if !hexset_get(cells, q, r) { continue; }
+        for d in 0..6 {
+          nq = nb_q(q, r, d);
+          nr = nb_r(q, r, d);
+          if !hexset_get(cells, nq, nr) || edge_mat(t.tu_stencil.sn_edges, q, r, nq, nr) == 0 { continue; }
+          mx = (hex_form::cell_x(q, r) + hex_form::cell_x(nq, nr)) * 0.5;
+          my = (hex_form::cell_y(q, r) + hex_form::cell_y(nq, nr)) * 0.5;
+          across = -mx * sin(a) + my * cos(a);
+          if across < lo { lo = across; }
+          if across > hi { hi = across; }
+          n += 1;
+        }
+      }
+    }
+    assert(n >= 28, "at {30 * s}: the inner wall's edges, each seen from both its cells: {n}");
+    assert(hi - lo < 0.9, "at {30 * s}: the inner wall within a band of {hi - lo} across heading {(3 + s) % 12 ?? 0}");
+  }
+}
+
+// A wall that closes nothing — a stub three edges long in the middle of a room — bounds no room.
+// An even step carries it, edge for edge; an odd step cannot, and says how many edges it lost.
+fn test_a_wall_that_closes_nothing_is_counted() {
+  st = hall_stencil(5, false);
+  stub = 0;
+  for q in -9..-6 {
+    edge_set_mat(st.sn_edges, q, 2, nb_q(q, 2, 4), nb_r(q, 2, 4), INNER);
+    stub += 1;
+  }
+  even = stencil_turn(st, 2);
+  assert(even.tu_lost == 0 && edgeset_equal(even.tu_stencil.sn_edges, stencil_rotate(st, 1).sn_edges), "60 degrees carries every edge");
+  odd = stencil_turn(st, 1);
+  assert(odd.tu_lost == stub && odd.tu_rooms == 2, "30 degrees: the stub's {stub} edges lost and told, {odd.tu_lost}; the two rooms kept");
+}
