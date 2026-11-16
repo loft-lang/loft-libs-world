@@ -14,7 +14,8 @@
 // `HexSet` window, `nb_q`/`nb_r`, `lattice_*` and `corner_*` from hex_field, and
 // `hex_neighbor_dir`/`hex_edge_corners` from hex_grid.
 //
-// And the walls from cells: `cells_built` and `cells_outlines` from src/cellwalls.loft with all
+// And the walls from cells, with the openings on them (`cells_place_opening`, `cells_openings`
+// from src/cellopen.loft): `cells_built` and `cells_outlines` from src/cellwalls.loft with all
 // they stand on there (the runs, the two wall solvers, the miter, the step and the slant), on
 // hex_field's `trace_edges` and its edge layer.  The boundary is walked straight into edges with
 // their corners, where the library walks it into an `EdgeMap` and then into `WallEdge`s.
@@ -471,6 +472,11 @@ impl EdgeSet {
         if i >= 0 && (0..=EDGE_MAT_MAX).contains(&mat) {
             self.mat[i as usize] = mat as u8;
         }
+    }
+
+    fn get_mat(&self, qa: i64, ra: i64, qb: i64, rb: i64) -> i64 {
+        let i = self.index(qa, ra, qb, rb);
+        if i < 0 { 0 } else { self.mat[i as usize] as i64 }
     }
 
     fn count_all(&self) -> i64 {
@@ -1175,6 +1181,198 @@ fn bench_outlines(n: i64) -> Row {
     Row { name: "cells_outlines", iters: n, us, px: OUTLINES * one[1], hash: fnv(FNV_OFFSET, &one), sink }
 }
 
+// ── cellopen.loft ───────────────────────────────────────────────────
+
+const OPEN_DOOR: i64 = 1;
+const OPEN_WINDOW: i64 = 2;
+const OPENS: i64 = 20;
+
+/// A door's width, a window's, the corner clearance.
+struct OpeningSizes {
+    door: f64,
+    window: f64,
+    corner: f64,
+}
+
+fn opening_size(kind: i64, sz: &OpeningSizes) -> f64 {
+    if kind == OPEN_DOOR { sz.door } else { sz.window }
+}
+
+/// A surface's unit direction.
+fn surface_dir(w: &WallSurface) -> (f64, f64) {
+    let wx = w.dk as f64 * 0.8660254037844386;
+    let wy = w.dm as f64 * 0.5;
+    let ln = (wx * wx + wy * wy).sqrt();
+    (wx / ln, wy / ln)
+}
+
+struct CellOpening {
+    kind: i64,
+    wall: usize,
+    edges: Vec<usize>,
+    c: (f64, f64),
+    a: (f64, f64),
+    b: (f64, f64),
+}
+
+/// An edge's midpoint, in world units.
+fn edge_mid(e: &WallEdge) -> (f64, f64) {
+    ((e.ak + e.bk) as f64 * 0.5 * 0.8660254037844386, (e.am + e.bm) as f64 * 0.25)
+}
+
+fn opening_over(b: &[WallEdge], w: &WallSurface, wi: usize, kind: i64, group: Vec<usize>, sz: &OpeningSizes) -> CellOpening {
+    let (mut px, mut py) = (0.0, 0.0);
+    for &i in &group {
+        let (ex, ey) = edge_mid(&b[i]);
+        px += ex;
+        py += ey;
+    }
+    let n = group.len() as f64;
+    px /= n;
+    py /= n;
+    let mx = w.mean_x();
+    let my = w.mean_y();
+    let (dx, dy) = surface_dir(w);
+    let t = (px - mx) * dx + (py - my) * dy;
+    let cx = mx + t * dx;
+    let cy = my + t * dy;
+    let half = opening_size(kind, sz) * 0.5;
+    CellOpening { kind, wall: wi, edges: group, c: (cx, cy), a: (cx - half * dx, cy - half * dy), b: (cx + half * dx, cy + half * dy) }
+}
+
+fn cells_openings(b: &[WallEdge], rs: &[Vec<usize>], walls: &[WallSurface], marks: &EdgeSet, sz: &OpeningSizes) -> Vec<CellOpening> {
+    let mut out = Vec::new();
+    for (wi, run) in rs.iter().enumerate() {
+        let mut i = 0;
+        while i < run.len() {
+            let e = b[run[i]];
+            let kind = marks.get_mat(e.qa, e.ra, e.qb, e.rb);
+            if kind != OPEN_DOOR && kind != OPEN_WINDOW {
+                i += 1;
+                continue;
+            }
+            let mut group = Vec::new();
+            while i < run.len() {
+                let f = b[run[i]];
+                if marks.get_mat(f.qa, f.ra, f.qb, f.rb) != kind {
+                    break;
+                }
+                group.push(run[i]);
+                i += 1;
+            }
+            out.push(opening_over(b, &walls[wi], wi, kind, group, sz));
+        }
+    }
+    out
+}
+
+fn cells_place_opening(cw: &CellWalls, marks: &mut EdgeSet, kind: i64, x: f64, y: f64, sz: &OpeningSizes) -> bool {
+    let n = cw.walls.len();
+    let mut best = usize::MAX;
+    let (mut best_d, mut best_t, mut best_lo, mut best_hi) = (0.0, 0.0, 0.0, 0.0);
+    for i in 0..n {
+        let w = &cw.walls[i];
+        let (dx, dy) = surface_dir(w);
+        let mx = w.mean_x();
+        let my = w.mean_y();
+        let (ax, ay) = cw.corners[(i + n - 1) % n];
+        let (bx, by) = cw.corners[i];
+        let t0 = (ax - mx) * dx + (ay - my) * dy;
+        let t1 = (bx - mx) * dx + (by - my) * dy;
+        let lo = if t0 < t1 { t0 } else { t1 };
+        let hi = if t0 > t1 { t0 } else { t1 };
+        let t = (x - mx) * dx + (y - my) * dy;
+        let across = ((x - mx) * -dy + (y - my) * dx).abs();
+        let beyond = if t < lo { lo - t } else if t > hi { t - hi } else { 0.0 };
+        let dist = across + beyond;
+        if best == usize::MAX || dist < best_d {
+            best = i;
+            best_d = dist;
+            best_t = t;
+            best_lo = lo;
+            best_hi = hi;
+        }
+    }
+    if best == usize::MAX {
+        return false;
+    }
+    let half = opening_size(kind, sz) * 0.5;
+    let clear = half + sz.corner;
+    let t = if best_lo + clear > best_hi - clear {
+        (best_lo + best_hi) * 0.5
+    } else {
+        let up = if best_t > best_lo + clear { best_t } else { best_lo + clear };
+        if up < best_hi - clear { up } else { best_hi - clear }
+    };
+    let w = &cw.walls[best];
+    let (dx, dy) = surface_dir(w);
+    let mx = w.mean_x();
+    let my = w.mean_y();
+    let mut picks: Vec<usize> = Vec::new();
+    let mut nearest = usize::MAX;
+    let mut near_d = 0.0;
+    for &i in &cw.runs[best] {
+        let (ex, ey) = edge_mid(&cw.boundary[i]);
+        let off = ((ex - mx) * dx + (ey - my) * dy - t).abs();
+        if off <= half + 0.000000001 {
+            picks.push(i);
+        }
+        if nearest == usize::MAX || off < near_d {
+            nearest = i;
+            near_d = off;
+        }
+    }
+    if picks.is_empty() {
+        picks.push(nearest);
+    }
+    for &i in &picks {
+        let e = cw.boundary[i];
+        marks.set_mat(e.qa, e.ra, e.qb, e.rb, kind);
+    }
+    true
+}
+
+fn micro(x: f64) -> i64 {
+    (x * 1000000.0) as i64
+}
+
+fn open_op(cw: &CellWalls, cells: &HexSet, shift: i64) -> Vec<i64> {
+    let mut ints: Vec<i64> = vec![0];
+    let sz = OpeningSizes { door: 1.0 + shift as f64 * 0.25, window: 1.0, corner: 0.8660254037844386 };
+    let n = cw.walls.len();
+    for oj in 0..OPENS {
+        let mut marks = EdgeSet::new(cells.q0 - 1, cells.r0 - 1, cells.w + 2, cells.h + 2);
+        for i in 0..n {
+            let a = cw.corners[(i + n - 1) % n];
+            let b = cw.corners[i];
+            for k in 1..4 {
+                let f = k as f64 * 0.25;
+                cells_place_opening(cw, &mut marks, if k == 2 { OPEN_DOOR } else { OPEN_WINDOW },
+                                    a.0 + (b.0 - a.0) * f, a.1 + (b.1 - a.1) * f, &sz);
+            }
+        }
+        let found = cells_openings(&cw.boundary, &cw.runs, &cw.walls, &marks, &sz);
+        ints[0] += found.len() as i64;
+        if oj == OPENS - 1 {
+            for o in &found {
+                ints.extend([o.kind, o.wall as i64, o.edges.len() as i64, o.edges.first().map_or(-1, |&i| i as i64),
+                             micro(o.c.0), micro(o.c.1), micro(o.a.0), micro(o.a.1), micro(o.b.0), micro(o.b.1)]);
+            }
+            ints.push(marks.count_all());
+            ints.push(marks.digest());
+        }
+    }
+    ints
+}
+
+fn bench_openings(n: i64) -> Row {
+    let cells = ell(0);
+    let cw = cells_built(&cells, 9, -1);
+    let (us, sink) = timed(n, |r| open_op(&cw, &cells, r & 1)[0]);
+    let one = open_op(black_box(&cw), &cells, 0);
+    Row { name: "cells_openings", iters: n, us, px: OPENS * 3 * cw.walls.len() as i64, hash: fnv(FNV_OFFSET, &one), sink }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let mut n: i64 = 20;
@@ -1191,7 +1389,7 @@ fn main() {
     }
     let t0 = Instant::now();
     println!("routine\titers\tus\tns_op\tpx\tns_px\thash");
-    let rows = [bench_spread(n), bench_built(n), bench_outlines(n)];
+    let rows = [bench_spread(n), bench_built(n), bench_outlines(n), bench_openings(n)];
     let mut sink = 0i64;
     for row in &rows {
         print_row(row);
