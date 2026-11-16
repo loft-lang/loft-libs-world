@@ -1,0 +1,176 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// bench — the performance pass: the package's hot doors, timed on a fixed workload, with a
+// hash of what they produced.
+//
+//     loft --interpret bench/bench.loft [--n N]         the interpreter
+//     loft --native-release bench/bench.loft [--n N]    compiled
+//     rustc -O --edition=2021 bench/bench.rs -o bench/.build/stats_rs   the Rust twin
+//
+// One tab-separated line per routine: name, iterations, total µs, ns per op, items one op
+// processes (window cells written, or points read), ns per item, and an FNV-1a-32 hash of one
+// canonical op's output.  The interpreter, the native build and the pure-Rust twin in
+// bench/bench.rs must print the same hash for a row, or one of them is not computing the
+// routine it claims to.
+//
+// `ground_terraces` is the shaping lane: per cell and per level a search of the squares round
+// it for the nearest one on the other side of the step, a sqrt each, and a smoothstep.
+// `ground_height_at` is the reading lane, asked for every point a view stands something on:
+// the nearest cell, an atan2 for the fan's triangle, two corners each the mean of their cells.
+// Every op starts from the repetition number: `r & 1` moves the step map's front a square, or
+// the points read by a quarter — the values, never the amount of work.
+use hex_field::*;
+use hex_ground::*;
+
+/// One measured routine.
+struct Row {
+  name: text = "",
+  iters: integer = 0,
+  us: integer = 0,
+  px: integer = 0,
+  hash: integer = 0,
+  sink: integer = 0,
+}
+
+const FNV_OFFSET = 2166136261;
+const FNV_PRIME = 16777619;
+
+const HALF = 48;
+const WIN = 97;
+const TERRACES = 3;
+const READS = 4;
+
+/// FNV-1a-32 over the low 32 bits of each integer, high byte first.
+fn fnv(h0: integer, v: const vector<integer>) -> integer {
+  fv_h = h0;
+  for x in v {
+    fv_w = x & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ ((fv_w >> 24) & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ ((fv_w >> 16) & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ ((fv_w >> 8) & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+    fv_h = ((fv_h ^ (fv_w & 255)) * FNV_PRIME) & 0xFFFFFFFF;
+  }
+  fv_h
+}
+
+fn print_row(r: const Row) {
+  pr_ns = ((r.us * 1000) / r.iters) ?? 0;
+  pr_px = if r.px > 0 { (((r.us * 1000) as float) / ((r.iters * r.px) as float)) ?? 0.0 }
+          else { 0.0 };
+  println("{r.name}\t{r.iters}\t{r.us}\t{pr_ns}\t{r.px}\t{pr_px:.3}\t{r.hash:x}");
+}
+
+/// A float as the integer its millionths truncate to — how every float enters a hash.
+fn micro(x: float) -> integer { (x * 1000000.0) as integer }
+
+// ── ground_terraces: a stepped map made smooth ──────────────────────
+
+/// A map of 64 x 64 squares, 1.5 a side, in three levels: the ground rises a level at a front
+/// running north-south through square `front`, and another along a diagonal.
+fn step_map(front: integer) -> GroundSteps {
+  sm_l: vector<integer> = [];
+  for sm_j in 0..64 {
+    for sm_i in 0..64 {
+      sm_v = 0;
+      if sm_i >= front { sm_v += 1; }
+      if sm_i + sm_j >= 70 { sm_v += 1; }
+      sm_l += [sm_v];
+    }
+  }
+  GroundSteps { gs_x0: -48.0, gs_y0: -48.0, gs_size: 1.5, gs_nx: 64, gs_ny: 64, gs_level: sm_l }
+}
+
+/// The 97 x 97 ground smoothed from the map TERRACES times; the last one's heights summed row
+/// by row.
+fn terrace_op(s: GroundSteps) -> vector<integer> {
+  to_ints: vector<integer> = [0];
+  to_m = ground_measures(2.6, 6.0, 2.5, 2.5);
+  for tj in 0..TERRACES {
+    to_g = ground_new(0 - HALF, 0 - HALF, WIN, WIN, 1.5, 0);
+    ground_terraces(to_g, s, to_m, 0, 2);
+    to_ints[0] += micro(height_get(to_g.gr_heights, tj, 0 - tj));
+    if tj == TERRACES - 1 {
+      for to_r in 0 - HALF..HALF + 1 {
+        to_sum = 0.0;
+        for to_q in 0 - HALF..HALF + 1 { to_sum += height_get(to_g.gr_heights, to_q, to_r); }
+        to_ints += [micro(to_sum)];
+      }
+    }
+  }
+  to_ints
+}
+
+fn bench_terraces(n: integer) -> Row {
+  bt_s0 = step_map(30);
+  bt_s1 = step_map(31);
+  bt_t0 = ticks();
+  bt_sink = 0;
+  for r in 0..n {
+    if (r & 1) == 0 { bt_sink += terrace_op(bt_s0)[0]?; } else { bt_sink += terrace_op(bt_s1)[0]?; }
+  }
+  bt_us = ticks() - bt_t0;
+  Row { name: "ground_terraces", iters: n, us: bt_us, px: TERRACES * WIN * WIN,
+        hash: fnv(FNV_OFFSET, terrace_op(bt_s0)), sink: bt_sink }
+}
+
+// ── ground_height_at: the smooth surface read at a grid of points ───
+
+/// Ground with two hills on it, one of them a hollow.
+fn hilly() -> Ground {
+  hi_g = ground_new(0 - HALF, 0 - HALF, WIN, WIN, 1.5, 0);
+  ground_hill(hi_g, 6.0, -9.0, 40.0, 9.0);
+  ground_hill(hi_g, -20.0, 15.0, 18.0, -4.0);
+  hi_g
+}
+
+/// The surface read at 120 x 120 points, 0.37 apart, shifted by `shift` quarters, READS times;
+/// the last pass summed row by row.
+fn read_op(g: Ground, shift: integer) -> vector<integer> {
+  ro_ints: vector<integer> = [0];
+  ro_off = (shift as float) * 0.25;
+  for rj in 0..READS {
+    for ro_j in 0..120 {
+      ro_sum = 0.0;
+      for ro_i in 0..120 {
+        ro_sum += ground_height_at(g, -22.0 + ro_off + (ro_i as float) * 0.37, -21.0 + (ro_j as float) * 0.37);
+      }
+      if rj == READS - 1 { ro_ints += [micro(ro_sum)]; }
+      if ro_j == 60 { ro_ints[0] += micro(ro_sum); }
+    }
+  }
+  ro_ints
+}
+
+fn bench_read(n: integer) -> Row {
+  br_g = hilly();
+  br_t0 = ticks();
+  br_sink = 0;
+  for r in 0..n { br_sink += read_op(br_g, r & 1)[0]?; }
+  br_us = ticks() - br_t0;
+  Row { name: "ground_height_at", iters: n, us: br_us, px: READS * 120 * 120,
+        hash: fnv(FNV_OFFSET, read_op(br_g, 0)), sink: br_sink }
+}
+
+fn main() {
+  mn_n = 20;
+  mn_args = arguments();
+  mn_i = 0;
+  while mn_i < len(mn_args) {
+    if mn_args[mn_i]? == "--n" && mn_i + 1 < len(mn_args) {
+      mn_n = (mn_args[mn_i + 1]? as integer?)?;
+      mn_i += 1;
+    }
+    mn_i += 1;
+  }
+  if mn_n < 1 { mn_n = 1; }
+  mn_t0 = ticks();
+  println("routine\titers\tus\tns_op\tpx\tns_px\thash");
+  mn_rows: vector<Row> = [bench_terraces(mn_n), bench_read(mn_n)];
+  mn_sink = 0;
+  for row in mn_rows {
+    print_row(row);
+    mn_sink += row.sink;
+  }
+  println("time: {(ticks() - mn_t0) / 1000}ms sink={mn_sink}");
+}
