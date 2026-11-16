@@ -1,0 +1,157 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @NAME: Walls From Cells
+// @TITLE: Draw the straight walls of a structure you know only by its cells, put a door on one, and outline a courtyard.
+//
+// The first guide draws a house from a `Plan`: you say where the rectangle is, and the library
+// fills it, walls it and reads each side's surface back.  This one starts where that ends.  A
+// structure is handed to you as CELLS — an L somebody selected, a house an editor turned by 30
+// degrees, a road — and nobody says which rectangle it came from, or at what angle.  The walls
+// are still there to be read: `cells_built` reads them off the cells alone.
+//
+// What comes back is the same `WallSurface` the first guide met, one per straight wall, so
+// everything that reads a surface (`surface_heading`, `surface_mean_x`, `surface_meet`) reads
+// these too.
+use hex_draw::*;
+use hex_form::*;
+use hex_field::*;
+
+// An L as cells: a body 10 hex steps by 6 and a wing 4 by 4 on one end of its far side.  Built
+// with two `Plan`s only to have something to draw — from here on nothing remembers them.
+fn an_ell() -> HexSet {
+  cells = hexset_chunk(-24, -24, 49, 49);
+  types = labels_new(-24, -24, 49, 49);
+  draw_floor(plan_new(0, 0, 10, 6, 0, false), cells, types, 1);
+  draw_floor(plan_new(-3, 5, 4, 4, 0, false), cells, types, 1);
+  cells
+}
+
+fn main() {
+  cells = an_ell();
+  house = cells_built(cells, 7);          // 7: the material its thin walls are marked with
+  println("cells {hexset_count(cells)}, boundary edges {len(house.cw_boundary)}, walls {len(house.cw_walls)}");
+  assert(len(house.cw_walls) == 6, "an L has six walls");
+
+  // Every section below is a function, and `main` calls each one: a section nothing calls
+  // still compiles, but its assertions never run.
+  what_came_back();
+  a_door_at_a_point();
+  a_courtyard();
+}
+
+// That prints:
+//
+//     cells 91, boundary edges 82, walls 6
+//
+// ## What came back
+//
+// A `CellWalls`: the cells, their thin walls as an `EdgeSet` (`cw_edges`, what `draw_walls`
+// would have marked), the boundary in walking order with the structure on its left
+// (`cw_boundary`), the boundary cut into runs — one per straight wall (`cw_runs`, indices into
+// the boundary) — a surface per run (`cw_walls`) and the corners (`cw_corners`: corner `i` is
+// where wall `i` meets wall `i + 1`).
+//
+// Each wall runs exactly along one of the twelve headings, and each is square to the next:
+// that is a zero dot product in integers, not a float within a tolerance.
+
+fn what_came_back() {
+  house = cells_built(an_ell(), 7);
+  n = len(house.cw_walls);
+  edges = 0;
+  for i in 0..n {
+    w = house.cw_walls[i]!;
+    nx = house.cw_walls[(i + 1) % n ?? 0]!;
+    assert(surface_heading(w) >= 0, "wall {i} runs along a heading");
+    assert(vec_dot_4(w.ws_dk, w.ws_dm, nx.ws_dk, nx.ws_dm) == 0, "wall {i} is square to the next");
+    edges += len(house.cw_runs[i]!);
+  }
+  assert(edges == len(house.cw_boundary), "every boundary edge is in exactly one wall's run");
+  println("headings: {[for w in house.cw_walls { surface_heading(w) }]}");
+}
+
+// That prints the six headings in order round the L, in twelfths of a turn — 0 is east, 3
+// north, 6 west, 9 south; the fourth and fifth walls are the notch where the wing ends:
+//
+//     headings: [0,3,6,3,6,9]
+//
+// ⚠ A wall from cells is not always the line `surface_of` gives for the same side of a
+// `Plan`.  Along an even heading the two agree exactly.  Along an odd heading `surface_of`
+// averages every edge of the side, the corner's with them, and `cells_wall` reads the line off
+// the slanted connectors and outvotes the corner's: a few hundredths of a unit apart.  Use one
+// or the other for a structure, not both.
+//
+// ⚠ Some cells show no direction.  A hex and its six neighbours are the same seven cells at
+// every angle, so `cells_axes` answers -1 and `cells_built` falls back on its `hint` (a
+// heading; 0 when you give none).  A structure that small is better kept as an object with a
+// rotation of its own.
+//
+// ## A door at a point
+//
+// On a wall drawn from cells an opening is a KIND, a POINT and a WIDTH.  You give the point;
+// `cells_place_opening` finds the nearest wall, keeps the opening clear of the wall's corners
+// and marks the wall edges under it with the kind (`OPEN_DOOR`, `OPEN_WINDOW`) — a material on
+// the edges, never a gap, so the wall stays one wall.  `cells_openings` reads the marks back
+// as centres on the walls' lines and spans of each kind's width.
+//
+// The walls do not depend on the marks.  Build them once and place as many openings as you
+// like on them.
+
+fn a_door_at_a_point() {
+  cells = an_ell();
+  house = cells_built(cells, 7);
+  marks = cells_no_marks(cells);
+  sizes = opening_sizes(1.0, 1.0, 0.866);          // a door's width, a window's, the corner clearance
+  // a door in the middle of the first wall, a window a third of the way along the second
+  a = house.cw_corners[len(house.cw_corners) - 1] ?? (0.0, 0.0);
+  b = house.cw_corners[0] ?? (0.0, 0.0);
+  c = house.cw_corners[1] ?? (0.0, 0.0);
+  cells_place_opening(house, marks, OPEN_DOOR, (a.0 + b.0) * 0.5, (a.1 + b.1) * 0.5, sizes);
+  cells_place_opening(house, marks, OPEN_WINDOW, b.0 + (c.0 - b.0) / 3.0, b.1 + (c.1 - b.1) / 3.0, sizes);
+  found = cells_openings(house.cw_boundary, house.cw_runs, house.cw_walls, marks, sizes);
+  assert(len(found) == 2, "two openings read back");
+  for o in found {
+    wide = sqrt((o.op_bx - o.op_ax) * (o.op_bx - o.op_ax) + (o.op_by - o.op_ay) * (o.op_by - o.op_ay)) ?? 0.0;
+    println("kind {o.op_kind} on wall {o.op_wall}, over {len(o.op_edges)} edges, {wide:.3} wide");
+  }
+  assert(found[0]!.op_kind == OPEN_DOOR && found[0]!.op_wall == 0, "the door on wall 0");
+  assert(found[1]!.op_kind == OPEN_WINDOW && found[1]!.op_wall == 1, "the window on wall 1");
+}
+
+// That prints:
+//
+//     kind 1 on wall 0, over 2 edges, 1.000 wide
+//     kind 2 on wall 1, over 2 edges, 1.000 wide
+//
+// The width drawn is the kind's, whatever the wall, and the edges marked are those whose
+// midpoints fall under it: along an even heading they lie 0.87 apart, along an odd one 0.75, so
+// the same door covers different edges on different walls.  The span is what to draw; that is
+// what lets one door mesh fit every wall at every angle.
+//
+// ## A courtyard
+//
+// `cells_built` is for a structure of one piece without a hole.  `cells_outlines` takes
+// anything: it answers one `CellOutline` per loop of the boundary — the outside of each piece,
+// and one round each hole — every loop walked with its cells on the left, so a courtyard's is
+// walked the other way round.
+//
+// It is also what draws a road's edge, a stream's bank or a cliff: cells inside and out like
+// any structure, the walls having no height.  For those it knows two things a house's outline
+// never needs: where two walls in a row run the same way a short STEP joins them, and a
+// stretch that keeps to a heading off the loop's two axes for six edges or more is a wall of
+// its own, slanted.
+
+fn a_courtyard() {
+  cells = hexset_chunk(-24, -24, 49, 49);
+  types = labels_new(-24, -24, 49, 49);
+  draw_floor(plan_new(0, 0, 12, 10, 0, false), cells, types, 1);
+  court = hexset_chunk(-24, -24, 49, 49);
+  draw_floor(plan_new(0, 0, 5, 4, 0, false), court, types, 1);
+  for r in -24..25 { for q in -24..25 { if hexset_get(court, q, r) { hexset_set(cells, q, r, false); } } }
+  loops = cells_outlines(cells, 0);
+  println("loops {len(loops)}, walls {len(loops[0]!.co_walls)} and {len(loops[1]!.co_walls)}");
+  assert(len(loops) == 2 && len(loops[0]!.co_walls) == 4 && len(loops[1]!.co_walls) == 4, "the hall's outline and the court's");
+}
+
+// That prints:
+//
+//     loops 2, walls 4 and 4

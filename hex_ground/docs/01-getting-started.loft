@@ -1,0 +1,155 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @NAME: Getting Started
+// @TITLE: Shape the ground of a place: a hill, a terrace, a house seated on the slope, a stream's bed and a cliff — then read it back as a smooth surface.
+//
+// `hex_ground` is the ground of ONE PLACE, authored: the hill a village stands on, the terrace
+// its market is on, the bed its stream runs in.  It is a height and a surface kind per cell —
+// `hex_field`'s `Heights` and `Labels` over a window — and a handful of routines that shape
+// them, plus the reading of the result as the smooth surface it stands for.
+//
+// It is not `hex_terrain`.  That package GENERATES land from a seed: an overland lattice,
+// rivers that find their own way down.  Reach for this one when somebody drew the place.
+//
+// One unit runs through everything.  A ground carries its `step` — the distance between two
+// neighbouring cell centres — and every height and distance you pass is in that same unit.
+// This guide uses metres with a hex step of 1.5 m.
+use hex_ground::*;
+use hex_field::*;
+use hex_form::*;
+use hex_draw::*;
+
+const STEP = 1.5;
+
+// The measurements: a storey 2.6 high, a hillside 6 wide between two terraces, a bank 2.5 wide,
+// and the ground blended back over 2.5 round a seated structure.
+fn measures() -> GroundMeasures { ground_measures(2.6, 6.0, 2.5, 2.5) }
+
+// A box of cells about (cq, cr), w by d hex steps.
+fn box_at(cq: integer, cr: integer, w: integer, d: integer) -> HexSet {
+  cells = hexset_chunk(-30, -30, 61, 61);
+  types = labels_new(-30, -30, 61, 61);
+  draw_floor(plan_new(cq, cr, w, d, 0, false), cells, types, 1);
+  cells
+}
+
+fn main() {
+  g = ground_new(-30, -30, 61, 61, STEP, 0);       // flat, at height 0, every cell of surface kind 0
+  ground_hill(g, 0.0, 0.0, 30.0, 8.0);             // a hill 8 high, 30 across from top to foot
+  println("the hill: top {height_get(g.gr_heights, 0, 0):.2}, half way down {height_get(g.gr_heights, 10, 0):.2}, at its foot {height_get(g.gr_heights, 20, 0):.2}");
+
+  // Every section below is a function, and `main` calls each one: a section nothing calls
+  // still compiles, but its assertions never run.
+  a_terrace();
+  a_house_on_the_slope();
+  a_bed_and_a_cliff();
+  reading_it_back();
+}
+
+// That prints — a hill is a cosine: level at its top and at its foot, steepest half way:
+//
+//     the hill: top 8.00, half way down 4.00, at its foot 0.00
+//
+// ## A terrace
+//
+// A place drawn in levels — a street, and a market a storey above it — is a stepped map: a
+// level per square of a grid (`GroundSteps`).  Drawn as it is, it is a staircase.
+// `ground_terraces` makes it ground: each step up becomes a slope a hillside wide, centred on
+// where the step's front stood, and the flat tops stay flat at their storeys.
+
+fn a_terrace() {
+  // twenty squares by twenty, 1.5 a side; the east half a level up
+  level: vector<integer> = [];
+  for _j in 0..20 { for i in 0..20 { level += [if i >= 10 { 1 } else { 0 }]; } }
+  steps = GroundSteps { gs_x0: -15.0, gs_y0: -15.0, gs_size: 1.5, gs_nx: 20, gs_ny: 20, gs_level: level };
+  g = ground_new(-12, -12, 25, 25, STEP, 0);
+  ground_terraces(g, steps, measures(), 0, 1);     // levels 0 to 1
+  println("west {height_get(g.gr_heights, -6, 0):.2}, on the front {height_get(g.gr_heights, 0, 0):.2}, east {height_get(g.gr_heights, 6, 0):.2}");
+  assert(height_get(g.gr_heights, 6, 0) > 2.599 && height_get(g.gr_heights, -6, 0) < 0.001, "the tops flat at their storeys");
+}
+
+// That prints:
+//
+//     west 0.00, on the front 1.30, east 2.60
+//
+// ## A house on the slope
+//
+// A structure is seated at ONE height; the ground under it is not level.  `ground_seat` levels
+// its footprint at the height you give and blends the ground round it back to its own, so the
+// house stands on a plot the slope runs smoothly into.  It answers the lowest the ground was
+// under the footprint: the house's walls go down to there.
+//
+// It writes heights only.  Mark the footprint's surface kind yourself if a floor is not the
+// grass round it.
+
+fn a_house_on_the_slope() {
+  g = ground_new(-30, -30, 61, 61, STEP, 0);
+  ground_hill(g, 0.0, 0.0, 30.0, 8.0);
+  house = box_at(8, 0, 4, 3);                      // a small house on the hillside, east of the top
+  before = height_get(g.gr_heights, 8, 0);
+  lowest = ground_seat(g, house, 5.0, measures());
+  println("the ground there was {before:.2}; seated at 5.00, its walls go down to {lowest:.2}");
+  assert(height_get(g.gr_heights, 8, 0) == 5.0 && lowest < 5.0, "level at the seat, the lowest ground answered");
+}
+
+// That prints:
+//
+//     the ground there was 5.24; seated at 5.00, its walls go down to 4.00
+//
+// ## A bed and a cliff
+//
+// A stream's bed is cells like any structure, and `ground_dig` lowers the ground inside them —
+// across a bank that runs along the cells' STRAIGHT sides (`hex_draw::cells_outlines`), not
+// along the cells' zigzag.  The bank is centred on the side: half of it inside, half outside.
+//
+// A cliff is the opposite wish: a front that must NOT slope.  `ground_cliffs` gives, for each
+// level, the straight sides of the cells of that level and up — the stretches of them inside
+// the areas you name as cliff areas (`GroundBox`) — and `ground_sharpen` stands the ground at
+// its level's height there.  Outside the areas the fronts slope as terraces do.
+
+fn a_bed_and_a_cliff() {
+  g = ground_new(-30, -30, 61, 61, STEP, 0);
+  bed = box_at(0, 0, 16, 4);                       // a stretch of stream, 16 hex steps by 4
+  ground_dig(g, bed, 2.0, measures());
+  println("the bed {height_get(g.gr_heights, 0, 0):.2}, its bank {height_get(g.gr_heights, 0, 3):.2}, the meadow {height_get(g.gr_heights, 0, 8):.2}");
+  assert(height_get(g.gr_heights, 0, 0) < -1.999 && height_get(g.gr_heights, 0, 8) > -0.001, "the bed down, the meadow untouched");
+
+  terrace = box_at(0, 0, 12, 6);
+  levels = labels_new(-30, -30, 61, 61);
+  for r in -30..31 { for q in -30..31 { label_set(levels, q, r, if hexset_get(terrace, q, r) { 1 } else { 0 }); } }
+  everywhere = [GroundBox { gb_x0: -100.0, gb_y0: -100.0, gb_x1: 100.0, gb_y1: 100.0 }];
+  cliffs = ground_cliffs(levels, -30, -30, 61, 61, 0, 1, everywhere, STEP);
+  println("cliffs round the terrace: {len(cliffs)}");
+  assert(len(cliffs) == 4, "its four straight sides");
+}
+
+// That prints:
+//
+//     the bed -2.00, its bank -0.29, the meadow 0.00
+//     cliffs round the terrace: 4
+//
+// ## Reading it back
+//
+// The cells hold one height each; the ground they stand for is smooth.  `ground_height_at`
+// reads it as it would be drawn: each cell a fan of six triangles from its centre, each corner
+// of the fan at the mean of the three cells round it (`ground_corner_height`).  Three cells
+// share a corner, so their fans agree there and the surface has no crack.
+//
+// Beside a cliff one surface would slope down it.  `ground_height_on` reads ONE SIDE: the
+// corners there are the mean of the cells on that side only.
+
+fn reading_it_back() {
+  g = ground_new(-30, -30, 61, 61, STEP, 0);
+  ground_hill(g, 0.0, 0.0, 30.0, 8.0);
+  (cx, cy) = ground_centre(STEP, 4, 2);
+  at_centre = ground_height_at(g, cx, cy);
+  between = ground_height_at(g, cx + 0.4, cy + 0.3);
+  println("at a cell's centre {at_centre:.3} (the cell holds {height_get(g.gr_heights, 4, 2):.3}); a step away {between:.3}");
+  assert(at_centre == height_get(g.gr_heights, 4, 2), "at its centre a cell reads its own height");
+  (q, r) = ground_cell_near(STEP, cx + 0.4, cy + 0.3);
+  assert(q == 4 && r == 2, "the cell under a point");
+}
+
+// That prints:
+//
+//     at a cell's centre 7.098 (the cell holds 7.098); a step away 6.954

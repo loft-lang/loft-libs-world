@@ -154,6 +154,45 @@ fn bench_trace(n: integer) -> Row {
         hash: fnv(FNV_OFFSET, bt_one), sink: bt_sink }
 }
 
+// ── trace_edges: the boundary walked, each edge's two cells kept ────
+
+/// The boundary of the disk with its cells, TRACES times over; the last one's corners, cells
+/// and starts hashed.
+fn edges_op(s: HexSet) -> vector<integer> {
+  eo_ints: vector<integer> = [];
+  eo_edges = 0;
+  for ej in 0..TRACES {
+    eo_v = trace_edges(s);
+    eo_edges += len(eo_v.em_k);
+    if ej == TRACES - 1 {
+      eo_ints = [eo_v.em_loops, len(eo_v.em_k)];
+      for k in eo_v.em_k { eo_ints += [k]; }
+      for m in eo_v.em_m { eo_ints += [m]; }
+      for q in eo_v.em_qa { eo_ints += [q]; }
+      for r in eo_v.em_ra { eo_ints += [r]; }
+      for q in eo_v.em_qb { eo_ints += [q]; }
+      for r in eo_v.em_rb { eo_ints += [r]; }
+      for st in eo_v.em_start { eo_ints += [st]; }
+    }
+  }
+  eo_ints += [eo_edges];
+  eo_ints
+}
+
+fn bench_trace_edges(n: integer) -> Row {
+  be_s0 = disk(0);
+  be_s1 = disk(1);
+  be_t0 = ticks();
+  be_sink = 0;
+  for r in 0..n {
+    if (r & 1) == 0 { be_sink += edges_op(be_s0)[1]?; } else { be_sink += edges_op(be_s1)[1]?; }
+  }
+  be_us = ticks() - be_t0;
+  be_one = edges_op(be_s0);
+  Row { name: "trace_edges", iters: n, us: be_us, px: TRACES * (be_one[1] ?? 0),
+        hash: fnv(FNV_OFFSET, be_one), sink: be_sink }
+}
+
 /// A float as the integer its millionths truncate to — how every float enters a hash.
 fn micro(x: float) -> integer { (x * 1000000.0) as integer }
 
@@ -317,7 +356,7 @@ fn main() {
   if mn_n < 1 { mn_n = 1; }
   mn_t0 = ticks();
   println("routine\titers\tus\tns_op\tpx\tns_px\thash");
-  mn_rows: vector<Row> = [bench_count(mn_n), bench_trace(mn_n), bench_rotate(mn_n),
+  mn_rows: vector<Row> = [bench_count(mn_n), bench_trace(mn_n), bench_trace_edges(mn_n), bench_rotate(mn_n),
                           bench_doc(mn_n)];
   mn_sink = 0;
   for row in mn_rows {

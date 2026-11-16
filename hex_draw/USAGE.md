@@ -29,7 +29,8 @@ geometry itself.
   back as centres and spans; `opening_sizes` for the widths.  The walls are built once for any number
 - **the corner of two walls that are not a `Plan`'s sides** — `surface_meet`, and `surface_dir` for a wall's direction
 
-A guide that runs: [`docs/01-getting-started.loft`](docs/01-getting-started.loft).
+A guide that runs: [`docs/01-getting-started.loft`](docs/01-getting-started.loft); and for walls from
+cells and openings on them, [`docs/02-walls-from-cells.loft`](docs/02-walls-from-cells.loft).
 
 ## The worked examples, in the tests
 

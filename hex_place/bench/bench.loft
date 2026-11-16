@@ -19,6 +19,7 @@
 // `sink`.
 use hex_field::*;
 use hex_form::*;
+use hex_draw::*;
 use hex_place::*;
 
 /// One measured routine.
@@ -135,6 +136,169 @@ fn bench_union(n: integer) -> Row {
         hash: union_hash(bu_a0, bu_b0), sink: bu_sink }
 }
 
+// ── cells_turn: a hall turned by 30-degree steps ────────────────────
+
+const TURN_HALF = 40;
+const TURN_W = 81;
+const TURN_STEPS = 7;
+
+/// A hall as cells: 20 hex steps by 14 about cell (cq, 0), by the exact tests a plan is filled
+/// with — a centre within 20 half steps along the row, and within 14 hex steps across it.
+fn hall(cq: integer) -> HexSet {
+  ha_s = hexset_chunk(0 - TURN_HALF, 0 - TURN_HALF, TURN_W, TURN_W);
+  for ha_r in 0 - TURN_HALF..TURN_HALF + 1 {
+    for ha_q in 0 - TURN_HALF..TURN_HALF + 1 {
+      ha_k = lattice_k(ha_q, ha_r) - lattice_k(cq, 0);
+      ha_m = lattice_m(ha_q, ha_r);
+      if ha_k >= -20 && ha_k <= 20 && ha_m * ha_m <= 588 { hexset_set(ha_s, ha_q, ha_r, true); }
+    }
+  }
+  ha_s
+}
+
+/// The step of the i-th turn: five odd ones and two even.
+fn turn_step(i: integer) -> integer {
+  if i == 0 { return 1; }
+  if i == 1 { return 2; }
+  if i == 2 { return 3; }
+  if i == 3 { return 5; }
+  if i == 4 { return 7; }
+  if i == 5 { return 10; }
+  11
+}
+
+/// The hall turned by each of the seven steps about its own cell: the cells, the offset and a
+/// point carried through, and the last turn's cells row by row.
+fn turn_op(cells: HexSet, cq: integer) -> vector<integer> {
+  to_ints: vector<integer> = [0];
+  for ti in 0..TURN_STEPS {
+    to_t = cells_turn(cells, cq, 0, turn_step(ti));
+    (to_x, to_y) = turned_point(to_t, 3.0, 4.0);
+    to_ints[0] += hexset_count(to_t.tn_cells);
+    to_ints += [hexset_count(to_t.tn_cells), (to_t.tn_sx * 1000000.0) as integer, (to_t.tn_sy * 1000000.0) as integer,
+                (to_x * 1000000.0) as integer, (to_y * 1000000.0) as integer];
+    if ti == TURN_STEPS - 1 {
+      for to_r in hexset_r0(to_t.tn_cells)..hexset_r0(to_t.tn_cells) + hexset_h(to_t.tn_cells) {
+        to_c = 0;
+        for to_q in hexset_q0(to_t.tn_cells)..hexset_q0(to_t.tn_cells) + hexset_w(to_t.tn_cells) {
+          if hexset_get(to_t.tn_cells, to_q, to_r) { to_c += 1; }
+        }
+        to_ints += [to_c];
+      }
+    }
+  }
+  to_ints
+}
+
+fn bench_turn(n: integer) -> Row {
+  bt_c0 = hall(0);
+  bt_c1 = hall(1);
+  bt_t0 = ticks();
+  bt_sink = 0;
+  for r in 0..n {
+    if (r & 1) == 0 { bt_sink += turn_op(bt_c0, 0)[0]?; } else { bt_sink += turn_op(bt_c1, 1)[0]?; }
+  }
+  bt_us = ticks() - bt_t0;
+  Row { name: "cells_turn", iters: n, us: bt_us, px: TURN_STEPS * hexset_count(bt_c0),
+        hash: fnv(FNV_OFFSET, turn_op(bt_c0, 0)), sink: bt_sink }
+}
+
+// ── seat_blend: a hall seated on a slope, the ground round it blended ─
+
+const SEATS = 5;
+
+/// Ground sloping up to the east and a little to the north, shifted by `salt`.
+fn slope(salt: integer) -> Heights {
+  sl_h = heights_new(0 - TURN_HALF, 0 - TURN_HALF, TURN_W, TURN_W);
+  for sl_r in 0 - TURN_HALF..TURN_HALF + 1 {
+    for sl_q in 0 - TURN_HALF..TURN_HALF + 1 {
+      height_set(sl_h, sl_q, sl_r, ((lattice_k(sl_q, sl_r) + salt) as float) * 0.05 + (lattice_m(sl_q, sl_r) as float) * 0.03);
+    }
+  }
+  sl_h
+}
+
+/// The hall seated SEATS times, each on fresh ground: the lowest ground under it, and the last
+/// ground's heights summed row by row.
+fn seat_op(cells: HexSet, salt: integer) -> vector<integer> {
+  so_ints: vector<integer> = [0];
+  for sj in 0..SEATS {
+    so_h = slope(salt);
+    so_low = seat_blend(cells, so_h, 2.0, 3.0, 1.5);
+    so_ints[0] += (so_low * 1000000.0) as integer;
+    so_ints += [(so_low * 1000000.0) as integer];
+    if sj == SEATS - 1 {
+      for so_r in 0 - TURN_HALF..TURN_HALF + 1 {
+        so_sum = 0.0;
+        for so_q in 0 - TURN_HALF..TURN_HALF + 1 { so_sum += height_get(so_h, so_q, so_r); }
+        so_ints += [(so_sum * 1000000.0) as integer];
+      }
+    }
+  }
+  so_ints
+}
+
+fn bench_seat(n: integer) -> Row {
+  bs_c0 = hall(0);
+  bs_c1 = hall(1);
+  bs_t0 = ticks();
+  bs_sink = 0;
+  for r in 0..n {
+    if (r & 1) == 0 { bs_sink += seat_op(bs_c0, 0)[0]?; } else { bs_sink += seat_op(bs_c1, 1)[0]?; }
+  }
+  bs_us = ticks() - bs_t0;
+  Row { name: "seat_blend", iters: n, us: bs_us, px: SEATS * TURN_W * TURN_W,
+        hash: fnv(FNV_OFFSET, seat_op(bs_c0, 0)), sink: bs_sink }
+}
+
+// ── marked_turn: the hall's doors and windows through each turn ─────
+
+/// The hall with three openings a wall marked on it: a door in the middle, a window a quarter
+/// along and one three quarters along.
+fn marked_hall(cq: integer) -> Marked {
+  mh_cells = hall(cq);
+  mh_b = cells_built(mh_cells, 1, 0);
+  mh_marks = cells_no_marks(mh_cells);
+  mh_sz = opening_sizes_default();
+  mh_n = len(mh_b.cw_walls);
+  for mh_i in 0..mh_n {
+    mh_a = mh_b.cw_corners[(mh_i + mh_n - 1) % mh_n] ?? (0.0, 0.0);
+    mh_c = mh_b.cw_corners[mh_i] ?? (0.0, 0.0);
+    for mh_k in 1..4 {
+      mh_f = (mh_k as float) * 0.25;
+      cells_place_opening(mh_b, mh_marks, if mh_k == 2 { OPEN_DOOR } else { OPEN_WINDOW },
+                          mh_a.0 + (mh_c.0 - mh_a.0) * mh_f, mh_a.1 + (mh_c.1 - mh_a.1) * mh_f, mh_sz);
+    }
+  }
+  Marked { mk_cells: mh_cells, mk_marks: mh_marks }
+}
+
+/// The marked hall turned by each of the seven steps; per turn its cells, its marked edges and
+/// their digest.
+fn marked_op(d: Marked, cq: integer) -> vector<integer> {
+  mo_ints: vector<integer> = [0];
+  mo_sz = opening_sizes_default();
+  for mi in 0..TURN_STEPS {
+    mo_t = marked_turn(d, cq, 0, turn_step(mi), TURN_BY_WALLS, 0, mo_sz);
+    mo_ints[0] += edgeset_count_all(mo_t.mk_marks);
+    mo_ints += [hexset_count(mo_t.mk_cells), edgeset_count_all(mo_t.mk_marks), edgeset_digest(mo_t.mk_marks)];
+  }
+  mo_ints
+}
+
+fn bench_marked(n: integer) -> Row {
+  bm_d0 = marked_hall(0);
+  bm_d1 = marked_hall(1);
+  bm_t0 = ticks();
+  bm_sink = 0;
+  for r in 0..n {
+    if (r & 1) == 0 { bm_sink += marked_op(bm_d0, 0)[0]?; } else { bm_sink += marked_op(bm_d1, 1)[0]?; }
+  }
+  bm_us = ticks() - bm_t0;
+  Row { name: "marked_turn", iters: n, us: bm_us, px: TURN_STEPS * hexset_count(bm_d0.mk_cells),
+        hash: fnv(FNV_OFFSET, marked_op(bm_d0, 0)), sink: bm_sink }
+}
+
 fn main() {
   mn_n = 20;
   mn_args = arguments();
@@ -149,7 +313,8 @@ fn main() {
   if mn_n < 1 { mn_n = 1; }
   mn_t0 = ticks();
   println("routine\titers\tus\tns_op\tpx\tns_px\thash");
-  mn_rows: vector<Row> = [bench_cut(mn_n), bench_union(mn_n)];
+  mn_rows: vector<Row> = [bench_cut(mn_n), bench_union(mn_n), bench_turn(mn_n), bench_seat(mn_n),
+                          bench_marked(mn_n)];
   mn_sink = 0;
   for row in mn_rows {
     print_row(row);

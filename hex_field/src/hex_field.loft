@@ -590,7 +590,9 @@ fn edge_dm(i: integer) -> integer {
 // next edge.  T inside: it goes on between T and O.  One step each, so the cost follows the
 // cells scanned and the edges walked, where `trace` looks through every edge for each.
 pub fn trace_edges(s: HexSet) -> EdgeMap {
-  used: vector<boolean> = [for _ in 0..s.hs_w * s.hs_h * 6 { false }];
+  // which of a cell's six edges have been walked: one number a cell, a bit an edge
+  used: vector<integer> = [for _ in 0..s.hs_w * s.hs_h { 0 }];
+  bit = [1, 2, 4, 8, 16, 32];
   ok: vector<integer> = [];
   om: vector<integer> = [];
   oqa: vector<integer> = [];
@@ -601,13 +603,14 @@ pub fn trace_edges(s: HexSet) -> EdgeMap {
   nloops = 0;
   for r in s.hs_r0..s.hs_r0 + s.hs_h {
     for q in s.hs_q0..s.hs_q0 + s.hs_w {
-      if !hexset_get(s, q, r) { continue; }
+      // the scan reads the cells where they lie: most of a window is empty, or inside
+      if !(s.hs_cells[(r - s.hs_r0) * s.hs_w + (q - s.hs_q0)] ?? false) { continue; }
       for d in 0..6 {
         nq = nb_q(q, r, d);
         nr = nb_r(q, r, d);
         if hexset_get(s, nq, nr) { continue; }
         i0 = edge_of(lattice_k(nq, nr) - lattice_k(q, r), lattice_m(nq, nr) - lattice_m(q, r));
-        if i0 < 0 || (used[((r - s.hs_r0) * s.hs_w + (q - s.hs_q0)) * 6 + i0] ?? true) { continue; }
+        if i0 < 0 || ((used[(r - s.hs_r0) * s.hs_w + (q - s.hs_q0)] ?? 63) & (bit[i0] ?? 0)) != 0 { continue; }
         // one loop, from this edge round to it again
         lk: vector<integer> = [];
         lm: vector<integer> = [];
@@ -620,9 +623,9 @@ pub fn trace_edges(s: HexSet) -> EdgeMap {
         ci = i0;
         // every edge is walked once at most, so no loop is longer than the edges there are
         for _ in 0..s.hs_w * s.hs_h * 6 {
-          at = ((cr - s.hs_r0) * s.hs_w + (cq - s.hs_q0)) * 6 + ci;
-          if used[at] ?? true { break; }
-          used[at] = true;
+          at = (cr - s.hs_r0) * s.hs_w + (cq - s.hs_q0);
+          if ((used[at] ?? 63) & (bit[ci] ?? 0)) != 0 { break; }
+          used[at] = (used[at] ?? 0) | (bit[ci] ?? 0);
           k0 = lattice_k(cq, cr);
           m0 = lattice_m(cq, cr);
           (bq, br) = lattice_to_cell(k0 + edge_dk(ci), m0 + edge_dm(ci));

@@ -508,6 +508,90 @@ fn bench_walk(n: i64) -> Row {
     Row { name: "wall_chain_walk", iters: n, us, px: WALKS * one[5], hash: fnv(FNV_OFFSET, &one), sink }
 }
 
+// ── hexbox.loft: parts_fill ─────────────────────────────────────────
+
+const FILL_W: i64 = 96;
+const FILLS: i64 = 12;
+
+// The sign of a + b*sqrt(3), exact (hex_form's `sign_root3`).
+fn sign_root3(a: i64, b: i64) -> i64 {
+    let (sa, sb) = (a.signum(), b.signum());
+    if sa == sb {
+        return sa;
+    }
+    if sa == 0 {
+        return sb;
+    }
+    if sb == 0 {
+        return sa;
+    }
+    if a * a > 3 * b * b { sa } else { sb }
+}
+
+fn part_within(head: i64, p: i64, lo: i64, hi: i64) -> bool {
+    if head.rem_euclid(12) % 2 == 0 {
+        return p >= 12 * lo && p <= 12 * hi;
+    }
+    sign_root3(p, -12 * lo) >= 0 && sign_root3(p, -12 * hi) <= 0
+}
+
+// `parts_fill` into a w x w window of bools at (q0, r0): every cell whose centre lies in a part.
+fn parts_fill(cq: i64, cr: i64, rot: i64, mir: bool, parts: &[[i64; 4]], q0: i64, r0: i64, w: i64, cells: &mut [bool]) -> i64 {
+    let us = head_step(rot);
+    let vs = head_step(rot + 3);
+    let ck = lattice_k(cq, cr);
+    let cm = lattice_m(cr);
+    let mut n = 0;
+    for r in r0..r0 + w {
+        for q in q0..q0 + w {
+            let pk = 2 * (lattice_k(q, r) - ck);
+            let pm = 2 * (lattice_m(r) - cm);
+            let mut u = 3 * pk * us.0 + pm * us.1;
+            if mir {
+                u = -u;
+            }
+            let v = 3 * pk * vs.0 + pm * vs.1;
+            let mut inside = false;
+            for p in parts {
+                if part_within(rot, u, p[0], p[2]) && part_within(rot + 3, v, p[1], p[3]) {
+                    inside = true;
+                }
+            }
+            if inside {
+                cells[((r - r0) * w + (q - q0)) as usize] = true;
+                n += 1;
+            }
+        }
+    }
+    n
+}
+
+fn fill_op(cq: i64) -> Vec<i64> {
+    let parts = [[-30, -20, 30, 20], [-30, 20, -6, 44]];
+    let mut ints: Vec<i64> = Vec::new();
+    let mut total = 0;
+    let lo = -FILL_W / 2;
+    for rot in 0..FILLS {
+        let mut cells = vec![false; (FILL_W * FILL_W) as usize];
+        let n = parts_fill(cq, 0, rot, (rot & 1) == 1, &parts, lo, lo, FILL_W, &mut cells);
+        ints.push(n);
+        total += n;
+        if rot == FILLS - 1 {
+            for r in 0..FILL_W {
+                ints.push(cells[(r * FILL_W) as usize..((r + 1) * FILL_W) as usize].iter().filter(|&&c| c).count() as i64);
+            }
+        }
+    }
+    ints.push(total);
+    ints
+}
+
+fn bench_fill(n: i64) -> Row {
+    let (us, sink) = timed(n, |r| fill_op(r & 1)[0]);
+    let one = fill_op(black_box(0));
+    Row { name: "parts_fill", iters: n, us, px: FILLS * FILL_W * FILL_W, hash: fnv(FNV_OFFSET, &one), sink }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let mut n: i64 = 20;
@@ -524,7 +608,7 @@ fn main() {
     }
     let t0 = Instant::now();
     println!("routine\titers\tus\tns_op\tpx\tns_px\thash");
-    let rows = [bench_walk(n)];
+    let rows = [bench_walk(n), bench_fill(n)];
     let mut sink = 0i64;
     for row in &rows {
         print_row(row);

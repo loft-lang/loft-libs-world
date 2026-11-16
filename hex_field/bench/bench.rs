@@ -891,6 +891,126 @@ fn bench_trace(n: i64) -> Row {
     Row { name: "trace", iters: n, us, px: TRACES * one[1], hash: fnv(FNV_OFFSET, &one), sink }
 }
 
+// The inverse of `edge_of`: the lattice step to the neighbour across edge i.
+const EDGE_DK: [i64; 6] = [-1, -2, -1, 1, 2, 1];
+const EDGE_DM: [i64; 6] = [3, 0, -3, -3, 0, 3];
+
+struct EdgeMap {
+    k: Vec<i64>,
+    m: Vec<i64>,
+    qa: Vec<i64>,
+    ra: Vec<i64>,
+    qb: Vec<i64>,
+    rb: Vec<i64>,
+    start: Vec<i64>,
+    loops: i64,
+}
+
+// `trace_edges`: the walk a step at a time — at the corner an edge ends in, the third cell says
+// which way the boundary goes on — and each loop turned to begin at its smallest corner.
+fn trace_edges(s: &HexSet) -> EdgeMap {
+    let mut used = vec![0u8; (s.w * s.h) as usize];
+    let mut out = EdgeMap {
+        k: Vec::new(),
+        m: Vec::new(),
+        qa: Vec::new(),
+        ra: Vec::new(),
+        qb: Vec::new(),
+        rb: Vec::new(),
+        start: Vec::new(),
+        loops: 0,
+    };
+    for r in s.r0..s.r0 + s.h {
+        for q in s.q0..s.q0 + s.w {
+            if !s.cells[((r - s.r0) * s.w + (q - s.q0)) as usize] {
+                continue;
+            }
+            for d in 0..6 {
+                let nq = nb_q(q, r, d);
+                let nr = nb_r(r, d);
+                if s.get(nq, nr) {
+                    continue;
+                }
+                let i0 = edge_of(lattice_k(nq, nr) - lattice_k(q, r), lattice_m(nr) - lattice_m(r));
+                if i0 < 0 || used[((r - s.r0) * s.w + (q - s.q0)) as usize] & (1 << i0) != 0 {
+                    continue;
+                }
+                let mut lp: Vec<[i64; 6]> = Vec::new();
+                let (mut cq, mut cr, mut ci) = (q, r, i0);
+                loop {
+                    let at = ((cr - s.r0) * s.w + (cq - s.q0)) as usize;
+                    if used[at] & (1 << ci) != 0 {
+                        break;
+                    }
+                    used[at] |= 1 << ci;
+                    let k0 = lattice_k(cq, cr);
+                    let m0 = lattice_m(cr);
+                    let (bq, br) = lattice_to_cell(k0 + EDGE_DK[ci as usize], m0 + EDGE_DM[ci as usize]);
+                    lp.push([k0 + corner_k(ci), m0 + corner_m(ci), cq, cr, bq, br]);
+                    let ni = (ci + 1) % 6;
+                    let (tq, tr) = lattice_to_cell(k0 + EDGE_DK[ni as usize], m0 + EDGE_DM[ni as usize]);
+                    if s.get(tq, tr) {
+                        ci = edge_of(lattice_k(bq, br) - lattice_k(tq, tr), lattice_m(br) - lattice_m(tr));
+                        cq = tq;
+                        cr = tr;
+                    } else {
+                        ci = ni;
+                    }
+                }
+                let n = lp.len();
+                let mut best = 0;
+                for j in 1..n {
+                    if lp[j][0] < lp[best][0] || (lp[j][0] == lp[best][0] && lp[j][1] < lp[best][1]) {
+                        best = j;
+                    }
+                }
+                out.start.push(out.k.len() as i64);
+                out.loops += 1;
+                for j in 0..n {
+                    let e = lp[(best + j) % n];
+                    out.k.push(e[0]);
+                    out.m.push(e[1]);
+                    out.qa.push(e[2]);
+                    out.ra.push(e[3]);
+                    out.qb.push(e[4]);
+                    out.rb.push(e[5]);
+                }
+            }
+        }
+    }
+    out.start.push(out.k.len() as i64);
+    out
+}
+
+fn edges_op(s: &HexSet) -> Vec<i64> {
+    let mut ints: Vec<i64> = Vec::new();
+    let mut edges = 0i64;
+    for t in 0..TRACES {
+        let v = trace_edges(s);
+        edges += v.k.len() as i64;
+        if t == TRACES - 1 {
+            ints = vec![v.loops, v.k.len() as i64];
+            ints.extend(&v.k);
+            ints.extend(&v.m);
+            ints.extend(&v.qa);
+            ints.extend(&v.ra);
+            ints.extend(&v.qb);
+            ints.extend(&v.rb);
+            ints.extend(&v.start);
+        }
+    }
+    ints.push(edges);
+    ints
+}
+
+fn bench_trace_edges(n: i64) -> Row {
+    let s0 = disk(0);
+    let s1 = disk(1);
+    let (us, sink) = timed(n, |r| edges_op(if (r & 1) == 0 { &s0 } else { &s1 })[1]);
+    let one = edges_op(black_box(&s0));
+    Row { name: "trace_edges", iters: n, us, px: TRACES * one[1], hash: fnv(FNV_OFFSET, &one), sink }
+}
+
 fn micro(x: f64) -> i64 {
     (x * 1000000.0) as i64
 }
@@ -1023,7 +1143,7 @@ fn main() {
     }
     let t0 = Instant::now();
     println!("routine\titers\tus\tns_op\tpx\tns_px\thash");
-    let rows = [bench_count(n), bench_trace(n), bench_rotate(n), bench_doc(n)];
+    let rows = [bench_count(n), bench_trace(n), bench_trace_edges(n), bench_rotate(n), bench_doc(n)];
     let mut sink = 0i64;
     for row in &rows {
         print_row(row);
