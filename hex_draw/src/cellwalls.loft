@@ -99,34 +99,67 @@ fn edge_travel(turn: integer, b: const vector<WallEdge>, i: integer) -> integer 
   if au > av { if u > 0 { 0 } else { 2 } } else if av > au { if v > 0 { 1 } else { 3 } } else { -1 }
 }
 
+// Every edge's travel (`edge_travel`), read once: the runs and each run's heading both go by it.
+fn edge_travels(turn: integer, b: const vector<WallEdge>) -> vector<integer> {
+  [for i in 0..len(b) { edge_travel(turn, b, i) }]
+}
+
 // The boundary cut into runs, one per straight wall, in order round the house.  A run shorter
 // than 2 edges is the turn of a corner, not a wall: it joins the run before it.
 // @FR-HW-Runs: one run per straight wall; a run under two edges joins the one before
 pub fn cells_runs(turn: integer, b: const vector<WallEdge>) -> vector<vector<integer>> {
-  n = len(b);
-  runs_merged(b, [for i in 0..n { edge_travel(turn, b, i) }])
+  runs_merged(b, edge_travels(turn, b))
 }
 
 // The boundary cut into runs of equal labels, in order round the loop: a label of -1 takes the
 // one before it, and a run shorter than 2 edges (the turn of a corner) joins the run before it.
+//
+// The runs are kept as the places where the label changes, so joining one costs what the runs
+// cost, not what the edges do: a road's outline has hundreds of edges and many corners.  The
+// runs are taken in order from the first change after edge 0, and the first short one joins the
+// run before it; then again, until none is short or one run is left.
 fn runs_merged(b: const vector<WallEdge>, given: const vector<integer>) -> vector<vector<integer>> {
   n = len(b);
   label: vector<integer> = [for i in 0..n { given[i] ?? -1 }];
   for i in 0..n {
     if label[i] < 0 { label[i] = label[(i + n - 1) % n ?? 0] ?? -1; }
   }
-  out: vector<vector<integer>> = [];
+  // where a run begins: every edge whose label is not the one before it, ascending
+  cp: vector<integer> = [];
+  for i in 0..n { if label[i] != label[(i + n - 1) % n ?? 0] { cp += [i]; } }
   for _ in 0..n {
-    out = runs_groups(label);
+    g = len(cp);
+    if g < 2 { break; }
+    // the runs in order: from the first change after edge 0 (a change AT edge 0 begins the last)
+    first = if (cp[0] ?? 0) == 0 { 1 } else { 0 };
     short = -1;
-    for g in 0..len(out) {
-      if short < 0 && len(out[g]) < 2 && len(out) > 1 { short = g; }
+    for j in 0..g {
+      if short >= 0 { break; }
+      at = (first + j) % g ?? 0;
+      from = cp[at] ?? 0;
+      to = cp[(at + 1) % g ?? 0] ?? 0;
+      size = ((to - from) % n + n) % n ?? 0;
+      if size < 2 { short = at; }
     }
     if short < 0 { break; }
-    prev = label[out[(short + len(out) - 1) % len(out) ?? 0][0] ?? 0] ?? 0;
-    for i in out[short] ?? [] { label[i] = prev; }
+    before = (short + g - 1) % g ?? 0;
+    after = (short + 1) % g ?? 0;
+    prev = label[cp[before] ?? 0] ?? 0;
+    // the short run's edges take the label of the run before them
+    from = cp[short] ?? 0;
+    size = (((cp[after] ?? 0) - from) % n + n) % n ?? 0;
+    for j in 0..size { label[(from + j) % n ?? 0] = prev; }
+    // its beginning is no change now; nor is the next run's, when that has the same label
+    gone_after = (label[cp[after] ?? 0] ?? 0) == prev && after != before;
+    whole = g == 2 && (label[cp[after] ?? 0] ?? 0) == prev;
+    keep: vector<integer> = [];
+    for j in 0..g {
+      if j == short || (j == after && gone_after) || whole { continue; }
+      keep += [cp[j] ?? 0];
+    }
+    cp = keep;
   }
-  out
+  runs_groups(label)
 }
 
 // The runs of equal labels round the loop, starting where a label changes.
@@ -194,13 +227,27 @@ fn rational_turned(nk: integer, nm: integer, d: integer, steps: integer) -> (int
   (tk, tm, td)
 }
 
-// The most common value of `vals`, ties going to the one nearest the mean (`sum / n`).
+// The most common value of `vals`, ties going to the one nearest the mean (`sum / n`), and
+// among those to the one met first.  Each distinct value is counted once: a wall's edges mark
+// two or three lines at most, however long it is.
 fn most_common(vals: const vector<integer>, sum: integer, n: integer) -> integer {
+  seen: vector<integer> = [];
+  count: vector<integer> = [];
+  for v in vals {
+    at = -1;
+    for j in 0..len(seen) { if at < 0 && (seen[j] ?? 0) == v { at = j; } }
+    if at < 0 {
+      seen += [v];
+      count += [1];
+    } else {
+      count[at] += 1;
+    }
+  }
   best = 0;
   best_n = 0;
-  for v in vals {
-    c = 0;
-    for w in vals { if w == v { c += 1; } }
+  for j in 0..len(seen) {
+    v = seen[j] ?? 0;
+    c = count[j] ?? 0;
     far = v * n - sum;
     if far < 0 { far = -far; }
     best_far = best * n - sum;
@@ -273,12 +320,17 @@ pub fn cells_wall(b: const vector<WallEdge>, run: const vector<integer>, h: inte
   else { cells_wall_sides(b, run, head_norm(h)) }
 }
 
-// The heading a run of the boundary travels along: the way most of its edges travel (`travel`),
+// The heading a run of the boundary travels along: the way most of its edges travel (`edge_travel`),
 // as a heading of the house (`turn` for +u, three steps on for +v, and so on).
 pub fn cells_run_heading(turn: integer, b: const vector<WallEdge>, run: const vector<integer>) -> integer {
+  run_heading_by(turn, edge_travels(turn, b), run)
+}
+
+// `cells_run_heading` by travels already read.
+fn run_heading_by(turn: integer, travel: const vector<integer>, run: const vector<integer>) -> integer {
   count = [0, 0, 0, 0];
   for i in run {
-    t = edge_travel(turn, b, i);
+    t = travel[i] ?? -1;
     if t >= 0 { count[t] += 1; }
   }
   best = 0;
@@ -293,29 +345,18 @@ pub fn cells_run_heading(turn: integer, b: const vector<WallEdge>, run: const ve
 // house, one hex and its six neighbours, is the same seven cells at every angle).  Exact: a
 // heading step is √3 or 3 long, so the projections compare as squares, scaled by 9 or 3.
 // @FR-HW-Axes, @FR-HX-Size: the axes read off the cells; a tie is cells that show no direction
-pub fn cells_axes(b: const vector<WallEdge>) -> integer {
+pub fn cells_axes(b: const vector<WallEdge>) -> integer { axes_by(edge_nearest_all(b)) }
+
+// Every edge's nearest heading (`edge_nearest_heading`), read once: the axes are voted by it and
+// an outline's slanted stretches are found by it.
+fn edge_nearest_all(b: const vector<WallEdge>) -> vector<integer> {
+  [for i in 0..len(b) { edge_nearest_heading(b, i) }]
+}
+
+// The axes most edges vote for by their nearest headings; -1 for a tie.
+fn axes_by(near: const vector<integer>) -> integer {
   votes = [0, 0, 0];
-  n = len(b);
-  for i in 0..n {
-    a = b[((i - CELLS_AROUND) % n + n) % n ?? 0]!;
-    z = b[(i + CELLS_AROUND) % n ?? 0]!;
-    wk = z.we_bk - a.we_ak;
-    wm = z.we_bm - a.we_am;
-    best = -1;
-    best_d = 0;
-    best_l = 1;
-    for h in 0..12 {
-      (sk, sm) = head_step(h);
-      d = vec_dot_4(wk, wm, sk, sm);
-      if d <= 0 { continue; }
-      l = if h % 2 == 0 { 3 } else { 9 };   // the step's length squared, in these units
-      // d / √l against best_d / √best_l: d² · best_l against best_d² · l
-      if best < 0 || d * d * best_l > best_d * best_d * l {
-        best = h;
-        best_d = d;
-        best_l = l;
-      }
-    }
+  for best in near {
     if best >= 0 { votes[best % 3] += 1; }
   }
   if votes[0] > votes[1] && votes[0] > votes[2] { 0 }
@@ -359,13 +400,18 @@ pub fn cells_no_marks(cells: HexSet) -> EdgeSet {
 // `cells_outlines` takes anything.
 pub fn cells_built(cells: HexSet, wall_mat: integer, hint: integer = -1) -> CellWalls {
   edges = cells_no_marks(cells);
-  // @FR-HX-Edge: the thin walls
-  draw_walls(cells, edges, wall_mat);
-  b = cells_boundary(cells);
+  // @FR-HX-Edge: the thin walls — every edge of every loop, as `draw_walls` marks them, from the
+  // one walk of the boundary
+  loops = cells_loops(cells);
+  for loop in loops {
+    for e in loop { edge_set_mat(edges, e.we_qa, e.we_ra, e.we_qb, e.we_rb, wall_mat); }
+  }
+  b: vector<WallEdge> = if len(loops) > 0 { loops[0]! } else { [] };
   turn = cells_axes(b);
   if turn < 0 { turn = if hint >= 0 { hint % 3 ?? 0 } else { 0 }; }
-  rs = cells_runs(turn, b);
-  walls: vector<WallSurface> = [for run in rs { cells_wall(b, run, cells_run_heading(turn, b, run)) }];
+  travel = edge_travels(turn, b);
+  rs = runs_merged(b, travel);
+  walls: vector<WallSurface> = [for run in rs { cells_wall(b, run, run_heading_by(turn, travel, run)) }];
   corners: vector<(float, float)> = [];
   nw = len(walls);
   for i in 0..nw {
@@ -394,13 +440,14 @@ pub struct CellOutline {
 // every corner is a right angle and the step's line lies between two hex centres.  None (no walls) for a loop of fewer than three walls: too small
 // to carry walls (HX-Size).
 pub fn cells_outline(b: const vector<WallEdge>, hint: integer = -1) -> CellOutline {
-  turn = cells_axes(b);
+  near = edge_nearest_all(b);
+  turn = axes_by(near);
   if turn < 0 { turn = if hint >= 0 { hint % 3 ?? 0 } else { 0 }; }
   // the runs, each along the nearest of the twelve headings (a road's stretches run every way),
   // each cut where its line steps over (`split_by_line`), each part with its heading
   rs: vector<vector<integer>> = [];
   hs: vector<integer> = [];
-  heads = edge_headings(b, turn);
+  heads = edge_headings(b, turn, near);
   for run in runs_merged(b, heads) {
     h = heads[run[0] ?? 0] ?? turn;
     for part in cells_split_by_line(b, run, h) {
@@ -497,9 +544,8 @@ pub const CELLS_SLANT = 6;
 // Each edge's heading: along the loop's axes as a house's walls run (`travel`), except where the
 // boundary keeps to another of the twelve headings for CELLS_SLANT edges or more (a road's slanted
 // stretch).
-fn edge_headings(b: const vector<WallEdge>, turn: integer) -> vector<integer> {
+fn edge_headings(b: const vector<WallEdge>, turn: integer, free: const vector<integer>) -> vector<integer> {
   n = len(b);
-  free: vector<integer> = [for i in 0..n { edge_nearest_heading(b, i) }];
   out: vector<integer> = [];
   for i in 0..n {
     t = edge_travel(turn, b, i);

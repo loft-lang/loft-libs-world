@@ -310,3 +310,49 @@ fn test_an_opening_at_a_point_reads_back_on_its_wall() {
     }
   }
 }
+
+// At size: a ward of 80 by 64 hex steps (5 877 cells, 614 boundary edges) is still four walls,
+// square, every edge in a run, its two long walls 158 edges and its two short ones 149; and a
+// ragged street 396 cells long, stepping over by a row every nine cells, is one outline whose
+// every corner is square — a step between each two stretches (@FR-HW-Step).
+fn test_walls_from_cells_at_size() {
+  cells = hexset_chunk(-150, -150, 301, 301);
+  us = head_step(0);
+  vs = head_step(3);
+  for r in -150..151 {
+    for q in -150..151 {
+      u = vec_dot_4(2 * lattice_k(q, r), 2 * lattice_m(q, r), us.0, us.1);
+      v = vec_dot_4(2 * lattice_k(q, r), 2 * lattice_m(q, r), vs.0, vs.1);
+      if between(0, u, -80, 80) && between(3, v, -64, 64) { hexset_set(cells, q, r, true); }
+    }
+  }
+  assert(hexset_count(cells) == 5877, "the ward's cells: {hexset_count(cells)}");
+  b = cells_built(cells, 9);
+  assert(len(b.cw_boundary) == 614 && len(b.cw_walls) == 4, "614 edges, four walls: {len(b.cw_boundary)} and {len(b.cw_walls)}");
+  sizes: vector<integer> = [];
+  for i in 0..4 {
+    w = b.cw_walls[i]!;
+    nx = b.cw_walls[(i + 1) % 4 ?? 0]!;
+    assert(vec_dot_4(w.ws_dk, w.ws_dm, nx.ws_dk, nx.ws_dm) == 0, "ward wall {i}: square to the next");
+    sizes += [len(b.cw_runs[i]!)];
+  }
+  sizes.sort();
+  assert(sizes[0]! + sizes[1]! + sizes[2]! + sizes[3]! == 614 && sizes[0]! > 100, "every edge in a long run: {sizes}");
+
+  street = hexset_chunk(-210, -30, 421, 61);
+  // whole stretches of nine cells: a stub of two at an end would be a slanted wall of its own
+  // (@FR-HW-Slant), which is right and not square
+  for q in -198..198 {
+    off = ((q + 207) / 9 ?? 0) % 3 ?? 0;
+    for r in off - 1..off + 2 { hexset_set(street, q, r, true); }
+  }
+  os = cells_outlines(street, 0);
+  assert(len(os) == 1, "a street is one outline, got {len(os)}");
+  n = len(os[0]!.co_walls);
+  assert(n >= 100 && len(os[0]!.co_corners) == n, "a wall a stretch and a step between: {n}");
+  for i in 0..n {
+    w = os[0]!.co_walls[i]!;
+    nx = os[0]!.co_walls[(i + 1) % n ?? 0]!;
+    assert(vec_dot_4(w.ws_dk, w.ws_dm, nx.ws_dk, nx.ws_dm) == 0, "street wall {i}: square to the next");
+  }
+}
