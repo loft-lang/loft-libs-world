@@ -111,3 +111,146 @@ fn test_a_paste_replaces_what_it_covers() {
   tile_world::paste(t, tile_world::copy(empty, 0, 0, 0, 0, 0, 0), 2, 0, 0);
   assert(tile_world::terrain(t, 2, 0, 0) == WALL, "an unset stamp cell changes nothing");
 }
+
+// A part to turn, three cells by two, the middle of its south row left unset:
+//
+//   . . #      rise 2 at (0, 0); the wall (2, 0) slanted, looking north-east;
+//   .   .      a fence north of (1, 0) and one west of (0, 1);
+//              a box on (2, 1); a lamp on the unset cell (1, 1).
+fn part() -> tile_world::World {
+  w = tile_world::world();
+  kinds(w);
+  tile_world::set_terrain(w, 0, 0, 0, FLOOR);
+  tile_world::set_terrain(w, 1, 0, 0, FLOOR);
+  tile_world::set_terrain(w, 2, 0, 0, WALL);
+  tile_world::set_terrain(w, 0, 1, 0, FLOOR);
+  tile_world::set_terrain(w, 2, 1, 0, FLOOR);
+  tile_world::set_rise(w, 0, 0, 0, 2);
+  tile_world::set_slant(w, 2, 0, 0, tile_world::NORTH_EAST);
+  tile_world::set_edge(w, 1, 0, 0, tile_world::NORTH, FENCE);
+  tile_world::set_edge(w, 0, 1, 0, tile_world::WEST, FENCE);
+  tile_world::place(w, 2, 1, 0, BOX);
+  tile_world::place(w, 1, 1, 0, LAMP);
+  w
+}
+
+// How many edges a stamp holds in the box x -1..4, y -1..4, each counted once (a cell's north
+// and west).
+fn fences(w: const tile_world::World) -> integer {
+  n = 0;
+  for y in -1..5 {
+    for x in -1..5 {
+      if tile_world::edge(w, x, y, 0, tile_world::NORTH) != 0 { n += 1; }
+      if tile_world::edge(w, x, y, 0, tile_world::WEST) != 0 { n += 1; }
+    }
+  }
+  n
+}
+
+// The part's box is its set cells and its things, 3 by 2; turned a quarter it is 2 by 3.
+// Turned a quarter clockwise, cell (x, y) lands on (1 - y, x):
+//
+//   . .       (0, 0) -> (1, 0) with its rise; (1, 0) -> (1, 1); the wall (2, 0) -> (1, 2), its
+//     .       slant now looking south-east; (0, 1) -> (0, 0); (2, 1) -> (0, 2) with the box; the
+//   . #       lamp's unset cell (1, 1) -> (0, 1).  The fence north of (1, 0) is east of (1, 1);
+//             the fence west of (0, 1) is north of (0, 0).
+fn test_a_stamp_turned_a_quarter() {
+  s = part();
+  assert(tile_world::stamp_box(s) == (0, 0, 2, 1), "its box");
+  assert(tile_world::stamp_size(s, 0) == (3, 2) && tile_world::stamp_size(s, 1) == (2, 3) && tile_world::stamp_size(s, 6) == (3, 2), "its size, turned");
+  assert(tile_world::stamp_spot(0, 0, 2, 1, 1, false, 2, 0) == (1, 2) && tile_world::stamp_spot(0, 0, 2, 1, 1, false, 0, 1) == (0, 0), "where a cell lands");
+  t = tile_world::turned(s, 1);
+  assert(tile_world::stamp_box(t) == (0, 0, 1, 2), "the turned box begins at (0, 0)");
+  assert(tile_world::terrain(t, 1, 0, 0) == FLOOR && tile_world::rise(t, 1, 0, 0) == 2, "(0, 0) on (1, 0), its rise with it");
+  assert(tile_world::terrain(t, 1, 1, 0) == FLOOR && tile_world::terrain(t, 0, 0, 0) == FLOOR && tile_world::terrain(t, 0, 2, 0) == FLOOR, "the floor");
+  assert(tile_world::terrain(t, 1, 2, 0) == WALL && tile_world::slant(t, 1, 2, 0) == tile_world::SOUTH_EAST, "the wall, its slant turned");
+  assert(!tile_world::is_set(t, 0, 1, 0) && tile_world::top(t, 0, 1, 0) == LAMP, "the unset cell stays unset, its lamp on it");
+  assert(tile_world::top(t, 0, 2, 0) == BOX && len(tile_world::things(t, 0, 2, 0)) == 1, "the box");
+  assert(tile_world::edge(t, 1, 1, 0, tile_world::EAST) == FENCE, "the north fence is an east one");
+  assert(tile_world::edge(t, 0, 0, 0, tile_world::NORTH) == FENCE, "the west fence is a north one");
+  assert(fences(t) == 2, "and no other edge: {fences(t)}");
+}
+
+// Mirrored east to west, cell (x, y) lands on (2 - x, y): the wall on (0, 0), its slant looking
+// north-west; the fence north of (1, 0) stays; the fence west of (0, 1) is east of (2, 1).
+// Mirrored and then turned a quarter, (x, y) lands on (1 - y, 2 - x).
+fn test_a_stamp_mirrored() {
+  s = part();
+  f = tile_world::turned(s, 0, true);
+  assert(tile_world::terrain(f, 0, 0, 0) == WALL && tile_world::slant(f, 0, 0, 0) == tile_world::NORTH_WEST, "the wall, its slant mirrored");
+  assert(tile_world::rise(f, 2, 0, 0) == 2 && tile_world::top(f, 0, 1, 0) == BOX && tile_world::top(f, 1, 1, 0) == LAMP, "the rise, the box, the lamp");
+  assert(tile_world::edge(f, 1, 0, 0, tile_world::NORTH) == FENCE && tile_world::edge(f, 2, 1, 0, tile_world::EAST) == FENCE && fences(f) == 2, "the fences");
+  ft = tile_world::turned(s, 1, true);
+  assert(tile_world::terrain(ft, 1, 2, 0) == FLOOR && tile_world::rise(ft, 1, 2, 0) == 2, "mirrored then turned: (0, 0) on (1, 2)");
+  assert(tile_world::terrain(ft, 1, 0, 0) == WALL && tile_world::slant(ft, 1, 0, 0) == tile_world::NORTH_EAST, "the wall on (1, 0), looking north-east again");
+  assert(tile_world::turned_side(tile_world::WEST, 1, true) == tile_world::SOUTH && tile_world::turned_side(tile_world::NORTH, 3, false) == tile_world::WEST, "a side, mirrored and turned");
+  assert(tile_world::turned_slant(0, 2, true) == 0 && tile_world::turned_slant(tile_world::SOUTH_WEST, 2, false) == tile_world::NORTH_EAST, "a slant, turned");
+}
+
+// Are two stamps the same over x -1..4, y -1..4 on layer 0: terrain, tile, rise, slant, ceiling,
+// both edges and the stack of every cell?
+fn alike(a: const tile_world::World, b: const tile_world::World) -> boolean {
+  for y in -1..5 {
+    for x in -1..5 {
+      if tile_world::is_set(a, x, y, 0) != tile_world::is_set(b, x, y, 0) || tile_world::terrain(a, x, y, 0) != tile_world::terrain(b, x, y, 0)
+         || tile_world::tile(a, x, y, 0) != tile_world::tile(b, x, y, 0) || tile_world::rise(a, x, y, 0) != tile_world::rise(b, x, y, 0)
+         || tile_world::slant(a, x, y, 0) != tile_world::slant(b, x, y, 0) || tile_world::ceiling(a, x, y, 0) != tile_world::ceiling(b, x, y, 0)
+         || tile_world::edge(a, x, y, 0, tile_world::NORTH) != tile_world::edge(b, x, y, 0, tile_world::NORTH)
+         || tile_world::edge(a, x, y, 0, tile_world::WEST) != tile_world::edge(b, x, y, 0, tile_world::WEST)
+         || tile_world::things(a, x, y, 0) != tile_world::things(b, x, y, 0) {
+        return false;
+      }
+    }
+  }
+  true
+}
+
+// Eight ways and no more: four quarters bring a stamp back, so do two mirrors, a quarter after a
+// quarter is a half turn, and a mirror then a quarter is three quarters then a mirror.  With a
+// ceiling lowered on one cell, to go round with the rest.
+fn test_the_eight_ways_a_stamp_lies() {
+  s = part();
+  tile_world::set_ceiling(s, 0, 1, 0, 3);
+  four = tile_world::turned(tile_world::turned(tile_world::turned(tile_world::turned(s, 1), 1), 1), 1);
+  assert(alike(four, s), "four quarters: the stamp again");
+  assert(alike(tile_world::turned(s, 4), s) && alike(tile_world::turned(s, -3), tile_world::turned(s, 1)), "a turn is counted in quarters, either way round");
+  assert(alike(tile_world::turned(tile_world::turned(s, 0, true), 0, true), s), "two mirrors: the stamp again");
+  assert(alike(tile_world::turned(tile_world::turned(s, 1), 1), tile_world::turned(s, 2)), "a quarter and a quarter: a half");
+  assert(alike(tile_world::turned(tile_world::turned(s, 0, true), 1), tile_world::turned(s, 1, true)), "mirrored, then turned");
+  assert(alike(tile_world::turned(tile_world::turned(s, 3), 0, true), tile_world::turned(s, 1, true)), "a mirror then a quarter is three quarters then a mirror");
+  assert(!alike(tile_world::turned(s, 1), s) && !alike(tile_world::turned(s, 0, true), s), "and a quarter, or a mirror, is another stamp");
+  assert(tile_world::ceiling(tile_world::turned(s, 1), 0, 0, 0) == 3, "the ceiling went with its cell");
+}
+
+// Laid, a stamp writes only what it holds.  On a floor x 10..13, y 10..12 with a wall at
+// (11, 11), a box on it, a rise 1 at (10, 10) and a fence east of (10, 10):
+//   - the cells the part set replace what is there: (10, 10) has the part's rise 2, (12, 10) is wall;
+//   - the cell it left unset, (11, 11), keeps its wall, but the part's lamp replaces its box;
+//   - the fences it holds are added; the fence east of (10, 10), which it does not hold, STAYS.
+// Pasted, the same stamp replaces each cell it holds anything at, whole: that fence is gone.
+fn test_a_stamp_laid_adds_and_never_removes() {
+  s = part();
+  for way in 0..2 {
+    w = tile_world::world();
+    kinds(w);
+    tile_world::fill(w, 10, 10, 13, 12, 0, FLOOR);
+    tile_world::set_terrain(w, 11, 11, 0, WALL);
+    tile_world::place(w, 11, 11, 0, BOX);
+    tile_world::set_rise(w, 10, 10, 0, 1);
+    tile_world::set_edge(w, 10, 10, 0, tile_world::EAST, FENCE);
+    if way == 0 { tile_world::lay(w, s, 10, 10, 0); } else { tile_world::paste(w, s, 10, 10, 0); }
+    assert(tile_world::rise(w, 10, 10, 0) == 2 && tile_world::terrain(w, 12, 10, 0) == WALL, "way {way}: the set cells replace");
+    assert(tile_world::terrain(w, 11, 11, 0) == WALL, "way {way}: the unset cell keeps its wall");
+    assert(len(tile_world::things(w, 11, 11, 0)) == 1 && tile_world::top(w, 11, 11, 0) == LAMP, "way {way}: the lamp replaces the box");
+    assert(tile_world::edge(w, 11, 10, 0, tile_world::NORTH) == FENCE && tile_world::edge(w, 10, 11, 0, tile_world::WEST) == FENCE, "way {way}: its fences added");
+    assert(tile_world::terrain(w, 13, 12, 0) == FLOOR && tile_world::rise(w, 13, 10, 0) == 0, "way {way}: beyond the part, as it was");
+    kept = tile_world::edge(w, 10, 10, 0, tile_world::EAST) == FENCE;
+    assert(kept == (way == 0), "way {way}: a fence the stamp does not hold stays when it is laid, and goes when it is pasted");
+  }
+  // laid turned: the part a quarter round, at (20, 20) of an empty world
+  e = tile_world::world();
+  kinds(e);
+  tile_world::lay(e, tile_world::turned(s, 1), 20, 20, 0);
+  assert(tile_world::terrain(e, 21, 22, 0) == WALL && tile_world::rise(e, 21, 20, 0) == 2 && tile_world::top(e, 20, 22, 0) == BOX, "the turned part, laid");
+  assert(!tile_world::is_set(e, 20, 21, 0) && tile_world::top(e, 20, 21, 0) == LAMP, "its unset cell unset, the lamp on it");
+}
