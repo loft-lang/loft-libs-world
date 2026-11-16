@@ -100,6 +100,112 @@ fn bench_spread(n: integer) -> Row {
         hash: fnv(FNV_OFFSET, bs_out), sink: bs_sink }
 }
 
+// ── cellwalls: the walls of a structure from its cells alone ────────
+
+const BUILDS = 20;
+const OUTLINES = 10;
+
+/// An L as cells in the 61 x 61 window: a body 20 hex steps by 12 about cell (dq, 0) and a wing
+/// 8 by 8 on its far side.
+fn ell(dq: integer) -> HexSet {
+  el_c = hexset_chunk(0 - HALF, 0 - HALF, WIN, WIN);
+  el_l = labels_new(0 - HALF, 0 - HALF, WIN, WIN);
+  draw_floor(plan_new(dq, 0, 20, 12, 0, false), el_c, el_l, 1);
+  draw_floor(plan_new(dq - 6, 9, 8, 8, 0, false), el_c, el_l, 1);
+  el_c
+}
+
+/// A surface's six integers.
+fn surface_ints(w: WallSurface) -> vector<integer> { [w.ws_dk, w.ws_dm, w.ws_num_k, w.ws_num_m, w.ws_den, w.ws_n] }
+
+/// The L built from its cells BUILDS times; the last one's walls, runs, corners and thin walls.
+fn built_op(cells: HexSet) -> vector<integer> {
+  bo_ints: vector<integer> = [];
+  bo_edges = 0;
+  for bj in 0..BUILDS {
+    bo_b = cells_built(cells, 9);
+    bo_edges += len(bo_b.cw_boundary);
+    if bj == BUILDS - 1 {
+      bo_ints = [len(bo_b.cw_walls), len(bo_b.cw_boundary)];
+      for w in bo_b.cw_walls { bo_ints += surface_ints(w); }
+      for run in bo_b.cw_runs { bo_ints += [len(run), run[0] ?? -1]; }
+      for c in bo_b.cw_corners { bo_ints += [(c.0 * 1000000.0) as integer, (c.1 * 1000000.0) as integer]; }
+      bo_ints += [edgeset_count_all(bo_b.cw_edges), edgeset_digest(bo_b.cw_edges)];
+    }
+  }
+  bo_ints += [bo_edges];
+  bo_ints
+}
+
+fn bench_built(n: integer) -> Row {
+  bb_c0 = ell(0);
+  bb_c1 = ell(1);
+  bb_t0 = ticks();
+  bb_sink = 0;
+  for r in 0..n {
+    if (r & 1) == 0 { bb_sink += built_op(bb_c0)[1]?; } else { bb_sink += built_op(bb_c1)[1]?; }
+  }
+  bb_us = ticks() - bb_t0;
+  bb_one = built_op(bb_c0);
+  Row { name: "cells_built", iters: n, us: bb_us, px: BUILDS * (bb_one[1] ?? 0),
+        hash: fnv(FNV_OFFSET, bb_one), sink: bb_sink }
+}
+
+/// A ragged street round a block, as cells: a ring three cells wide whose north and south
+/// stretches step over by a row every nine cells, about column `dq`.
+fn street(dq: integer) -> HexSet {
+  st_c = hexset_chunk(0 - HALF, 0 - HALF, WIN, WIN);
+  for st_q in -24..25 {
+    st_off = ((st_q + 27) / 9) % 3;
+    for st_r in 0..3 {
+      hexset_set(st_c, st_q + dq, 14 + st_off + st_r, true);
+      hexset_set(st_c, st_q + dq, -18 + st_off + st_r, true);
+    }
+  }
+  for st_r in -18..19 {
+    for st_w in 0..3 {
+      hexset_set(st_c, -24 + st_w + dq, st_r, true);
+      hexset_set(st_c, 22 + st_w + dq, st_r, true);
+    }
+  }
+  st_c
+}
+
+/// Every loop of the street's outline, OUTLINES times; the last one's walls and corners.
+fn outline_op(cells: HexSet) -> vector<integer> {
+  oo_ints: vector<integer> = [];
+  oo_walls = 0;
+  for oj in 0..OUTLINES {
+    oo_os = cells_outlines(cells, 0);
+    for o in oo_os { oo_walls += len(o.co_walls); }
+    if oj == OUTLINES - 1 {
+      oo_ints = [len(oo_os), 0];
+      for o in oo_os {
+        oo_ints += [len(o.co_walls), len(o.co_boundary)];
+        oo_ints[1] += len(o.co_boundary);
+        for w in o.co_walls { oo_ints += surface_ints(w); }
+        for c in o.co_corners { oo_ints += [(c.0 * 1000000.0) as integer, (c.1 * 1000000.0) as integer]; }
+      }
+    }
+  }
+  oo_ints += [oo_walls];
+  oo_ints
+}
+
+fn bench_outlines(n: integer) -> Row {
+  bo_c0 = street(0);
+  bo_c1 = street(1);
+  bo_t0 = ticks();
+  bo_sink = 0;
+  for r in 0..n {
+    if (r & 1) == 0 { bo_sink += outline_op(bo_c0)[1]?; } else { bo_sink += outline_op(bo_c1)[1]?; }
+  }
+  bo_us = ticks() - bo_t0;
+  bo_one = outline_op(bo_c0);
+  Row { name: "cells_outlines", iters: n, us: bo_us, px: OUTLINES * (bo_one[1] ?? 0),
+        hash: fnv(FNV_OFFSET, bo_one), sink: bo_sink }
+}
+
 fn main() {
   mn_n = 20;
   mn_args = arguments();
@@ -114,7 +220,7 @@ fn main() {
   if mn_n < 1 { mn_n = 1; }
   mn_t0 = ticks();
   println("routine\titers\tus\tns_op\tpx\tns_px\thash");
-  mn_rows: vector<Row> = [bench_spread(mn_n)];
+  mn_rows: vector<Row> = [bench_spread(mn_n), bench_built(mn_n), bench_outlines(mn_n)];
   mn_sink = 0;
   for row in mn_rows {
     print_row(row);
