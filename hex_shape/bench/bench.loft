@@ -105,6 +105,43 @@ fn bench_walk(n: integer) -> Row {
         hash: fnv(FNV_OFFSET, bw_one), sink: bw_sink }
 }
 
+// ── parts_fill: a plan of rectangles, filled by exact tests ─────────
+
+const FILL_W = 96;
+const FILLS = 12;
+
+/// An L (a body 30 hex steps by 20, a wing 12 by 12) filled at each of the 12 rotations into a
+/// 96 x 96 window about cell (cq, 0); the cells filled per rotation, and per row at the last.
+fn fill_op(cq: integer) -> vector<integer> {
+  fo_ints: vector<integer> = [];
+  fo_parts = [box_part(-30, -20, 30, 20), box_part(-30, 20, -6, 44)];
+  fo_total = 0;
+  for fo_rot in 0..FILLS {
+    fo_s = hexset_chunk(0 - FILL_W / 2, 0 - FILL_W / 2, FILL_W, FILL_W);
+    fo_n = parts_fill(cq, 0, fo_rot, (fo_rot & 1) == 1, fo_parts, fo_s);
+    fo_ints += [fo_n];
+    fo_total += fo_n;
+    if fo_rot == FILLS - 1 {
+      for fo_r in 0 - FILL_W / 2..FILL_W / 2 {
+        fo_c = 0;
+        for fo_q in 0 - FILL_W / 2..FILL_W / 2 { if hexset_get(fo_s, fo_q, fo_r) { fo_c += 1; } }
+        fo_ints += [fo_c];
+      }
+    }
+  }
+  fo_ints += [fo_total];
+  fo_ints
+}
+
+fn bench_fill(n: integer) -> Row {
+  bf_t0 = ticks();
+  bf_sink = 0;
+  for r in 0..n { bf_sink += fill_op(r & 1)[0]?; }
+  bf_us = ticks() - bf_t0;
+  Row { name: "parts_fill", iters: n, us: bf_us, px: FILLS * FILL_W * FILL_W,
+        hash: fnv(FNV_OFFSET, fill_op(0)), sink: bf_sink }
+}
+
 fn main() {
   mn_n = 20;
   mn_args = arguments();
@@ -119,7 +156,7 @@ fn main() {
   if mn_n < 1 { mn_n = 1; }
   mn_t0 = ticks();
   println("routine\titers\tus\tns_op\tpx\tns_px\thash");
-  mn_rows: vector<Row> = [bench_walk(mn_n)];
+  mn_rows: vector<Row> = [bench_walk(mn_n), bench_fill(mn_n)];
   mn_sink = 0;
   for row in mn_rows {
     print_row(row);
