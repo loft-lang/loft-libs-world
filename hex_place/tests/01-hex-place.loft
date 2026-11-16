@@ -461,3 +461,49 @@ fn test_inner_walls_read_back_straight_at_every_turn() {
     }
   }
 }
+
+// A room one cell wide: a corridor down the hall, a room either side.  Along an odd heading a
+// single row's cells stand apart, so the corridor's cells would come through 30 degrees loose,
+// each a room of its own.  It comes through in one piece instead — three rooms at every step,
+// counted afresh — and each side room still has most of its cells.
+fn test_a_corridor_one_cell_wide_stays_one_room() {
+  reach = 30;
+  cells = turn_drawn(24, 16, 0, reach);
+  edges = edgeset_new(0 - reach, 0 - reach, 2 * reach + 1, 2 * reach + 1);
+  hex_draw::draw_walls(cells, edges, OUTER);
+  lb = labels_new(0 - reach, 0 - reach, 2 * reach + 1, 2 * reach + 1);
+  sizes = [0, 0, 0];
+  for r in 0 - reach..reach + 1 {
+    for q in 0 - reach..reach + 1 {
+      if !hexset_get(cells, q, r) { continue; }
+      // one straight row of cells, each touching the next
+      room = if r < 0 { 0 } else if r == 0 { 1 } else { 2 };
+      label_set(lb, q, r, room);
+      sizes[room] += 1;
+    }
+  }
+  for r in 0 - reach..reach + 1 {
+    for q in 0 - reach..reach + 1 {
+      if !hexset_get(cells, q, r) { continue; }
+      for d in 0..6 {
+        nq = nb_q(q, r, d);
+        nr = nb_r(q, r, d);
+        if hexset_get(cells, nq, nr) && label_get(lb, q, r) != label_get(lb, nq, nr) { edge_set_mat(edges, q, r, nq, nr, INNER); }
+      }
+    }
+  }
+  st = stencil_with_edges(cells, heights_new(0 - reach, 0 - reach, 2 * reach + 1, 2 * reach + 1), lb, edges, false, true);
+  assert(hex_draw::cells_rooms(cells, edges).cr_n == 3 && sizes[1] > 6 && sizes[1] < sizes[0] / 4, "drawn: a corridor of {sizes[1]} cells between rooms of {sizes[0]} and {sizes[2]}");
+  for s in 0..12 {
+    t = stencil_turn(st, s);
+    rooms = hex_draw::cells_rooms(t.tu_stencil.sn_cells, t.tu_stencil.sn_edges);
+    assert(rooms.cr_n == 3 && t.tu_rooms == 3 && t.tu_lost == 0, "at {30 * s}: three rooms, counted {rooms.cr_n}, told {t.tu_rooms}");
+    got = [0, 0, 0];
+    for r in hexset_r0(t.tu_stencil.sn_cells)..hexset_r0(t.tu_stencil.sn_cells) + hexset_h(t.tu_stencil.sn_cells) {
+      for q in hexset_q0(t.tu_stencil.sn_cells)..hexset_q0(t.tu_stencil.sn_cells) + hexset_w(t.tu_stencil.sn_cells) {
+        if hexset_get(t.tu_stencil.sn_cells, q, r) { got[label_get(t.tu_stencil.sn_labels, q, r)] += 1; }
+      }
+    }
+    assert(got[1] >= sizes[1] / 2 && got[0] * 10 >= sizes[0] * 8 && got[2] * 10 >= sizes[2] * 8, "at {30 * s}: the corridor {got[1]} of {sizes[1]} cells, the rooms {got[0]} of {sizes[0]} and {got[2]} of {sizes[2]}");
+  }
+}

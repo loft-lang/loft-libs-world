@@ -28,7 +28,8 @@ slot alone, so its footprint is untouched. Arbitration fails safe toward solid.
   says by how much — `hex_field::stencil_rotate_deg` still refuses it, being the exact routine
 - **turn a whole stencil** — `stencil_turn`: its cells, what each holds (height, label, layers), its
   outer walls with their materials and openings, and its INNER walls, which come through an odd step
-  as the straight boundaries of its rooms — closed where they were closed.  `tu_lost` counts marked
+  as the straight boundaries of its rooms — closed where they were closed, each room in one piece (a room one cell wide is widened where an odd
+  heading would leave its cells apart).  `tu_lost` counts marked
   edges that bounded no room and could not come through an odd step
 - **arbitrate overlapping solids** — `arb_solid` (fail-safe toward solid) · `arb_owner` (lowest id, `-1` for none)
 

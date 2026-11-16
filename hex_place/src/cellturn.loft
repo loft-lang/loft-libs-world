@@ -475,6 +475,149 @@ struct RoomEdge {
 }
 
 // One odd step of a stencil about its cell (0, 0), by walls.
+// The parts of the rooms `of` gives the cells: a part is cells of one room joined cell to cell.
+// A number per cell, and per part its size and its room.
+struct TurnParts {
+  part: Labels,
+  size: vector<integer>,
+  room: vector<integer>,
+}
+
+fn room_parts(cells: HexSet, of: Labels) -> TurnParts {
+  part = labels_new(hexset_q0(cells), hexset_r0(cells), hexset_w(cells), hexset_h(cells));
+  size: vector<integer> = [];
+  room: vector<integer> = [];
+  for r in hexset_r0(cells)..hexset_r0(cells) + hexset_h(cells) {
+    for q in hexset_q0(cells)..hexset_q0(cells) + hexset_w(cells) {
+      if !hexset_get(cells, q, r) || label_get(part, q, r) >= 0 { continue; }
+      id = len(size);
+      mine = label_get(of, q, r);
+      label_set(part, q, r, id);
+      sq: vector<integer> = [q];
+      sr: vector<integer> = [r];
+      at = 0;
+      while at < len(sq) {
+        cq = sq[at] ?? 0;
+        cr = sr[at] ?? 0;
+        at += 1;
+        for d in 0..6 {
+          nq = nb_q(cq, cr, d);
+          nr = nb_r(cq, cr, d);
+          if !hexset_get(cells, nq, nr) || label_get(part, nq, nr) >= 0 || label_get(of, nq, nr) != mine { continue; }
+          label_set(part, nq, nr, id);
+          sq += [nq];
+          sr += [nr];
+        }
+      }
+      size += [len(sq)];
+      room += [mine];
+    }
+  }
+  TurnParts { part: part, size: size, room: room }
+}
+
+// Make every room one piece.  A room one cell wide comes through a turn of 30 degrees as cells
+// that do not touch — along an odd heading a single row's cells stand a step and a half apart —
+// and each loose cell would be a room of its own, walled in.  So while a room is in parts, its
+// smallest part is joined to the rest of it along the shortest way through other rooms' cells
+// (at most three, which take its room: the corridor is widened where it must be), and a part
+// with no such way is given to the room it touches most.  Answers how many cells changed room.
+fn rooms_whole(cells: HexSet, of: Labels) -> integer {
+  changed = 0;
+  for _round in 0..256 {
+    ps = room_parts(cells, of);
+    pick = -1;
+    for i in 0..len(ps.size) {
+      second = false;
+      for j in 0..len(ps.size) {
+        if j != i && ps.room[j] == ps.room[i] && ((ps.size[j] ?? 0) > (ps.size[i] ?? 0) || ((ps.size[j] ?? 0) == (ps.size[i] ?? 0) && j < i)) { second = true; }
+      }
+      if second && (pick < 0 || (ps.size[i] ?? 0) < (ps.size[pick] ?? 0)) { pick = i; }
+    }
+    if pick < 0 { break; }
+    mine = ps.room[pick] ?? -1;
+    // the shortest way from the part to another part of its room
+    seen = labels_new(hexset_q0(cells), hexset_r0(cells), hexset_w(cells), hexset_h(cells));
+    bq: vector<integer> = [];
+    br: vector<integer> = [];
+    from: vector<integer> = [];
+    deep: vector<integer> = [];
+    for r in hexset_r0(cells)..hexset_r0(cells) + hexset_h(cells) {
+      for q in hexset_q0(cells)..hexset_q0(cells) + hexset_w(cells) {
+        if label_get(ps.part, q, r) != pick { continue; }
+        label_set(seen, q, r, 1);
+        bq += [q];
+        br += [r];
+        from += [-1];
+        deep += [0];
+      }
+    }
+    at = 0;
+    reached = -1;
+    while at < len(bq) && reached < 0 {
+      cq = bq[at] ?? 0;
+      cr = br[at] ?? 0;
+      for d in 0..6 {
+        nq = nb_q(cq, cr, d);
+        nr = nb_r(cq, cr, d);
+        if !hexset_get(cells, nq, nr) || label_get(seen, nq, nr) >= 0 { continue; }
+        if label_get(of, nq, nr) == mine {
+          reached = at;
+          break;
+        }
+        if (deep[at] ?? 0) >= 3 { continue; }
+        label_set(seen, nq, nr, 1);
+        bq += [nq];
+        br += [nr];
+        from += [at];
+        deep += [(deep[at] ?? 0) + 1];
+      }
+      at += 1;
+    }
+    if reached >= 0 {
+      // the cells of the way take the room
+      while reached >= 0 && (deep[reached] ?? 0) > 0 {
+        label_set(of, bq[reached] ?? 0, br[reached] ?? 0, mine);
+        changed += 1;
+        reached = from[reached] ?? -1;
+      }
+      continue;
+    }
+    // no way: the part goes to the room it touches most
+    touch: vector<integer> = [];
+    count: vector<integer> = [];
+    for r in hexset_r0(cells)..hexset_r0(cells) + hexset_h(cells) {
+      for q in hexset_q0(cells)..hexset_q0(cells) + hexset_w(cells) {
+        if label_get(ps.part, q, r) != pick { continue; }
+        for d in 0..6 {
+          nq = nb_q(q, r, d);
+          nr = nb_r(q, r, d);
+          if !hexset_get(cells, nq, nr) || label_get(ps.part, nq, nr) == pick { continue; }
+          o = label_get(of, nq, nr);
+          at_o = -1;
+          for i in 0..len(touch) { if touch[i] == o { at_o = i; } }
+          if at_o < 0 {
+            touch += [o];
+            count += [1];
+          } else { count[at_o] += 1; }
+        }
+      }
+    }
+    best = -1;
+    for i in 0..len(touch) { if best < 0 || (count[i] ?? 0) > (count[best] ?? 0) { best = i; } }
+    if best < 0 { break; }
+    for r in hexset_r0(cells)..hexset_r0(cells) + hexset_h(cells) {
+      for q in hexset_q0(cells)..hexset_q0(cells) + hexset_w(cells) {
+        if label_get(ps.part, q, r) == pick {
+          label_set(of, q, r, touch[best] ?? -1);
+          changed += 1;
+        }
+      }
+    }
+  }
+  changed
+}
+
 fn stencil_thirty(st: Stencil, sz: OpeningSizes) -> StencilTurn {
   cells = st.sn_cells;
   has_e = stencil_has_edges(st);
@@ -509,59 +652,87 @@ fn stencil_thirty(st: Stencil, sz: OpeningSizes) -> StencilTurn {
     polys += [poly];
     areas += [fabs(area)];
   }
-  // each turned cell: its room, and the drawn cell it reads
+  // each turned cell's room: the smallest room whose turned outline holds it; outside them all,
+  // the room of the drawn cell nearest where it came from.  Then every room made one piece.
   hz = heights_new(0 - reach, 0 - reach, win, win);
   lb = labels_new(0 - reach, 0 - reach, win, win);
   ly = layers_new(0 - reach, 0 - reach, win, win);
   for li in 0..layer_count(st.sn_layers) { layer_add(ly, layer_name(st.sn_layers, li)); }
   room30 = labels_new(0 - reach, 0 - reach, win, win);
-  for o in th.offsets {
-    (q, r) = lattice_to_cell(o.dk, o.dm);
-    dx = (o.dk as float) * 0.8660254037844386;
-    dy = (o.dm as float) * 0.5;
-    u = dx * th.co1 + dy * th.si1;
-    v = -dx * th.si1 + dy * th.co1;
-    mine = -1;
-    for ri in 0..rooms.cr_n {
-      if len(polys[ri]!) < 3 || !turn_in_poly(polys[ri]!, u, v) { continue; }
-      if mine < 0 || (areas[ri] ?? 0.0) < (areas[mine] ?? 0.0) { mine = ri; }
-    }
-    // where it came from in the drawing: the frame's coordinates less the offset, in the
-    // drawing's own frame
-    fx = u - th.off_x;
-    fy = v - th.off_y;
-    wx = fx * th.co0 - fy * th.si0;
-    wy = fx * th.si0 + fy * th.co0;
-    (hq, hr) = hex_at(wx, wy);
-    // the drawn cell nearest that, of its room when it has one
-    sq = 0;
-    sr = 0;
-    found = false;
-    best = 0.0;
-    for pass in 0..2 {
-      if found { break; }
-      for d in -1..6 {
-        cq = if d < 0 { hq } else { nb_q(hq, hr, d) };
-        cr = if d < 0 { hr } else { nb_r(hq, hr, d) };
-        if !hexset_get(cells, cq, cr) { continue; }
-        if pass == 0 && mine >= 0 && label_get(rooms.cr_of, cq, cr) != mine { continue; }
-        ex = cell_x(cq, cr) - wx;
-        ey = cell_y(cq, cr) - wy;
-        dist = ex * ex + ey * ey;
-        if !found || dist < best {
-          found = true;
-          best = dist;
-          sq = cq;
-          sr = cr;
+  for pass in 0..2 {
+    if pass == 1 && rooms.cr_n > 1 { rooms_whole(cells30, room30); }
+    for o in th.offsets {
+      (q, r) = lattice_to_cell(o.dk, o.dm);
+      dx = (o.dk as float) * 0.8660254037844386;
+      dy = (o.dm as float) * 0.5;
+      u = dx * th.co1 + dy * th.si1;
+      v = -dx * th.si1 + dy * th.co1;
+      mine = if pass == 1 { label_get(room30, q, r) } else { -1 };
+      if pass == 0 {
+        for ri in 0..rooms.cr_n {
+          if len(polys[ri]!) < 3 || !turn_in_poly(polys[ri]!, u, v) { continue; }
+          if mine < 0 || (areas[ri] ?? 0.0) < (areas[mine] ?? 0.0) { mine = ri; }
         }
       }
+      // where it came from in the drawing: the frame's coordinates less the offset, in the
+      // drawing's own frame
+      fx = u - th.off_x;
+      fy = v - th.off_y;
+      wx = fx * th.co0 - fy * th.si0;
+      wy = fx * th.si0 + fy * th.co0;
+      (hq, hr) = hex_at(wx, wy);
+      // the drawn cell nearest that: of its room among the cells round it, of its room anywhere,
+      // then any
+      sq = 0;
+      sr = 0;
+      found = false;
+      best = 0.0;
+      for way in 0..3 {
+        if found { break; }
+        if way == 1 {
+          if pass == 0 || mine < 0 { continue; }
+          for cr in hexset_r0(cells)..hexset_r0(cells) + hexset_h(cells) {
+            for cq in hexset_q0(cells)..hexset_q0(cells) + hexset_w(cells) {
+              if label_get(rooms.cr_of, cq, cr) != mine { continue; }
+              ex = cell_x(cq, cr) - wx;
+              ey = cell_y(cq, cr) - wy;
+              dist = ex * ex + ey * ey;
+              if !found || dist < best {
+                found = true;
+                best = dist;
+                sq = cq;
+                sr = cr;
+              }
+            }
+          }
+          continue;
+        }
+        for d in -1..6 {
+          cq = if d < 0 { hq } else { nb_q(hq, hr, d) };
+          cr = if d < 0 { hr } else { nb_r(hq, hr, d) };
+          if !hexset_get(cells, cq, cr) { continue; }
+          if way == 0 && mine >= 0 && label_get(rooms.cr_of, cq, cr) != mine { continue; }
+          ex = cell_x(cq, cr) - wx;
+          ey = cell_y(cq, cr) - wy;
+          dist = ex * ex + ey * ey;
+          if !found || dist < best {
+            found = true;
+            best = dist;
+            sq = cq;
+            sr = cr;
+          }
+        }
+      }
+      if pass == 0 {
+        if mine < 0 && found { mine = label_get(rooms.cr_of, sq, sr); }
+        label_set(room30, q, r, mine);
+        continue;
+      }
+      if !found { continue; }
+      if stencil_has_heights(st) { height_set(hz, q, r, height_get(st.sn_heights, sq, sr)); }
+      if stencil_has_labels(st) { label_set(lb, q, r, label_get(st.sn_labels, sq, sr)); }
+      for li in 0..layer_count(st.sn_layers) { layer_set_at(ly, li, q, r, layer_get_at(st.sn_layers, li, sq, sr)); }
     }
-    if mine < 0 && found { mine = label_get(rooms.cr_of, sq, sr); }
-    label_set(room30, q, r, mine);
-    if !found { continue; }
-    if stencil_has_heights(st) { height_set(hz, q, r, height_get(st.sn_heights, sq, sr)); }
-    if stencil_has_labels(st) { label_set(lb, q, r, label_get(st.sn_labels, sq, sr)); }
-    for li in 0..layer_count(st.sn_layers) { layer_set_at(ly, li, q, r, layer_get_at(st.sn_layers, li, sq, sr)); }
   }
   lost = 0;
   edges30 = edgeset_new(0 - reach, 0 - reach, win, win);
