@@ -410,3 +410,54 @@ fn test_a_wall_that_closes_nothing_is_counted() {
   odd = stencil_turn(st, 1);
   assert(odd.tu_lost == stub && odd.tu_rooms == 2, "30 degrees: the stub's {stub} edges lost and told, {odd.tu_lost}; the two rooms kept");
 }
+
+// How long an inner wall is.
+fn inner_length(w: hex_draw::InnerWall) -> float {
+  sqrt((w.iw_bx - w.iw_ax) * (w.iw_bx - w.iw_ax) + (w.iw_by - w.iw_ay) * (w.iw_by - w.iw_ay)) ?? 0.0
+}
+
+// The inner walls read back as straight walls (`hex_draw::cells_inner_walls`), drawn and at every
+// turn.  The hall of two rooms has one, between rooms 0 and 1, of material 5, with its door; the
+// hall of three has three — the wall across it is two stretches, one against each room east of it,
+// and the wall between those two.  Turned `s` steps there are as many, each along one of the
+// turned axes, each as long as it was drawn to within a hex step, and the door is in one of them.
+fn test_inner_walls_read_back_straight_at_every_turn() {
+  for tee in 0..2 {
+    st = hall_stencil(5, tee == 1);
+    drawn = hex_draw::cells_inner_walls(st.sn_cells, st.sn_edges, 0);
+    want = if tee == 1 { 3 } else { 1 };
+    assert(drawn.in_rooms == 2 + tee && len(drawn.in_walls) == want && drawn.in_lost == 0, "drawn, {2 + tee} rooms: {len(drawn.in_walls)} inner walls");
+    assert(len(drawn.in_opens) == 1 && drawn.in_opens[0]!.io_kind == hex_draw::OPEN_DOOR, "drawn: its one door");
+    lengths: vector<float> = [];
+    for w in drawn.in_walls {
+      assert(w.iw_mat == INNER && w.iw_a < w.iw_b && w.iw_edges >= 6, "drawn: a wall of material 5 between two rooms, {w.iw_edges} edges");
+      lengths += [inner_length(w)];
+    }
+    lengths.sort();
+    for s in 0..12 {
+      t = stencil_turn(st, s);
+      got = hex_draw::cells_inner_walls(t.tu_stencil.sn_cells, t.tu_stencil.sn_edges, s);
+      assert(got.in_rooms == 2 + tee && got.in_lost == 0, "at {30 * s}: {got.in_rooms} rooms, {got.in_lost} lost");
+      assert(len(got.in_walls) == want, "at {30 * s}: {want} inner walls, got {len(got.in_walls)}");
+      assert(len(got.in_opens) == 1 && got.in_opens[0]!.io_kind == hex_draw::OPEN_DOOR, "at {30 * s}: the door, {len(got.in_opens)}");
+      turned: vector<float> = [];
+      for w in got.in_walls {
+        h = hex_draw::surface_heading(w.iw_surface);
+        assert(h >= 0 && hex_form::head_norm(h - s) % 3 == 0, "at {30 * s}: an inner wall along a turned axis, heading {h}");
+        assert(w.iw_mat == INNER, "at {30 * s}: of material 5");
+        turned += [inner_length(w)];
+      }
+      turned.sort();
+      for i in 0..want {
+        d = (turned[i] ?? 0.0) - (lengths[i] ?? 0.0);
+        assert(d < 1.8 && d > -1.8, "at {30 * s}: wall {i} as long as drawn to within a hex step, {turned[i] ?? 0.0} against {lengths[i] ?? 0.0}");
+      }
+      // the door's span lies on its wall
+      o = got.in_opens[0]!;
+      w = got.in_walls[o.io_wall]!;
+      (dx, dy) = hex_draw::surface_dir(w.iw_surface);
+      off = (o.io_cx - w.iw_ax) * (0.0 - dy) + (o.io_cy - w.iw_ay) * dx;
+      assert(off < 0.000001 && off > -0.000001, "at {30 * s}: the door's centre on its wall's line");
+    }
+  }
+}

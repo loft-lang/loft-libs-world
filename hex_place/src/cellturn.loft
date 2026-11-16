@@ -442,42 +442,6 @@ pub struct StencilTurn {
   pub tu_lost:    integer,
 }
 
-// The rooms of a structure: a number per inside cell, -1 outside.
-struct TurnRooms {
-  of: Labels,
-  n: integer,
-}
-
-fn rooms_of(cells: HexSet, edges: EdgeSet, walled: boolean) -> TurnRooms {
-  of = labels_new(hexset_q0(cells), hexset_r0(cells), hexset_w(cells), hexset_h(cells));
-  n = 0;
-  for r in hexset_r0(cells)..hexset_r0(cells) + hexset_h(cells) {
-    for q in hexset_q0(cells)..hexset_q0(cells) + hexset_w(cells) {
-      if !hexset_get(cells, q, r) || label_get(of, q, r) >= 0 { continue; }
-      label_set(of, q, r, n);
-      sq: vector<integer> = [q];
-      sr: vector<integer> = [r];
-      at = 0;
-      while at < len(sq) {
-        cq = sq[at] ?? 0;
-        cr = sr[at] ?? 0;
-        at += 1;
-        for d in 0..6 {
-          nq = nb_q(cq, cr, d);
-          nr = nb_r(cq, cr, d);
-          if !hexset_get(cells, nq, nr) || label_get(of, nq, nr) >= 0 { continue; }
-          if walled && edge_mat(edges, cq, cr, nq, nr) != 0 { continue; }
-          label_set(of, nq, nr, n);
-          sq += [nq];
-          sr += [nr];
-        }
-      }
-      n += 1;
-    }
-  }
-  TurnRooms { of: of, n: n }
-}
-
 fn turn_opening(m: integer) -> boolean { m == OPEN_DOOR || m == OPEN_WINDOW }
 
 // The most common of `mats` that is a wall's own (not a door's or a window's); the most common of
@@ -524,18 +488,13 @@ fn stencil_thirty(st: Stencil, sz: OpeningSizes) -> StencilTurn {
   }
   t30 = Turned { tn_cells: cells30, tn_pk: 0, tn_pm: 0, tn_steps: 1, tn_sx: th.sx, tn_sy: th.sy };
   // the rooms, and each room's outline in the turned frame, its walls on the lines
-  rooms = rooms_of(cells, st.sn_edges, has_e);
+  rooms = cells_rooms(cells, if has_e { st.sn_edges } else { edgeset_new(hexset_q0(cells), hexset_r0(cells), hexset_w(cells), hexset_h(cells)) });
   polys: vector<vector<(float, float)>> = [];
   areas: vector<float> = [];
-  for ri in 0..rooms.n {
-    room = hexset_chunk(hexset_q0(cells), hexset_r0(cells), hexset_w(cells), hexset_h(cells));
-    for r in hexset_r0(cells)..hexset_r0(cells) + hexset_h(cells) {
-      for q in hexset_q0(cells)..hexset_q0(cells) + hexset_w(cells) {
-        if label_get(rooms.of, q, r) == ri { hexset_set(room, q, r, true); }
-      }
-    }
+  for ri in 0..rooms.cr_n {
+    room = room_cells(cells, rooms, ri);
     poly: vector<(float, float)> = [];
-    os = if rooms.n > 1 { cells_outlines(room, th.c) } else { [] };
+    os = if rooms.cr_n > 1 { cells_outlines(room, th.c) } else { [] };
     if len(os) > 0 {
       for p in os[0]!.co_corners {
         poly += [(to_line(p.0 * th.co0 + p.1 * th.si0, th.row_x, th.off_x), to_line(-p.0 * th.si0 + p.1 * th.co0, th.row_y, th.off_y))];
@@ -563,7 +522,7 @@ fn stencil_thirty(st: Stencil, sz: OpeningSizes) -> StencilTurn {
     u = dx * th.co1 + dy * th.si1;
     v = -dx * th.si1 + dy * th.co1;
     mine = -1;
-    for ri in 0..rooms.n {
+    for ri in 0..rooms.cr_n {
       if len(polys[ri]!) < 3 || !turn_in_poly(polys[ri]!, u, v) { continue; }
       if mine < 0 || (areas[ri] ?? 0.0) < (areas[mine] ?? 0.0) { mine = ri; }
     }
@@ -585,7 +544,7 @@ fn stencil_thirty(st: Stencil, sz: OpeningSizes) -> StencilTurn {
         cq = if d < 0 { hq } else { nb_q(hq, hr, d) };
         cr = if d < 0 { hr } else { nb_r(hq, hr, d) };
         if !hexset_get(cells, cq, cr) { continue; }
-        if pass == 0 && mine >= 0 && label_get(rooms.of, cq, cr) != mine { continue; }
+        if pass == 0 && mine >= 0 && label_get(rooms.cr_of, cq, cr) != mine { continue; }
         ex = cell_x(cq, cr) - wx;
         ey = cell_y(cq, cr) - wy;
         dist = ex * ex + ey * ey;
@@ -597,7 +556,7 @@ fn stencil_thirty(st: Stencil, sz: OpeningSizes) -> StencilTurn {
         }
       }
     }
-    if mine < 0 && found { mine = label_get(rooms.of, sq, sr); }
+    if mine < 0 && found { mine = label_get(rooms.cr_of, sq, sr); }
     label_set(room30, q, r, mine);
     if !found { continue; }
     if stencil_has_heights(st) { height_set(hz, q, r, height_get(st.sn_heights, sq, sr)); }
@@ -654,8 +613,8 @@ fn stencil_thirty(st: Stencil, sz: OpeningSizes) -> StencilTurn {
           if !hexset_get(cells, nq, nr) || nr < r || (nr == r && nq < q) { continue; }
           m = edge_mat(st.sn_edges, q, r, nq, nr);
           if m == 0 { continue; }
-          ra = label_get(rooms.of, q, r);
-          rb = label_get(rooms.of, nq, nr);
+          ra = label_get(rooms.cr_of, q, r);
+          rb = label_get(rooms.cr_of, nq, nr);
           if ra == rb {
             lost += 1;
             continue;
@@ -748,7 +707,7 @@ fn stencil_thirty(st: Stencil, sz: OpeningSizes) -> StencilTurn {
   out = if has_e { stencil_with_edges(cells30, hz, lb, edges30, stencil_has_heights(st), stencil_has_labels(st)) }
         else { stencil_from(cells30, hz, lb, stencil_has_heights(st), stencil_has_labels(st)) };
   out.sn_layers = ly;
-  StencilTurn { tu_stencil: out, tu_turn: t30, tu_rooms: rooms.n, tu_lost: lost }
+  StencilTurn { tu_stencil: out, tu_turn: t30, tu_rooms: rooms.cr_n, tu_lost: lost }
 }
 
 // @FR-HT-Pivot, @FR-HT-Turn60, @FR-HT-Turn30: a stencil turned whole
@@ -763,7 +722,7 @@ pub fn stencil_turn(st: Stencil, steps: integer, sz: OpeningSizes = opening_size
   whole = cells_turn(st.sn_cells, 0, 0, s);
   if s % 2 == 0 {
     return StencilTurn { tu_stencil: stencil_rotate(st, s / 2 ?? 0), tu_turn: whole,
-                         tu_rooms: rooms_of(st.sn_cells, st.sn_edges, stencil_has_edges(st)).n, tu_lost: 0 };
+                         tu_rooms: cells_rooms(st.sn_cells, st.sn_edges).cr_n, tu_lost: 0 };
   }
   one = stencil_thirty(st, sz);
   StencilTurn { tu_stencil: stencil_rotate(one.tu_stencil, s / 2 ?? 0), tu_turn: whole, tu_rooms: one.tu_rooms, tu_lost: one.tu_lost }

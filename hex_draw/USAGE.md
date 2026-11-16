@@ -27,6 +27,9 @@ geometry itself.
   apart on a 5 x 4 box (`tests/01-hex-draw.loft`)
 - **a door or a window on such walls** — `cells_place_opening` at a point, `cells_openings` to read them
   back as centres and spans; `opening_sizes` for the widths.  The walls are built once for any number
+- **a structure's rooms and its inner walls** — `cells_rooms` (the cells an inner wall does not let
+  you leave), `cells_inner_walls` (where two rooms meet, as straight walls on the rooms' own wall
+  lines, with the doors and windows in them); a marked edge that bounds no room is counted, not drawn
 - **the corner of two walls that are not a `Plan`'s sides** — `surface_meet`, and `surface_dir` for a wall's direction
 
 A guide that runs: [`docs/01-getting-started.loft`](docs/01-getting-started.loft); and for walls from
