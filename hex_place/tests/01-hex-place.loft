@@ -205,3 +205,23 @@ fn test_the_middle_of_a_structure() {
   (q, r) = cells_middle(turn_drawn(5, 4, 0, 16));
   assert(q == 0 && r == 0, "a house about (0, 0): its middle, got {q},{r}");
 }
+
+// A structure seated with the ground blended back: the footprint at the seat height, the lowest
+// the ground was under it answered (`seat_height`'s SEAT_LOW), the ground beside it between the
+// seat and its own height, the ground beyond the blend untouched; an empty footprint writes
+// nothing (@FR-HG-Seat).
+fn test_a_seat_blends_the_ground_round_the_footprint() {
+  cells = turn_drawn(5, 4, 0, 20);
+  terr = heights_new(-20, -20, 41, 41);
+  for r in -20..21 { for q in -20..21 { height_set(terr, q, r, 0.1 * (lattice_k(q, r) as float)); } }
+  want_low = seat_height(cells, terr, SEAT_LOW);
+  low = seat_blend(cells, terr, 2.0, 2.5, 1.5);
+  assert(low == want_low, "the lowest under the footprint: {low}, seat_height says {want_low}");
+  assert(seat_residual(cells, terr, 2.0) == 0.0, "the footprint level at the seat");
+  assert(height_get(terr, 14, 0) == 0.1 * (lattice_k(14, 0) as float), "beyond the blend: untouched");
+  beside = height_get(terr, 4, 0);
+  assert(!hexset_get(cells, 4, 0) && beside < 2.0 && beside > 0.1 * (lattice_k(4, 0) as float), "beside it: between, {beside}");
+  empty = hexset_chunk(-3, -3, 7, 7);
+  flat = heights_new(-3, -3, 7, 7);
+  assert(seat_blend(empty, flat, 5.0, 2.5, 1.5) == 5.0 && height_get(flat, 0, 0) == 0.0, "nothing to seat, nothing written");
+}

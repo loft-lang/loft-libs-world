@@ -94,3 +94,70 @@ pub fn seat_write(cells: HexSet, terr: Heights, z: float) -> integer {
   }
   n
 }
+
+// ── SEATED, AND THE GROUND ROUND IT BLENDED BACK ───────────────────────────
+//
+// `seat_write` levels the footprint and leaves a step all round it: right for a stencil whose
+// own walls go down to the ground, wrong for a house on a hillside, which stands on a levelled
+// plot the hill runs smoothly into.  `seat_blend` writes the footprint as `seat_write` does and
+// then the ground round it: from the seat height at the footprint's edge back to the ground's
+// own height `blend` away, along a smoothstep, so there is neither a step nor a crease.
+//
+// It still touches the `height` slot alone — the footprint's cells and edges are as they were —
+// and it still returns what the slope cost: the LOWEST the ground was under the footprint
+// (`seat_height(.., SEAT_LOW)`), which is where the structure's walls have to go down to.
+//
+// Distances are in the caller's unit: `step` is the distance between two neighbouring cell
+// centres in it (sqrt(3) in world units; 1.5 where a hex step is 1.5 m and heights are metres).
+// The footprint's edge is taken half a `step` out from the nearest footprint centre.
+//
+// From tile-world-game (rule HG-Seat of its `formal/hex-houses.md`).
+
+fn seat_smooth(t: float) -> float {
+  c = if t < 0.0 { 0.0 } else if t > 1.0 { 1.0 } else { t };
+  c * c * (3.0 - 2.0 * c)
+}
+
+// @FR-HG-Seat: a structure's footprint level, the ground round it blended back
+// Seat `cells` at height `z` on `terr`, the ground round them blended from `z` back to its own
+// height over `blend` from the footprint's edge.  Answers the lowest the ground was under the
+// footprint (`z` itself for an empty footprint, where nothing is written).
+pub fn seat_blend(cells: HexSet, terr: Heights, z: float, blend: float, step: float) -> float {
+  kx = step * 0.5;
+  my = step * 0.28867513459481287;
+  fx: vector<float> = [];
+  fy: vector<float> = [];
+  for r in hexset_r0(cells)..hexset_r0(cells) + hexset_h(cells) {
+    for q in hexset_q0(cells)..hexset_q0(cells) + hexset_w(cells) {
+      if hexset_get(cells, q, r) {
+        fx += [(lattice_k(q, r) as float) * kx];
+        fy += [(lattice_m(q, r) as float) * my];
+      }
+    }
+  }
+  if len(fx) == 0 { return z; }
+  low = seat_height(cells, terr, SEAT_LOW);
+  seat_write(cells, terr, z);
+  // the window round the footprint the blend reaches: rows lie 3 * my apart
+  pad = (ceil((blend / (3.0 * my)) ?? 0.0) as integer) + 2;
+  for r in hexset_r0(cells) - pad..hexset_r0(cells) + hexset_h(cells) + pad {
+    for q in hexset_q0(cells) - pad..hexset_q0(cells) + hexset_w(cells) + pad {
+      if hexset_get(cells, q, r) { continue; }
+      x = (lattice_k(q, r) as float) * kx;
+      y = (lattice_m(q, r) as float) * my;
+      near = 1000000.0;
+      for i in 0..len(fx) {
+        dx = (fx[i] ?? 0.0) - x;
+        dy = (fy[i] ?? 0.0) - y;
+        fd = dx * dx + dy * dy;
+        if fd < near { near = fd; }
+      }
+      d = (sqrt(near) ?? 0.0) - kx;
+      if d >= blend { continue; }
+      t = seat_smooth((d / blend) ?? 1.0);
+      own = height_get(terr, q, r);
+      height_set(terr, q, r, z + (own - z) * t);
+    }
+  }
+  low
+}

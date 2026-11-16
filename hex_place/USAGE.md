@@ -21,6 +21,7 @@ slot alone, so its footprint is untouched. Arbitration fails safe toward solid.
 - **combine two stencils order-free** — `combine_cut · shared_marked · field_union`
 - **combine per level** — `combine_cut_level · kappa_at_level`
 - **seat a stencil on terrain** — `seat_height · seat_residual · seat_write` with `SEAT_LOW / SEAT_MEAN / SEAT_HIGH`
+- **seat it and blend the ground round it** — `seat_blend`: no step at the footprint's edge, the lowest ground under it answered
 - **turn a structure by any number of 30° steps** — `cells_turn` (a `Turned`: the cells, and the offset
   an odd step moved them by), `turned_point` for anything standing on it, `marked_turn` to carry its
   doors and windows, `cells_middle` for a pivot.  60° steps are exact; an odd step is approximate and
