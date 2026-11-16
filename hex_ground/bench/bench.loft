@@ -40,6 +40,8 @@ const HALF = 48;
 const WIN = 97;
 const TERRACES = 3;
 const READS = 4;
+const DIGS = 3;
+const CLIFFS = 3;
 
 /// FNV-1a-32 over the low 32 bits of each integer, high byte first.
 fn fnv(h0: integer, v: const vector<integer>) -> integer {
@@ -152,6 +154,130 @@ fn bench_read(n: integer) -> Row {
         hash: fnv(FNV_OFFSET, read_op(br_g, 0)), sink: br_sink }
 }
 
+// ── ground_dig: a winding bed dug, its bank along its straight sides ─
+
+/// A bed five cells wide across the window, stepping over by a row every nine cells, moved
+/// `shift` columns east.
+fn bed(shift: integer) -> HexSet {
+  be_s = hexset_chunk(0 - HALF, 0 - HALF, WIN, WIN);
+  for be_q in -36..37 {
+    be_off = ((be_q + 45) / 9) % 3;
+    for be_r in 0..5 { hexset_set(be_s, be_q + shift, be_off - 2 + be_r, true); }
+  }
+  be_s
+}
+
+/// The bed dug into fresh ground DIGS times; the last ground's heights summed row by row.
+fn dig_op(cells: HexSet) -> vector<integer> {
+  do_ints: vector<integer> = [0];
+  do_m = ground_measures(2.6, 6.0, 2.5, 2.5);
+  for dj in 0..DIGS {
+    do_g = ground_new(0 - HALF, 0 - HALF, WIN, WIN, 1.5, 0);
+    ground_dig(do_g, cells, 2.0, do_m);
+    do_ints[0] += micro(height_get(do_g.gr_heights, dj, 2));
+    if dj == DIGS - 1 {
+      for do_r in 0 - HALF..HALF + 1 {
+        do_sum = 0.0;
+        for do_q in 0 - HALF..HALF + 1 { do_sum += height_get(do_g.gr_heights, do_q, do_r); }
+        do_ints += [micro(do_sum)];
+      }
+    }
+  }
+  do_ints
+}
+
+fn bench_dig(n: integer) -> Row {
+  bd_c0 = bed(0);
+  bd_c1 = bed(1);
+  bd_t0 = ticks();
+  bd_sink = 0;
+  for r in 0..n {
+    if (r & 1) == 0 { bd_sink += dig_op(bd_c0)[0]?; } else { bd_sink += dig_op(bd_c1)[0]?; }
+  }
+  bd_us = ticks() - bd_t0;
+  Row { name: "ground_dig", iters: n, us: bd_us, px: DIGS * WIN * WIN,
+        hash: fnv(FNV_OFFSET, dig_op(bd_c0)), sink: bd_sink }
+}
+
+// ── ground_cliffs: the straight sides of each level, inside the areas ─
+
+/// Three levels over the window: the ground a level up east of doubled column `front`, and a
+/// level up again on a hall about the middle.
+fn terrace_levels(front: integer) -> Labels {
+  tl_l = labels_new(0 - HALF, 0 - HALF, WIN, WIN);
+  for tl_r in 0 - HALF..HALF + 1 {
+    for tl_q in 0 - HALF..HALF + 1 {
+      tl_k = lattice_k(tl_q, tl_r);
+      tl_m = lattice_m(tl_q, tl_r);
+      tl_v = 0;
+      if tl_k >= front { tl_v += 1; }
+      if tl_k >= -30 && tl_k <= 30 && tl_m * tl_m <= 300 { tl_v += 1; }
+      label_set(tl_l, tl_q, tl_r, tl_v);
+    }
+  }
+  tl_l
+}
+
+/// The cliffs of the levels inside two areas, CLIFFS times; the last time's stretches.
+fn cliff_op(levels: Labels) -> vector<integer> {
+  co_ints: vector<integer> = [0];
+  co_areas = [GroundBox { gb_x0: -30.0, gb_y0: -30.0, gb_x1: 10.0, gb_y1: 40.0 },
+              GroundBox { gb_x0: 0.0, gb_y0: -50.0, gb_x1: 60.0, gb_y1: 0.0 }];
+  for cj in 0..CLIFFS {
+    co_cs = ground_cliffs(levels, 0 - HALF, 0 - HALF, WIN, WIN, 0, 2, co_areas, 1.5);
+    co_ints[0] += len(co_cs);
+    if cj == CLIFFS - 1 {
+      for c in co_cs { co_ints += [c.gc_level, micro(c.gc_ax), micro(c.gc_ay), micro(c.gc_bx), micro(c.gc_by)]; }
+    }
+  }
+  co_ints
+}
+
+fn bench_cliffs(n: integer) -> Row {
+  bc_l0 = terrace_levels(-10);
+  bc_l1 = terrace_levels(-8);
+  bc_t0 = ticks();
+  bc_sink = 0;
+  for r in 0..n {
+    if (r & 1) == 0 { bc_sink += cliff_op(bc_l0)[0]?; } else { bc_sink += cliff_op(bc_l1)[0]?; }
+  }
+  bc_us = ticks() - bc_t0;
+  Row { name: "ground_cliffs", iters: n, us: bc_us, px: CLIFFS * 2 * WIN * WIN,
+        hash: fnv(FNV_OFFSET, cliff_op(bc_l0)), sink: bc_sink }
+}
+
+// ── ground_height_on: one side of a cliff read at a grid of points ──
+
+/// The hilly ground read on one side of the level-1 cliff — the high side and the low side
+/// turn about — at 120 x 120 points, READS times; the last pass summed row by row.
+fn on_op(g: Ground, levels: Labels, shift: integer) -> vector<integer> {
+  oo_ints: vector<integer> = [0];
+  oo_off = (shift as float) * 0.25;
+  for oj in 0..READS {
+    for oo_j in 0..120 {
+      oo_sum = 0.0;
+      for oo_i in 0..120 {
+        oo_sum += ground_height_on(g, levels, -22.0 + oo_off + (oo_i as float) * 0.37, -21.0 + (oo_j as float) * 0.37, 1,
+                                   ((oo_i + oo_j) & 1) == 0, 2.6);
+      }
+      if oj == READS - 1 { oo_ints += [micro(oo_sum)]; }
+      if oo_j == 60 { oo_ints[0] += micro(oo_sum); }
+    }
+  }
+  oo_ints
+}
+
+fn bench_on(n: integer) -> Row {
+  bn_g = hilly();
+  bn_l = terrace_levels(-10);
+  bn_t0 = ticks();
+  bn_sink = 0;
+  for r in 0..n { bn_sink += on_op(bn_g, bn_l, r & 1)[0]?; }
+  bn_us = ticks() - bn_t0;
+  Row { name: "ground_height_on", iters: n, us: bn_us, px: READS * 120 * 120,
+        hash: fnv(FNV_OFFSET, on_op(bn_g, bn_l, 0)), sink: bn_sink }
+}
+
 fn main() {
   mn_n = 20;
   mn_args = arguments();
@@ -166,7 +292,8 @@ fn main() {
   if mn_n < 1 { mn_n = 1; }
   mn_t0 = ticks();
   println("routine\titers\tus\tns_op\tpx\tns_px\thash");
-  mn_rows: vector<Row> = [bench_terraces(mn_n), bench_read(mn_n)];
+  mn_rows: vector<Row> = [bench_terraces(mn_n), bench_read(mn_n), bench_dig(mn_n), bench_cliffs(mn_n),
+                          bench_on(mn_n)];
   mn_sink = 0;
   for row in mn_rows {
     print_row(row);
