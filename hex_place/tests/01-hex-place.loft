@@ -50,3 +50,158 @@ fn test_arbitration_is_fail_safe_toward_solid() {
   assert(arb_solid(false, true), "gap over solid is solid");
   assert(!arb_solid(false, false), "gap over gap is gap");
 }
+
+// ── hexturn: a structure turned by any number of 30-degree steps ────────────
+
+// Is `p` (a coordinate along heading `head`, scaled) between the lines `lo` and `hi` half steps out?
+fn turn_between(head: integer, p: integer, lo: integer, hi: integer) -> boolean {
+  if hex_form::head_is_edge(head) { return p >= 12 * lo && p <= 12 * hi; }
+  hex_form::sign_root3(p, -12 * lo) >= 0 && hex_form::sign_root3(p, -12 * hi) <= 0
+}
+
+// A structure drawn at 0 degrees, by exact tests: a body 2w by 2d half hex steps about cell
+// (0, 0) and, when `wing` is not 0, a wing `wing` hex steps square on the west end of its north side.
+fn turn_drawn(w: integer, d: integer, wing: integer, reach: integer) -> HexSet {
+  cells = hexset_chunk(0 - reach, 0 - reach, 2 * reach + 1, 2 * reach + 1);
+  us = hex_form::head_step(0);
+  vs = hex_form::head_step(3);
+  for r in 0 - reach..reach + 1 {
+    for q in 0 - reach..reach + 1 {
+      u = hex_form::vec_dot_4(2 * lattice_k(q, r), 2 * lattice_m(q, r), us.0, us.1);
+      v = hex_form::vec_dot_4(2 * lattice_k(q, r), 2 * lattice_m(q, r), vs.0, vs.1);
+      body = turn_between(0, u, 0 - w, w) && turn_between(3, v, 0 - d, d);
+      side = wing > 0 && turn_between(0, u, 0 - w, 0 - w + 2 * wing) && turn_between(3, v, d, d + 2 * wing);
+      if body || side { hexset_set(cells, q, r, true); }
+    }
+  }
+  cells
+}
+
+// The rules a turn keeps, on one drawn structure at all twelve steps: an even step is the
+// lattice's own turn cell for cell (@FR-HT-Turn60) with no offset; an odd step keeps the walls —
+// as many, each a quarter turn from the next, each 30 degrees on from the drawing's
+// (@FR-HT-Shape) — every cell centre clearly inside or outside them (@FR-HW-Clear), and the
+// cells it gains or loses few against the length of the walls.
+fn turn_keeps(name: text, cells: HexSet, walls: integer) {
+  drawn = hex_draw::cells_built(cells, 9, 0);
+  assert(len(drawn.cw_walls) == walls, "{name}: drawn with {walls} walls, got {len(drawn.cw_walls)}");
+  n = hexset_count(cells);
+  edges = len(drawn.cw_boundary);
+  for s in 0..12 {
+    t = cells_turn(cells, 0, 0, s);
+    if s % 2 == 0 {
+      assert(t.tn_sx == 0.0 && t.tn_sy == 0.0, "{name} at {30 * s}: an even step moves nothing");
+      assert(hexset_count(t.tn_cells) == n, "{name} at {30 * s}: as many cells");
+      for r in hexset_r0(cells)..hexset_r0(cells) + hexset_h(cells) {
+        for q in hexset_q0(cells)..hexset_q0(cells) + hexset_w(cells) {
+          if !hexset_get(cells, q, r) { continue; }
+          (tq, tr) = cell_rot(q, r, s / 2 ?? 0);
+          assert(hexset_get(t.tn_cells, tq, tr), "{name} at {30 * s}: cell {q},{r} turned as the lattice turns it");
+        }
+      }
+    }
+    b = hex_draw::cells_built(t.tn_cells, 9, s);
+    assert(len(b.cw_walls) == walls, "{name} at {30 * s}: its {walls} walls kept, got {len(b.cw_walls)}");
+    for i in 0..walls {
+      w = b.cw_walls[i]!;
+      nx = b.cw_walls[(i + 1) % walls ?? 0]!;
+      assert(hex_form::vec_dot_4(w.ws_dk, w.ws_dm, nx.ws_dk, nx.ws_dm) == 0, "{name} at {30 * s} wall {i}: square to the next");
+      assert(hex_form::head_norm(hex_draw::surface_heading(w) - s) % 3 == 0, "{name} at {30 * s} wall {i}: along the turned axes");
+    }
+    gained = hexset_count(t.tn_cells) - n;
+    if gained < 0 { gained = 0 - gained; }
+    assert(gained <= edges / 2 ?? 0, "{name} at {30 * s}: {gained} cells gained or lost, the boundary {edges} edges");
+    // every centre clearly in or out: no centre within 0.2 of a wall's line between its corners
+    for r in hexset_r0(t.tn_cells)..hexset_r0(t.tn_cells) + hexset_h(t.tn_cells) {
+      for q in hexset_q0(t.tn_cells)..hexset_q0(t.tn_cells) + hexset_w(t.tn_cells) {
+        x = hex_form::cell_x(q, r);
+        y = hex_form::cell_y(q, r);
+        for i in 0..walls {
+          w = b.cw_walls[i]!;
+          (dx, dy) = hex_draw::surface_dir(w);
+          a = b.cw_corners[(i + walls - 1) % walls ?? 0] ?? (0.0, 0.0);
+          c = b.cw_corners[i] ?? (0.0, 0.0);
+          along = (x - a.0) * dx + (y - a.1) * dy;
+          len_w = (c.0 - a.0) * dx + (c.1 - a.1) * dy;
+          across = (x - a.0) * (0.0 - dy) + (y - a.1) * dx;
+          if across < 0.0 { across = 0.0 - across; }
+          assert(along < 0.0 || along > len_w || across > 0.2, "{name} at {30 * s}: cell {q},{r} lies on wall {i} ({across})");
+        }
+      }
+    }
+    // a point carried through the turn: the pivot stays but for the odd step's offset, and a
+    // point's distance from the pivot's image is kept
+    px = hex_form::cell_x(0, 0);
+    py = hex_form::cell_y(0, 0);
+    (ox, oy) = turned_point(t, px, py);
+    (qx, qy) = turned_point(t, px + 3.0, py + 4.0);
+    d = sqrt((qx - ox) * (qx - ox) + (qy - oy) * (qy - oy));
+    assert(d > 4.999999 && d < 5.000001, "{name} at {30 * s}: a point 5 from the pivot stays 5 from it ({d})");
+    moved = sqrt((ox - px) * (ox - px) + (oy - py) * (oy - py));
+    assert(moved < 1.0, "{name} at {30 * s}: the structure moved by under a row ({moved})");
+  }
+}
+
+fn test_a_house_turns_at_every_step() { turn_keeps("a 5 x 4 house", turn_drawn(5, 4, 0, 16), 4); }
+
+fn test_an_ell_turns_at_every_step() { turn_keeps("an L", turn_drawn(7, 4, 3, 22), 6); }
+
+// At size: a hall of 1 499 cells, its walls 62 and 78 edges long.
+fn test_a_hall_turns_at_every_step() { turn_keeps("a 40 x 32 hall", turn_drawn(40, 32, 0, 60), 4); }
+
+// Doors and windows through a turn: twelve of them round a hall, at every step as many, each on
+// the wall that is its wall turned, its kind kept (@FR-HO-Turn60, @FR-HO-Turn30); a 60-degree
+// step turns the very edges (the marks are `stencil_rotate`'s, which turns edges with cells).
+fn test_openings_come_through_a_turn() {
+  cells = turn_drawn(20, 14, 0, 40);
+  drawn = hex_draw::cells_built(cells, 9, 0);
+  sz = hex_draw::opening_sizes_default();
+  d = Marked { mk_cells: cells, mk_marks: hex_draw::cells_no_marks(cells) };
+  placed = 0;
+  for i in 0..4 {
+    a = drawn.cw_corners[(i + 3) % 4 ?? 0] ?? (0.0, 0.0);
+    b = drawn.cw_corners[i] ?? (0.0, 0.0);
+    for j in 1..4 {
+      f = (j as float) * 0.25;
+      kind = if j == 2 { hex_draw::OPEN_DOOR } else { hex_draw::OPEN_WINDOW };
+      if hex_draw::cells_place_opening(drawn, d.mk_marks, kind, a.0 + (b.0 - a.0) * f, a.1 + (b.1 - a.1) * f, sz) { placed += 1; }
+    }
+  }
+  before = hex_draw::cells_openings(drawn.cw_boundary, drawn.cw_runs, drawn.cw_walls, d.mk_marks, sz);
+  assert(placed == 12 && len(before) == 12, "twelve openings drawn, got {len(before)}");
+  for s in 0..12 {
+    t = marked_turn(d, 0, 0, s, TURN_BY_WALLS, 0, sz);
+    b = hex_draw::cells_built(t.mk_cells, 9, s);
+    after = hex_draw::cells_openings(b.cw_boundary, b.cw_runs, b.cw_walls, t.mk_marks, sz);
+    assert(len(after) == 12, "at {30 * s}: twelve openings still, got {len(after)}");
+    doors = 0;
+    per: vector<integer> = [0, 0, 0, 0];
+    for o in after {
+      if o.op_kind == hex_draw::OPEN_DOOR { doors += 1; }
+      per[o.op_wall] += 1;
+    }
+    assert(doors == 4, "at {30 * s}: four doors, got {doors}");
+    assert(per == [3, 3, 3, 3], "at {30 * s}: three openings a wall, got {per}");
+    if s % 2 == 0 {
+      marked = 0;
+      for o in before {
+        for ei in o.op_edges {
+          e = drawn.cw_boundary[ei]!;
+          (qa, ra) = cell_rot(e.we_qa, e.we_ra, s / 2 ?? 0);
+          (qb, rb) = cell_rot(e.we_qb, e.we_rb, s / 2 ?? 0);
+          assert(edge_mat(t.mk_marks, qa, ra, qb, rb) == o.op_kind, "at {30 * s}: each marked edge turned with its cells");
+          marked += 1;
+        }
+      }
+      total = 0;
+      for o in after { total += len(o.op_edges); }
+      assert(total == marked, "at {30 * s}: and no edge more ({total} against {marked})");
+    }
+  }
+}
+
+// The pivot when none is given: the cell nearest the structure's middle.
+fn test_the_middle_of_a_structure() {
+  (q, r) = cells_middle(turn_drawn(5, 4, 0, 16));
+  assert(q == 0 && r == 0, "a house about (0, 0): its middle, got {q},{r}");
+}

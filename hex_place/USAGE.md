@@ -21,6 +21,10 @@ slot alone, so its footprint is untouched. Arbitration fails safe toward solid.
 - **combine two stencils order-free** — `combine_cut · shared_marked · field_union`
 - **combine per level** — `combine_cut_level · kappa_at_level`
 - **seat a stencil on terrain** — `seat_height · seat_residual · seat_write` with `SEAT_LOW / SEAT_MEAN / SEAT_HIGH`
+- **turn a structure by any number of 30° steps** — `cells_turn` (a `Turned`: the cells, and the offset
+  an odd step moved them by), `turned_point` for anything standing on it, `marked_turn` to carry its
+  doors and windows, `cells_middle` for a pivot.  60° steps are exact; an odd step is approximate and
+  says by how much — `hex_field::stencil_rotate_deg` still refuses it, being the exact routine
 - **arbitrate overlapping solids** — `arb_solid` (fail-safe toward solid) · `arb_owner` (lowest id, `-1` for none)
 
 A guide that runs: [`docs/01-getting-started.loft`](docs/01-getting-started.loft).

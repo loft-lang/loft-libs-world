@@ -1,0 +1,394 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// hexturn — A STRUCTURE TURNED BY ANY NUMBER OF 30-DEGREE STEPS.
+//
+// `hex_field::stencil_rotate` turns a stencil by 60 degrees, exactly: a 60-degree turn is a
+// symmetry of the lattice.  `stencil_rotate_deg` REFUSES anything else, and it is right to: an
+// exact routine must not round.  But a house is drawn at twelve angles, not six, and half of
+// them are no symmetry of the lattice at all.  This is the routine for those — approximate, and
+// named as such:
+//
+//   an even step   every cell turned about the pivot (`lattice_turned`).  Exact.
+//   an odd step    not exact.  The structure's drawn WALLS (`hex_draw::cells_built`) are turned
+//                  30 degrees, each moved to the nearest line a wall can stand on in the turned
+//                  lattice — midway between two rows of cell centres — and every cell inside
+//                  joins (`TURN_BY_WALLS`).  Then the remaining 60-degree steps.
+//
+// What an odd step cannot keep exactly it REPORTS: the structure may move by half a row along
+// either axis to bring its walls nearest their lines, and that offset comes back with the cells
+// (`Turned`), so anything standing on the structure — a door, a yard, a bush on its roof — can
+// be carried through the same turn (`turned_point`).
+//
+// What it asks of a structure: one piece without a courtyard, its walls along two axes at a
+// right angle, big enough for its cells to carry its walls.  Turn from the drawing each time,
+// never from an earlier turn: two odd steps are two approximations.
+//
+// It reads nothing but the cells, so it does not matter which way the structure was drawn, or
+// how.  Extracted from tile-world-game, whose rules these routines keep and cite by name
+// (`@FR-HT-…`, `@FR-HO-…`, its `formal/hex-houses.md`).
+use hex_field::*;
+use hex_form::*;
+use hex_draw::*;
+
+// The ways an odd step of 30 degrees is made.  `TURN_BY_WALLS` is the one to use; the other moves
+// the outline as a whole until it holds as many cells as the drawing, and is kept to compare.
+pub const TURN_BY_WALLS = 0;
+pub const TURN_BY_OUTLINE = 1;
+
+// The spacing of the lines a wall can stand on, across the rows of hex centres, in world units:
+// rows across an odd heading lie 1.5 units apart, across an even heading sqrt(3)/2 units; a wall
+// stands midway between two rows.
+pub const TURN_ROW_ODD = 1.5;
+pub const TURN_ROW_EVEN = 0.8660254037844386;
+
+// A structure turned: its cells (a new set round the pivot), the pivot's centre in doubled
+// coordinates, the steps turned (0..11), and how far an odd step moved the structure — its
+// offset in world units, taken after its own 30 degrees and before the remaining 60-degree
+// steps.  Zero for an even number of steps.
+pub struct Turned {
+  pub tn_cells: HexSet,
+  pub tn_pk:    integer,
+  pub tn_pm:    integer,
+  pub tn_steps: integer,
+  pub tn_sx:    float,
+  pub tn_sy:    float,
+}
+
+// A cell as an offset from the pivot cell, in doubled coordinates.
+struct TurnOffset {
+  dk: integer,
+  dm: integer,
+}
+
+// @FR-HT-Pivot, @FR-HT-Turn60, @FR-HT-Drawing: whole 30-degree steps about a cell; 60-degree steps cell for cell
+// `cells` turned by `steps` x 30 degrees anticlockwise about cell (pq, pr).
+pub fn cells_turn(cells: HexSet, pq: integer, pr: integer, steps: integer,
+                  way: integer = TURN_BY_WALLS) -> Turned {
+  s = ((steps % 12) + 12) % 12 ?? 0;
+  r = turn_reach(cells, pq, pr);
+  pk = lattice_k(pq, pr);
+  pm = lattice_m(pq, pr);
+  sx = 0.0;
+  sy = 0.0;
+  base: vector<TurnOffset> = [];
+  if s % 2 == 1 {
+    t = turn_thirty(cells, pq, pr, r, way);
+    base = t.offsets;
+    sx = t.sx;
+    sy = t.sy;
+  } else {
+    base = turn_offsets(cells, pk, pm);
+  }
+  out = hexset_chunk(pq - r, pr - r, 2 * r + 1, 2 * r + 1);
+  for o in base {
+    (k, m) = lattice_turned(o.dk, o.dm, s / 2 ?? 0);
+    (q, rr) = lattice_to_cell(pk + k, pm + m);
+    hexset_set(out, q, rr, true);
+  }
+  Turned { tn_cells: out, tn_pk: pk, tn_pm: pm, tn_steps: s, tn_sx: sx, tn_sy: sy }
+}
+
+// Where the point (x, y) of the drawn structure lands in the turn `t`: turned about the pivot,
+// and moved by the offset an odd step moved the structure by.  For anything placed on a
+// structure that turns with it.  A few multiplications: the turn itself is not done again.
+pub fn turned_point(t: const Turned, x: float, y: float) -> (float, float) {
+  px = (t.tn_pk as float) * 0.8660254037844386;
+  py = (t.tn_pm as float) * 0.5;
+  a = (t.tn_steps as float) * PI / 6.0;
+  rest = ((t.tn_steps / 2 ?? 0) as float) * PI / 3.0;
+  // the odd step's offset is taken after its own 30 degrees and before the remaining 60-degree steps
+  dx = (x - px) * cos(a) - (y - py) * sin(a) + (t.tn_sx * cos(rest) - t.tn_sy * sin(rest));
+  dy = (x - px) * sin(a) + (y - py) * cos(a) + (t.tn_sx * sin(rest) + t.tn_sy * cos(rest));
+  (px + dx, py + dy)
+}
+
+// The structure's cell nearest its middle (the mean of its centres): a pivot to turn it about
+// when none is given.
+pub fn cells_middle(cells: HexSet) -> (integer, integer) {
+  all = turn_offsets(cells, 0, 0);
+  n = len(all);
+  if n == 0 { return (0, 0); }
+  sk = 0;
+  sm = 0;
+  for c in all {
+    sk += c.dk;
+    sm += c.dm;
+  }
+  best = 0;
+  best_d = -1;
+  for i in 0..n {
+    // 4n^2 x the squared world distance to the mean, exact
+    ek = all[i].dk * n - sk;
+    em = all[i].dm * n - sm;
+    d = 3 * ek * ek + em * em;
+    if best_d < 0 || d < best_d { best = i; best_d = d; }
+  }
+  lattice_to_cell(all[best]!.dk, all[best]!.dm)
+}
+
+// The structure's cells as offsets from doubled coordinates (pk, pm).
+fn turn_offsets(cells: HexSet, pk: integer, pm: integer) -> vector<TurnOffset> {
+  out: vector<TurnOffset> = [];
+  for fr in hexset_r0(cells)..hexset_r0(cells) + hexset_h(cells) {
+    for fq in hexset_q0(cells)..hexset_q0(cells) + hexset_w(cells) {
+      if hexset_get(cells, fq, fr) {
+        out += [TurnOffset { dk: lattice_k(fq, fr) - pk, dm: lattice_m(fq, fr) - pm }];
+      }
+    }
+  }
+  out
+}
+
+// How far round the pivot the structure, turned any way, can reach: a window for it.
+fn turn_reach(cells: HexSet, pq: integer, pr: integer) -> integer {
+  r = 0;
+  for fr in hexset_r0(cells)..hexset_r0(cells) + hexset_h(cells) {
+    for fq in hexset_q0(cells)..hexset_q0(cells) + hexset_w(cells) {
+      if hexset_get(cells, fq, fr) {
+        dq = if fq > pq { fq - pq } else { pq - fq };
+        dr = if fr > pr { fr - pr } else { pr - fr };
+        if dq + dr > r { r = dq + dr; }
+      }
+    }
+  }
+  r + 3
+}
+
+// One odd step of 30 degrees: the structure's offsets from the pivot once turned 30 degrees,
+// and the offset it was moved by.
+struct TurnThirty {
+  offsets: vector<TurnOffset>,
+  sx: float,
+  sy: float,
+}
+
+// @FR-HT-Turn30: one odd step, from the drawn walls
+fn turn_thirty(cells: HexSet, pq: integer, pr: integer, r: integer, way: integer) -> TurnThirty {
+  b = cells_built(cells, 1);
+  c = cells_axes(b.cw_boundary);
+  if c < 0 { c = 0; }
+  pk = lattice_k(pq, pr);
+  pm = lattice_m(pq, pr);
+  px = (pk as float) * 0.8660254037844386;
+  py = (pm as float) * 0.5;
+  // The drawn walls in the structure's own frame (along heading c and c + 3).  Turned 30 degrees,
+  // the outline keeps these coordinates in the frame along c + 1 and c + 4.
+  a0 = (c as float) * PI / 6.0;
+  co0 = cos(a0);
+  si0 = sin(a0);
+  corners: vector<(float, float)> = [for p in b.cw_corners { ((p.0 - px) * co0 + (p.1 - py) * si0, -(p.0 - px) * si0 + (p.1 - py) * co0) }];
+  row_x = if (c + 1) % 2 == 1 { TURN_ROW_ODD } else { TURN_ROW_EVEN };
+  row_y = if (c + 4) % 2 == 1 { TURN_ROW_ODD } else { TURN_ROW_EVEN };
+  // Every cell near the pivot, in the turned frame: one cosine and sine for them all.
+  a1 = ((c + 1) as float) * PI / 6.0;
+  co1 = cos(a1);
+  si1 = sin(a1);
+  ks: vector<integer> = [];
+  ms: vector<integer> = [];
+  us: vector<float> = [];
+  vs: vector<float> = [];
+  for fr in pr - r..pr + r + 1 {
+    for fq in pq - r..pq + r + 1 {
+      dk = lattice_k(fq, fr) - pk;
+      dm = lattice_m(fq, fr) - pm;
+      dx = (dk as float) * 0.8660254037844386;
+      dy = (dm as float) * 0.5;
+      ks += [dk];
+      ms += [dm];
+      us += [dx * co1 + dy * si1];
+      vs += [-dx * si1 + dy * co1];
+    }
+  }
+  poly: vector<(float, float)> = [];
+  sx = 0.0;
+  sy = 0.0;
+  if way == TURN_BY_OUTLINE {
+    poly = outline_moved(corners, us, vs, hexset_count(cells));
+  } else {
+    snap = walls_snapped(corners, row_x, row_y);
+    poly = snap.poly;
+    // the offset, along headings c + 1 and c + 4, in world units
+    sx = snap.off_x * co1 - snap.off_y * si1;
+    sy = snap.off_x * si1 + snap.off_y * co1;
+  }
+  out: vector<TurnOffset> = [];
+  for i in 0..len(ks) {
+    if turn_in_poly(poly, us[i] ?? 0.0, vs[i] ?? 0.0) { out += [TurnOffset { dk: ks[i] ?? 0, dm: ms[i] ?? 0 }]; }
+  }
+  TurnThirty { offsets: out, sx: sx, sy: sy }
+}
+
+// ── each wall to the nearest line ───────────────────────────────────────────
+
+// `x` moved to the nearest line midway between rows `row` apart, with the structure moved `off`.
+fn to_line(x: float, row: float, off: float) -> float {
+  k = floor(((x + off) / row) ?? 0.0);
+  k * row + row * 0.5
+}
+
+// @FR-HT-Turn30: the structure on its pivot or half a row beside it, per axis
+// The structure's offset along one axis, 0 or half a row: the one that moves the walls `lines`
+// least to their nearest lines.  A room centred on a row can only be an odd number of rows
+// wide, and half a row over an even number.
+fn best_offset(lines: const vector<float>, row: float) -> float {
+  best = 0.0;
+  best_err = -1.0;
+  for o in [0.0, row * 0.5] {
+    err = 0.0;
+    for x in lines { err += fabs(to_line(x, row, o) - o - x); }
+    if best_err < 0.0 || err < best_err - 0.000001 {
+      best = o;
+      best_err = err;
+    }
+  }
+  best
+}
+
+// The outline with each wall moved to the nearest line a wall can stand on (the structure moved
+// by half a row along an axis where that moves the walls less).
+struct TurnSnapped {
+  poly: vector<(float, float)>,
+  off_x: float,
+  off_y: float,
+}
+
+// @FR-HT-Near, @FR-HW-Clear: each wall to the nearest line midway between rows
+fn walls_snapped(corners: const vector<(float, float)>, row_x: float, row_y: float) -> TurnSnapped {
+  n = len(corners);
+  xs: vector<float> = [];
+  ys: vector<float> = [];
+  for i in 0..n {
+    (ax, ay) = corners[(i + n - 1) % n ?? 0] ?? (0.0, 0.0);
+    (bx, by) = corners[i] ?? (0.0, 0.0);
+    if fabs(bx - ax) > fabs(by - ay) { ys += [(ay + by) * 0.5]; } else { xs += [(ax + bx) * 0.5]; }
+  }
+  off_x = best_offset(xs, row_x);
+  off_y = best_offset(ys, row_y);
+  TurnSnapped { poly: [for p in corners { (to_line(p.0, row_x, off_x), to_line(p.1, row_y, off_y)) }],
+                off_x: off_x, off_y: off_y }
+}
+
+// ── the outline moved as a whole ────────────────────────────────────────────
+
+// The outline with its walls along each axis moved out or in by one amount (up to half a unit
+// each, in sixteenths): the pair that holds as many cells as `want`, or the nearest, moving the
+// walls least.
+fn outline_moved(corners: const vector<(float, float)>, us: const vector<float>, vs: const vector<float>,
+                 want: integer) -> vector<(float, float)> {
+  n = len(corners);
+  area2 = 0.0;
+  for i in 0..n {
+    (ax, ay) = corners[(i + n - 1) % n ?? 0] ?? (0.0, 0.0);
+    (bx, by) = corners[i] ?? (0.0, 0.0);
+    area2 += ax * by - bx * ay;
+  }
+  out_sign = if area2 > 0.0 { 1.0 } else { -1.0 };
+  best_miss = -1;
+  best_cost = 0.0;
+  best: vector<(float, float)> = [];
+  for a in 0..17 {
+    for b in 0..17 {
+      sx = ((a - 8) as float) * 0.0625 * out_sign;
+      sy = ((b - 8) as float) * 0.0625 * out_sign;
+      poly: vector<(float, float)> = [];
+      for i in 0..n {
+        (px, py) = shifted_line(corners, i, sx, sy);
+        (qx, qy) = shifted_line(corners, (i + 1) % n ?? 0, sx, sy);
+        poly += [if px > -999.0 { (px, qy) } else { (qx, py) }];
+      }
+      count = 0;
+      for c in 0..len(us) { if turn_in_poly(poly, us[c] ?? 0.0, vs[c] ?? 0.0) { count += 1; } }
+      miss = count - want;
+      if miss < 0 { miss = -miss; }
+      cost = fabs(sx) + fabs(sy);
+      if best_miss < 0 || miss < best_miss || miss == best_miss && cost < best_cost {
+        best_miss = miss;
+        best_cost = cost;
+        best = poly;
+      }
+    }
+  }
+  best
+}
+
+// Wall i of the outline moved outward: (x, -1000) for a wall along y (the line x = c), or
+// (-1000, y) for a wall along x (the line y = c).  Wall i runs from corner i - 1 to corner i,
+// the structure on its left.
+fn shifted_line(corners: const vector<(float, float)>, i: integer, sx: float, sy: float) -> (float, float) {
+  n = len(corners);
+  (ax, ay) = corners[(i + n - 1) % n ?? 0] ?? (0.0, 0.0);
+  (bx, by) = corners[i] ?? (0.0, 0.0);
+  dx = bx - ax;
+  dy = by - ay;
+  if fabs(dx) > fabs(dy) {
+    y = (ay + by) * 0.5 + (if dx > 0.0 { -sx } else { sx });
+    return (-1000.0, y);
+  }
+  x = (ax + bx) * 0.5 + (if dy > 0.0 { sy } else { -sy });
+  (x, -1000.0)
+}
+
+// Is (x, y) inside the polygon (crossings of a ray towards +x)?
+fn turn_in_poly(poly: const vector<(float, float)>, x: float, y: float) -> boolean {
+  n = len(poly);
+  inside = false;
+  for i in 0..n {
+    (x1, y1) = poly[(i + n - 1) % n ?? 0] ?? (0.0, 0.0);
+    (x2, y2) = poly[i] ?? (0.0, 0.0);
+    if (y1 > y) != (y2 > y) {
+      cx = x1 + (y - y1) * (x2 - x1) / (y2 - y1) ?? x1;
+      if x < cx { inside = !inside; }
+    }
+  }
+  inside
+}
+
+// ── doors and windows through a turn ────────────────────────────────────────
+//
+// A door or a window is marked on wall edges (`hex_draw::cellopen`).  A 60-degree step turns its
+// edges with the cells; an odd step turns its centre with the structure, offset and all, and
+// places it again on the turned wall, so it moves a little along the wall and the distances
+// between openings change a little.
+
+// A structure with the doors and windows marked on its edges.
+pub struct Marked {
+  pub mk_cells: HexSet,
+  pub mk_marks: EdgeSet,
+}
+
+// @FR-HO-Turn60, @FR-HO-Turn30: the openings carried through a turn
+// The structure turned `steps` x 30 degrees about cell (pq, pr), its doors and windows with it.
+// `hint` (a heading, -1 for none) is the drawn structure's, asked only when its cells show no
+// direction.  The walls are solved once for the drawing and once for the turned structure,
+// however many openings there are.
+pub fn marked_turn(d: Marked, pq: integer, pr: integer, steps: integer, way: integer = TURN_BY_WALLS,
+                   hint: integer = -1, sz: OpeningSizes = opening_sizes_default()) -> Marked {
+  s = ((steps % 12) + 12) % 12 ?? 0;
+  t = cells_turn(d.mk_cells, pq, pr, s, way);
+  out = Marked { mk_cells: t.tn_cells, mk_marks: cells_no_marks(t.tn_cells) };
+  drawn = cells_built(d.mk_cells, 1, hint);
+  ops = cells_openings(drawn.cw_boundary, drawn.cw_runs, drawn.cw_walls, d.mk_marks, sz);
+  if s % 2 == 0 {
+    // 60-degree steps: every marked edge turned with its two cells
+    for o in ops {
+      for i in o.op_edges {
+        e = drawn.cw_boundary[i]!;
+        (ak, am) = lattice_turned(lattice_k(e.we_qa, e.we_ra) - t.tn_pk, lattice_m(e.we_qa, e.we_ra) - t.tn_pm, s / 2 ?? 0);
+        (bk, bm) = lattice_turned(lattice_k(e.we_qb, e.we_rb) - t.tn_pk, lattice_m(e.we_qb, e.we_rb) - t.tn_pm, s / 2 ?? 0);
+        (qa, ra) = lattice_to_cell(t.tn_pk + ak, t.tn_pm + am);
+        (qb, rb) = lattice_to_cell(t.tn_pk + bk, t.tn_pm + bm);
+        edge_set_mat(out.mk_marks, qa, ra, qb, rb, o.op_kind);
+      }
+    }
+    return out;
+  }
+  // an odd step: each centre turned with the structure, offset and all, and placed again on the
+  // turned walls
+  next_hint = if hint >= 0 { hint + s } else { -1 };
+  turned = cells_built(out.mk_cells, 1, next_hint);
+  for o in ops {
+    (x, y) = turned_point(t, o.op_cx, o.op_cy);
+    cells_place_opening(turned, out.mk_marks, o.op_kind, x, y, sz);
+  }
+  out
+}

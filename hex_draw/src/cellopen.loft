@@ -1,0 +1,191 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// cellopen — DOORS AND WINDOWS ON WALLS DRAWN FROM CELLS.
+//
+// `housedraw::place_opening` marks N edges at `t` along a side of a `Plan`.  A structure known
+// only by its cells (`cellwalls`) has no sides to count and no `t`; and an opening that must
+// come through a turn of 30 degrees looking like itself cannot be "three edges", because the
+// turned wall's edges lie otherwise.  So here an opening is a KIND, a POINT and a WIDTH:
+//
+//   in the data   a material on wall edges (`OPEN_DOOR`, `OPEN_WINDOW`, as `housedraw` writes
+//                 them), never a gap: the edges stay wall, the run stays one run, and the
+//                 straight wall is solved as if the opening were not there;
+//   to the walls  a point on the wall's line, its centre — the mean of its edges' midpoints,
+//                 taken onto the line — and a span about it of its kind's one width, the same
+//                 on every wall at every angle, so one door mesh fits everywhere.
+//
+// `cells_place_opening` goes from a point to marked edges; `cells_openings` from marked edges
+// back to centres and spans.  Extracted from tile-world-game, whose rules these keep and cite by
+// name (`@FR-HO-…`, its `formal/hex-houses.md`).
+use hex_field::*;
+use hex_form::*;
+use hexsurf::*;
+use cellwalls::*;
+use housedraw::*;
+
+// The measurements openings are placed and drawn with, in world units: a door's and a window's
+// width, and how far an opening's edge keeps from its wall's corner.
+pub struct OpeningSizes {
+  pub os_door:   float,
+  pub os_window: float,
+  pub os_corner: float,
+}
+
+// The three measurements, in world units (one unit is 0.866 m).
+pub fn opening_sizes(door: float, window: float, corner: float) -> OpeningSizes {
+  OpeningSizes { os_door: door, os_window: window, os_corner: corner }
+}
+
+// A door and a window one unit wide (one hex edge, 0.87 m), an opening's edge sqrt(3)/2 unit
+// from the corner.
+pub fn opening_sizes_default() -> OpeningSizes { opening_sizes(1.0, 1.0, 0.8660254037844386) }
+
+// The width an opening of `kind` is drawn at: a door's for `OPEN_DOOR`, a window's for any other.
+pub fn opening_size(kind: integer, sz: OpeningSizes) -> float {
+  if kind == OPEN_DOOR { sz.os_door } else { sz.os_window }
+}
+
+// A door or a window on a built structure: its kind, the wall it is in (an index into the
+// structure's walls), its edges (indices into the boundary, in order along the wall), its centre
+// on the wall's line and the span it is drawn over, from a to b, in world units.
+pub struct CellOpening {
+  pub op_kind:  integer,
+  pub op_wall:  integer,
+  pub op_edges: vector<integer>,
+  pub op_cx:    float,
+  pub op_cy:    float,
+  pub op_ax:    float,
+  pub op_ay:    float,
+  pub op_bx:    float,
+  pub op_by:    float,
+}
+
+// The opening on wall `wi` over the edges `group`: its centre where its edges' midpoints fall on
+// the wall's line, and its span, its kind's width about that centre.
+fn opening_over(b: const vector<WallEdge>, w: WallSurface, wi: integer, kind: integer,
+                group: const vector<integer>, sz: OpeningSizes) -> CellOpening {
+  px = 0.0;
+  py = 0.0;
+  for i in group {
+    e = b[i]!;
+    px += ((e.we_ak + e.we_bk) as float) * 0.5 * 0.8660254037844386;
+    py += ((e.we_am + e.we_bm) as float) * 0.25;
+  }
+  n = len(group) as float;
+  px = (px / n) ?? 0.0;
+  py = (py / n) ?? 0.0;
+  mx = surface_mean_x(w);
+  my = surface_mean_y(w);
+  (dx, dy) = surface_dir(w);
+  t = (px - mx) * dx + (py - my) * dy;
+  cx = mx + t * dx;
+  cy = my + t * dy;
+  half = opening_size(kind, sz) * 0.5;
+  CellOpening { op_kind: kind, op_wall: wi, op_edges: group, op_cx: cx, op_cy: cy,
+                op_ax: cx - half * dx, op_ay: cy - half * dy, op_bx: cx + half * dx, op_by: cy + half * dy }
+}
+
+// @FR-HO-Point: the walls are solved first, the openings are points on them
+// The openings `marks` holds on the walls of a structure (its boundary, runs and walls, as
+// `cells_built` gives them): along each wall's run, each stretch of edges marked with one kind
+// (`OPEN_DOOR` or `OPEN_WINDOW`) is one opening.
+pub fn cells_openings(b: const vector<WallEdge>, rs: const vector<vector<integer>>,
+                      walls: const vector<WallSurface>, marks: EdgeSet, sz: OpeningSizes) -> vector<CellOpening> {
+  out: vector<CellOpening> = [];
+  for wi in 0..len(rs) {
+    run = rs[wi]!;
+    i = 0;
+    while i < len(run) {
+      e = b[run[i] ?? 0]!;
+      kind = edge_mat(marks, e.we_qa, e.we_ra, e.we_qb, e.we_rb);
+      if kind != OPEN_DOOR && kind != OPEN_WINDOW {
+        i += 1;
+        continue;
+      }
+      group: vector<integer> = [];
+      while i < len(run) {
+        f = b[run[i] ?? 0]!;
+        if edge_mat(marks, f.we_qa, f.we_ra, f.we_qb, f.we_rb) != kind { break; }
+        group += [run[i] ?? 0];
+        i += 1;
+      }
+      out += [opening_over(b, walls[wi]!, wi, kind, group, sz)];
+    }
+  }
+  out
+}
+
+fn open_min(a: float, b: float) -> float { if a < b { a } else { b } }
+fn open_max(a: float, b: float) -> float { if a > b { a } else { b } }
+
+// @FR-HO-Place: an opening at a point marks the nearest wall's edges within half its width
+// Mark an opening of `kind` in `marks` at the point (x, y) (world units) of the built structure
+// `cw`: on the wall nearest the point, its centre where the point falls along the wall, kept
+// clear of the wall's ends by half the opening's width and the corner clearance; the edges of
+// that wall whose midpoints, along it, lie within half the opening's width of the centre, or the
+// nearest one when none does.  False when the structure has no wall.
+//
+// The walls do not depend on the marks, so one `cells_built` serves any number of openings.
+pub fn cells_place_opening(cw: const CellWalls, marks: EdgeSet, kind: integer, x: float, y: float,
+                           sz: OpeningSizes) -> boolean {
+  n = len(cw.cw_walls);
+  best = -1;
+  best_d = 0.0;
+  best_t = 0.0;
+  best_lo = 0.0;
+  best_hi = 0.0;
+  for i in 0..n {
+    w = cw.cw_walls[i]!;
+    (dx, dy) = surface_dir(w);
+    mx = surface_mean_x(w);
+    my = surface_mean_y(w);
+    (ax, ay) = cw.cw_corners[(i + n - 1) % n ?? 0] ?? (0.0, 0.0);
+    (bx, by) = cw.cw_corners[i] ?? (0.0, 0.0);
+    t0 = (ax - mx) * dx + (ay - my) * dy;
+    t1 = (bx - mx) * dx + (by - my) * dy;
+    lo = open_min(t0, t1);
+    hi = open_max(t0, t1);
+    t = (x - mx) * dx + (y - my) * dy;
+    across = fabs((x - mx) * -dy + (y - my) * dx);
+    beyond = if t < lo { lo - t } else if t > hi { t - hi } else { 0.0 };
+    dist = across + beyond;
+    if best < 0 || dist < best_d {
+      best = i;
+      best_d = dist;
+      best_t = t;
+      best_lo = lo;
+      best_hi = hi;
+    }
+  }
+  if best < 0 { return false; }
+  half = opening_size(kind, sz) * 0.5;
+  // half its width, and the corner clearance
+  clear = half + sz.os_corner;
+  t = best_t;
+  if best_lo + clear > best_hi - clear { t = (best_lo + best_hi) * 0.5; }
+  else { t = open_min(open_max(t, best_lo + clear), best_hi - clear); }
+  w = cw.cw_walls[best]!;
+  (dx, dy) = surface_dir(w);
+  mx = surface_mean_x(w);
+  my = surface_mean_y(w);
+  picks: vector<integer> = [];
+  nearest = -1;
+  near_d = 0.0;
+  for i in cw.cw_runs[best] ?? [] {
+    e = cw.cw_boundary[i]!;
+    ex = ((e.we_ak + e.we_bk) as float) * 0.5 * 0.8660254037844386;
+    ey = ((e.we_am + e.we_bm) as float) * 0.25;
+    off = fabs((ex - mx) * dx + (ey - my) * dy - t);
+    if off <= half + 0.000000001 { picks += [i]; }
+    if nearest < 0 || off < near_d {
+      nearest = i;
+      near_d = off;
+    }
+  }
+  if len(picks) == 0 { picks = [nearest]; }
+  for i in picks {
+    e = cw.cw_boundary[i]!;
+    edge_set_mat(marks, e.we_qa, e.we_ra, e.we_qb, e.we_rb, kind);
+  }
+  true
+}
