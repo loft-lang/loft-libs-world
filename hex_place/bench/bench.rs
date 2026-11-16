@@ -16,7 +16,8 @@
 // vectors, and `combine_cut` reads the union on the fly in one fused pass over the two
 // `Vec<bool>` instead of building it first.  `black_box` guards each op's INPUT (the
 // repetition number) and the sink — never anything inside a kernel.
-// And the turn and the blended seat: `cells_turn` (by walls) and `turned_point` from
+// And the turn and the blended seat: `cells_turn` (by walls), `turned_point` and `marked_turn`
+// (with hex_draw's `cells_place_opening` and `cells_openings`) from
 // src/cellturn.loft, with hex_draw's `cells_built` and all it stands on (the boundary walked,
 // the runs, the two wall solvers, the miter); `seat_blend` from src/hexseat.loft on a plain
 // `Vec<f64>` of heights.
@@ -203,6 +204,11 @@ impl EdgeSet {
             return;
         }
         self.mat[i as usize] = mat as u8;
+    }
+
+    fn get_mat(&self, qa: i64, ra: i64, qb: i64, rb: i64) -> i64 {
+        let i = self.index(qa, ra, qb, rb);
+        if i < 0 { 0 } else { self.mat[i as usize] as i64 }
     }
 
     fn count_all(&self) -> i64 {
@@ -1085,6 +1091,234 @@ fn bench_seat(n: i64) -> Row {
     Row { name: "seat_blend", iters: n, us, px: SEATS * TURN_W * TURN_W, hash: fnv(FNV_OFFSET, &one), sink }
 }
 
+// ── cellopen.loft ───────────────────────────────────────────────────
+
+const OPEN_DOOR: i64 = 1;
+const OPEN_WINDOW: i64 = 2;
+
+/// A door's width, a window's, the corner clearance.
+struct OpeningSizes {
+    door: f64,
+    window: f64,
+    corner: f64,
+}
+
+fn opening_size(kind: i64, sz: &OpeningSizes) -> f64 {
+    if kind == OPEN_DOOR { sz.door } else { sz.window }
+}
+
+/// A surface's unit direction.
+fn surface_dir(w: &WallSurface) -> (f64, f64) {
+    let wx = w.dk as f64 * 0.8660254037844386;
+    let wy = w.dm as f64 * 0.5;
+    let ln = (wx * wx + wy * wy).sqrt();
+    (wx / ln, wy / ln)
+}
+
+#[allow(dead_code)]
+struct CellOpening {
+    kind: i64,
+    wall: usize,
+    edges: Vec<usize>,
+    c: (f64, f64),
+    a: (f64, f64),
+    b: (f64, f64),
+}
+
+/// An edge's midpoint, in world units.
+fn edge_mid(e: &WallEdge) -> (f64, f64) {
+    ((e.ak + e.bk) as f64 * 0.5 * 0.8660254037844386, (e.am + e.bm) as f64 * 0.25)
+}
+
+fn opening_over(b: &[WallEdge], w: &WallSurface, wi: usize, kind: i64, group: Vec<usize>, sz: &OpeningSizes) -> CellOpening {
+    let (mut px, mut py) = (0.0, 0.0);
+    for &i in &group {
+        let (ex, ey) = edge_mid(&b[i]);
+        px += ex;
+        py += ey;
+    }
+    let n = group.len() as f64;
+    px /= n;
+    py /= n;
+    let mx = w.mean_x();
+    let my = w.mean_y();
+    let (dx, dy) = surface_dir(w);
+    let t = (px - mx) * dx + (py - my) * dy;
+    let cx = mx + t * dx;
+    let cy = my + t * dy;
+    let half = opening_size(kind, sz) * 0.5;
+    CellOpening { kind, wall: wi, edges: group, c: (cx, cy), a: (cx - half * dx, cy - half * dy), b: (cx + half * dx, cy + half * dy) }
+}
+
+fn cells_openings(b: &[WallEdge], rs: &[Vec<usize>], walls: &[WallSurface], marks: &EdgeSet, sz: &OpeningSizes) -> Vec<CellOpening> {
+    let mut out = Vec::new();
+    for (wi, run) in rs.iter().enumerate() {
+        let mut i = 0;
+        while i < run.len() {
+            let e = b[run[i]];
+            let kind = marks.get_mat(e.qa, e.ra, e.qb, e.rb);
+            if kind != OPEN_DOOR && kind != OPEN_WINDOW {
+                i += 1;
+                continue;
+            }
+            let mut group = Vec::new();
+            while i < run.len() {
+                let f = b[run[i]];
+                if marks.get_mat(f.qa, f.ra, f.qb, f.rb) != kind {
+                    break;
+                }
+                group.push(run[i]);
+                i += 1;
+            }
+            out.push(opening_over(b, &walls[wi], wi, kind, group, sz));
+        }
+    }
+    out
+}
+
+fn cells_place_opening(cw: &CellWalls, marks: &mut EdgeSet, kind: i64, x: f64, y: f64, sz: &OpeningSizes) -> bool {
+    let n = cw.walls.len();
+    let mut best = usize::MAX;
+    let (mut best_d, mut best_t, mut best_lo, mut best_hi) = (0.0, 0.0, 0.0, 0.0);
+    for i in 0..n {
+        let w = &cw.walls[i];
+        let (dx, dy) = surface_dir(w);
+        let mx = w.mean_x();
+        let my = w.mean_y();
+        let (ax, ay) = cw.corners[(i + n - 1) % n];
+        let (bx, by) = cw.corners[i];
+        let t0 = (ax - mx) * dx + (ay - my) * dy;
+        let t1 = (bx - mx) * dx + (by - my) * dy;
+        let lo = if t0 < t1 { t0 } else { t1 };
+        let hi = if t0 > t1 { t0 } else { t1 };
+        let t = (x - mx) * dx + (y - my) * dy;
+        let across = ((x - mx) * -dy + (y - my) * dx).abs();
+        let beyond = if t < lo { lo - t } else if t > hi { t - hi } else { 0.0 };
+        let dist = across + beyond;
+        if best == usize::MAX || dist < best_d {
+            best = i;
+            best_d = dist;
+            best_t = t;
+            best_lo = lo;
+            best_hi = hi;
+        }
+    }
+    if best == usize::MAX {
+        return false;
+    }
+    let half = opening_size(kind, sz) * 0.5;
+    let clear = half + sz.corner;
+    let t = if best_lo + clear > best_hi - clear {
+        (best_lo + best_hi) * 0.5
+    } else {
+        let up = if best_t > best_lo + clear { best_t } else { best_lo + clear };
+        if up < best_hi - clear { up } else { best_hi - clear }
+    };
+    let w = &cw.walls[best];
+    let (dx, dy) = surface_dir(w);
+    let mx = w.mean_x();
+    let my = w.mean_y();
+    let mut picks: Vec<usize> = Vec::new();
+    let mut nearest = usize::MAX;
+    let mut near_d = 0.0;
+    for &i in &cw.runs[best] {
+        let (ex, ey) = edge_mid(&cw.boundary[i]);
+        let off = ((ex - mx) * dx + (ey - my) * dy - t).abs();
+        if off <= half + 0.000000001 {
+            picks.push(i);
+        }
+        if nearest == usize::MAX || off < near_d {
+            nearest = i;
+            near_d = off;
+        }
+    }
+    if picks.is_empty() {
+        picks.push(nearest);
+    }
+    for &i in &picks {
+        let e = cw.boundary[i];
+        marks.set_mat(e.qa, e.ra, e.qb, e.rb, kind);
+    }
+    true
+}
+
+// ── cellturn.loft: marked_turn ──────────────────────────────────────
+
+fn no_marks(cells: &HexSet) -> EdgeSet {
+    EdgeSet::new(cells.q0 - 1, cells.r0 - 1, cells.w + 2, cells.h + 2)
+}
+
+// The structure and its marks turned: through 60-degree steps the marked edges with their cells,
+// through an odd step each opening's centre carried and placed again on the turned walls.
+fn marked_turn(cells: &HexSet, marks: &EdgeSet, pq: i64, pr: i64, steps: i64, hint: i64, sz: &OpeningSizes) -> (HexSet, EdgeSet) {
+    let s = steps.rem_euclid(12);
+    let t = cells_turn(cells, pq, pr, s);
+    let mut out = no_marks(&t.cells);
+    let drawn = cells_built(cells, 1, hint);
+    let ops = cells_openings(&drawn.boundary, &drawn.runs, &drawn.walls, marks, sz);
+    if s % 2 == 0 {
+        for o in &ops {
+            for &i in &o.edges {
+                let e = drawn.boundary[i];
+                let (ak, am) = lattice_turned(lattice_k(e.qa, e.ra) - t.pk, lattice_m(e.ra) - t.pm, s / 2);
+                let (bk, bm) = lattice_turned(lattice_k(e.qb, e.rb) - t.pk, lattice_m(e.rb) - t.pm, s / 2);
+                let (qa, ra) = lattice_to_cell(t.pk + ak, t.pm + am);
+                let (qb, rb) = lattice_to_cell(t.pk + bk, t.pm + bm);
+                out.set_mat(qa, ra, qb, rb, o.kind);
+            }
+        }
+        return (t.cells, out);
+    }
+    let next_hint = if hint >= 0 { hint + s } else { -1 };
+    let turned = cells_built(&t.cells, 1, next_hint);
+    for o in &ops {
+        let (x, y) = turned_point(&t, o.c.0, o.c.1);
+        cells_place_opening(&turned, &mut out, o.kind, x, y, sz);
+    }
+    (t.cells, out)
+}
+
+fn default_sizes() -> OpeningSizes {
+    OpeningSizes { door: 1.0, window: 1.0, corner: 0.8660254037844386 }
+}
+
+fn marked_hall(cq: i64) -> (HexSet, EdgeSet) {
+    let cells = hall(cq);
+    let b = cells_built(&cells, 1, 0);
+    let mut marks = no_marks(&cells);
+    let sz = default_sizes();
+    let n = b.walls.len();
+    for i in 0..n {
+        let a = b.corners[(i + n - 1) % n];
+        let c = b.corners[i];
+        for k in 1..4 {
+            let f = k as f64 * 0.25;
+            cells_place_opening(&b, &mut marks, if k == 2 { OPEN_DOOR } else { OPEN_WINDOW },
+                                a.0 + (c.0 - a.0) * f, a.1 + (c.1 - a.1) * f, &sz);
+        }
+    }
+    (cells, marks)
+}
+
+fn marked_op(d: &(HexSet, EdgeSet), cq: i64) -> Vec<i64> {
+    let mut ints: Vec<i64> = vec![0];
+    let sz = default_sizes();
+    for &step in &TURN_STEPS {
+        let (cells, marks) = marked_turn(&d.0, &d.1, cq, 0, step, 0, &sz);
+        ints[0] += marks.count_all();
+        ints.extend([cells.count, marks.count_all(), marks.digest()]);
+    }
+    ints
+}
+
+fn bench_marked(n: i64) -> Row {
+    let d0 = marked_hall(0);
+    let d1 = marked_hall(1);
+    let (us, sink) = timed(n, |r| if r & 1 == 0 { marked_op(&d0, 0)[0] } else { marked_op(&d1, 1)[0] });
+    let one = marked_op(black_box(&d0), 0);
+    Row { name: "marked_turn", iters: n, us, px: TURN_STEPS.len() as i64 * d0.0.count, hash: fnv(FNV_OFFSET, &one), sink }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let mut n: i64 = 20;
@@ -1101,7 +1335,7 @@ fn main() {
     }
     let t0 = Instant::now();
     println!("routine\titers\tus\tns_op\tpx\tns_px\thash");
-    let rows = [bench_cut(n), bench_union(n), bench_turn(n), bench_seat(n)];
+    let rows = [bench_cut(n), bench_union(n), bench_turn(n), bench_seat(n), bench_marked(n)];
     let mut sink = 0i64;
     for row in &rows {
         print_row(row);

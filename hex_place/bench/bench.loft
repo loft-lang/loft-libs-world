@@ -19,6 +19,7 @@
 // `sink`.
 use hex_field::*;
 use hex_form::*;
+use hex_draw::*;
 use hex_place::*;
 
 /// One measured routine.
@@ -250,6 +251,54 @@ fn bench_seat(n: integer) -> Row {
         hash: fnv(FNV_OFFSET, seat_op(bs_c0, 0)), sink: bs_sink }
 }
 
+// ── marked_turn: the hall's doors and windows through each turn ─────
+
+/// The hall with three openings a wall marked on it: a door in the middle, a window a quarter
+/// along and one three quarters along.
+fn marked_hall(cq: integer) -> Marked {
+  mh_cells = hall(cq);
+  mh_b = cells_built(mh_cells, 1, 0);
+  mh_marks = cells_no_marks(mh_cells);
+  mh_sz = opening_sizes_default();
+  mh_n = len(mh_b.cw_walls);
+  for mh_i in 0..mh_n {
+    mh_a = mh_b.cw_corners[(mh_i + mh_n - 1) % mh_n] ?? (0.0, 0.0);
+    mh_c = mh_b.cw_corners[mh_i] ?? (0.0, 0.0);
+    for mh_k in 1..4 {
+      mh_f = (mh_k as float) * 0.25;
+      cells_place_opening(mh_b, mh_marks, if mh_k == 2 { OPEN_DOOR } else { OPEN_WINDOW },
+                          mh_a.0 + (mh_c.0 - mh_a.0) * mh_f, mh_a.1 + (mh_c.1 - mh_a.1) * mh_f, mh_sz);
+    }
+  }
+  Marked { mk_cells: mh_cells, mk_marks: mh_marks }
+}
+
+/// The marked hall turned by each of the seven steps; per turn its cells, its marked edges and
+/// their digest.
+fn marked_op(d: Marked, cq: integer) -> vector<integer> {
+  mo_ints: vector<integer> = [0];
+  mo_sz = opening_sizes_default();
+  for mi in 0..TURN_STEPS {
+    mo_t = marked_turn(d, cq, 0, turn_step(mi), TURN_BY_WALLS, 0, mo_sz);
+    mo_ints[0] += edgeset_count_all(mo_t.mk_marks);
+    mo_ints += [hexset_count(mo_t.mk_cells), edgeset_count_all(mo_t.mk_marks), edgeset_digest(mo_t.mk_marks)];
+  }
+  mo_ints
+}
+
+fn bench_marked(n: integer) -> Row {
+  bm_d0 = marked_hall(0);
+  bm_d1 = marked_hall(1);
+  bm_t0 = ticks();
+  bm_sink = 0;
+  for r in 0..n {
+    if (r & 1) == 0 { bm_sink += marked_op(bm_d0, 0)[0]?; } else { bm_sink += marked_op(bm_d1, 1)[0]?; }
+  }
+  bm_us = ticks() - bm_t0;
+  Row { name: "marked_turn", iters: n, us: bm_us, px: TURN_STEPS * hexset_count(bm_d0.mk_cells),
+        hash: fnv(FNV_OFFSET, marked_op(bm_d0, 0)), sink: bm_sink }
+}
+
 fn main() {
   mn_n = 20;
   mn_args = arguments();
@@ -264,7 +313,8 @@ fn main() {
   if mn_n < 1 { mn_n = 1; }
   mn_t0 = ticks();
   println("routine\titers\tus\tns_op\tpx\tns_px\thash");
-  mn_rows: vector<Row> = [bench_cut(mn_n), bench_union(mn_n), bench_turn(mn_n), bench_seat(mn_n)];
+  mn_rows: vector<Row> = [bench_cut(mn_n), bench_union(mn_n), bench_turn(mn_n), bench_seat(mn_n),
+                          bench_marked(mn_n)];
   mn_sink = 0;
   for row in mn_rows {
     print_row(row);
