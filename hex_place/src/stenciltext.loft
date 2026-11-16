@@ -1,0 +1,231 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// stenciltext — A STENCIL DRAWN AS TEXT: a place template you can read and write by hand.
+//
+// A template of hex cells — a room, a tower, a house's floor — is a `hex_field::Stencil`: cells,
+// a label a cell, and marks on the edges between cells (walls, doors, windows).  This is its
+// text: lines of characters, each character a cell or an edge, laid out as the cells lie.
+//
+//       #   #
+//     # a : b #          a cell every four columns, the rows shifted as hex rows are;
+//      # D   #           between two cells of a row, the edge between them;
+//       # c #            on the line between two rows, the edges between a cell and the two
+//        # #             cells it touches in the other row.
+//
+// Lines alternate: a line of cells (and the edges between neighbours in that row), then a line of
+// the edges between that row and the next.  North is up.  A space is nothing: no cell, no mark.
+// An edge may be marked between a cell and no cell — the template's outer wall, a door in it.
+//
+// What a character means is the caller's (`StencilLegend`): each cell character a label, each
+// edge character a material.  One position is given as cell (0, 0) — the cell the template is
+// turned about (`stencil_turn`) and placed by.
+//
+// `stencil_read` answers what it could not read, a line each, instead of guessing.
+// `stencil_rows` writes a stencil back; what it writes, `stencil_read` reads as the same stencil.
+use hex_field::*;
+
+// What the characters mean: `sl_cells`' i-th character is a cell of label `sl_labels[i]`,
+// `sl_edges`' i-th an edge of material `sl_mats[i]` (several characters may give one material,
+// so a wall can be drawn `|`, `/` and `\`; written back, a material is its first character).
+pub struct StencilLegend {
+  pub sl_cells:  text,
+  pub sl_labels: vector<integer>,
+  pub sl_edges:  text,
+  pub sl_mats:   vector<integer>,
+}
+
+// A stencil read from text, and what could not be read (none: all of it was).
+pub struct StencilRead {
+  pub sr_stencil: Stencil,
+  pub sr_errors:  vector<text>,
+}
+
+// A stencil as text: its lines, top first, and the position (line, column) of cell (0, 0).
+pub struct StencilRows {
+  pub sw_rows: vector<text>,
+  pub sw_line: integer,
+  pub sw_col:  integer,
+}
+
+// What a position of the text is: nothing (kind 0), cell a (1), or the edge between a and b (2).
+struct TextSpot {
+  kind: integer,
+  qa: integer,
+  ra: integer,
+  qb: integer,
+  rb: integer,
+}
+
+// The position `up` lines above and `right` columns right of cell (0, 0).  Two lines are a row;
+// four columns are a cell, two a lattice step (`lattice_k`).
+fn text_spot(up: integer, right: integer) -> TextSpot {
+  none = TextSpot { kind: 0, qa: 0, ra: 0, qb: 0, rb: 0 };
+  if (up & 1) == 0 {
+    // a line of cells
+    if (right & 1) != 0 { return none; }
+    r = up / 2 ?? 0;
+    k = right / 2 ?? 0;
+    if ((k - r) & 1) == 0 {
+      (q, _r) = lattice_to_cell(k, 3 * r);
+      return TextSpot { kind: 1, qa: q, ra: r, qb: q, rb: r };
+    }
+    (qa, _ra) = lattice_to_cell(k - 1, 3 * r);
+    (qb, _rb) = lattice_to_cell(k + 1, 3 * r);
+    return TextSpot { kind: 2, qa: qa, ra: r, qb: qb, rb: r };
+  }
+  // a line of edges, between row `lo` and the row above it
+  if (right & 1) == 0 { return none; }
+  lo = (up - 1) / 2 ?? 0;
+  a = (right - 1) / 2 ?? 0;
+  // of the two lattice columns either side, the one of the lower row's parity is its cell's
+  kl = if ((a - lo) & 1) == 0 { a } else { a + 1 };
+  ku = if kl == a { a + 1 } else { a };
+  (qa, _ra) = lattice_to_cell(kl, 3 * lo);
+  (qb, _rb) = lattice_to_cell(ku, 3 * (lo + 1));
+  TextSpot { kind: 2, qa: qa, ra: lo, qb: qb, rb: lo + 1 }
+}
+
+// Where `c` stands in `chars`; -1 when it does not.
+fn text_index(chars: text, c: character) -> integer {
+  i = 0;
+  for o in chars {
+    if o == c { return i; }
+    i += 1;
+  }
+  -1
+}
+
+fn text_char(chars: text, at: integer) -> text {
+  i = 0;
+  for o in chars {
+    if i == at { return "{o}"; }
+    i += 1;
+  }
+  " "
+}
+
+// Read a stencil from its text: `rows` top line first, the character at line `line`, column
+// `col` (both from 0) being cell (0, 0).  The stencil has labels and edges; its window is its
+// cells' with room for the marks round them.
+pub fn stencil_read(rows: const vector<text>, lg: const StencilLegend, line: integer, col: integer) -> StencilRead {
+  errors: vector<text> = [];
+  cq: vector<integer> = [];
+  cr: vector<integer> = [];
+  cl: vector<integer> = [];
+  ea: vector<TextSpot> = [];
+  em: vector<integer> = [];
+  for li in 0..len(rows) {
+    ci = 0;
+    for c in rows[li] ?? "" {
+      at = ci;
+      ci += 1;
+      if c == ' ' { continue; }
+      // floor halves of numbers that may be negative: shift both into the positive
+      s = text_spot(line - li + 4096, at - col + 8192);
+      if s.kind == 0 {
+        errors += ["line {li + 1} column {at + 1}: '{c}' stands between the places of the grid"];
+      } else if s.kind == 1 {
+        i = text_index(lg.sl_cells, c);
+        if i < 0 {
+          errors += ["line {li + 1} column {at + 1}: '{c}' stands where a cell does and is no cell of the legend"];
+          continue;
+        }
+        cq += [s.qa - 2048];
+        cr += [s.ra - 2048];
+        cl += [lg.sl_labels[i] ?? 0];
+      } else {
+        i = text_index(lg.sl_edges, c);
+        if i < 0 {
+          errors += ["line {li + 1} column {at + 1}: '{c}' stands where an edge does and is no edge of the legend"];
+          continue;
+        }
+        ea += [TextSpot { kind: 2, qa: s.qa - 2048, ra: s.ra - 2048, qb: s.qb - 2048, rb: s.rb - 2048 }];
+        em += [lg.sl_mats[i] ?? 0];
+      }
+    }
+  }
+  q0 = 0;
+  q1 = 0;
+  r0 = 0;
+  r1 = 0;
+  for i in 0..len(cq) {
+    if i == 0 || cq[i] < q0 { q0 = cq[i] ?? 0; }
+    if i == 0 || cq[i] > q1 { q1 = cq[i] ?? 0; }
+    if i == 0 || cr[i] < r0 { r0 = cr[i] ?? 0; }
+    if i == 0 || cr[i] > r1 { r1 = cr[i] ?? 0; }
+  }
+  if len(cq) == 0 { errors += ["no cell in the text"]; }
+  w = q1 - q0 + 5;
+  h = r1 - r0 + 5;
+  cells = hexset_chunk(q0 - 2, r0 - 2, w, h);
+  lb = labels_new(q0 - 2, r0 - 2, w, h);
+  edges = edgeset_new(q0 - 2, r0 - 2, w, h);
+  for i in 0..len(cq) {
+    hexset_set(cells, cq[i] ?? 0, cr[i] ?? 0, true);
+    label_set(lb, cq[i] ?? 0, cr[i] ?? 0, cl[i] ?? 0);
+  }
+  for i in 0..len(ea) {
+    e = ea[i]!;
+    if !hexset_get(cells, e.qa, e.ra) && !hexset_get(cells, e.qb, e.rb) {
+      errors += ["an edge between cells ({e.qa}, {e.ra}) and ({e.qb}, {e.rb}) touches no cell of the template"];
+      continue;
+    }
+    edge_set_mat(edges, e.qa, e.ra, e.qb, e.rb, em[i] ?? 0);
+  }
+  StencilRead { sr_stencil: stencil_with_edges(cells, heights_new(q0 - 2, r0 - 2, w, h), lb, edges, false, true), sr_errors: errors }
+}
+
+// A stencil's text: its cells by their labels, and every mark on an edge of one of its cells.  A
+// label or a material the legend has no character for is written `?`, which does not read back.
+pub fn stencil_rows(st: Stencil, lg: const StencilLegend) -> StencilRows {
+  cells = st.sn_cells;
+  k0 = 0;
+  k1 = 0;
+  r0 = 0;
+  r1 = 0;
+  any = false;
+  for r in hexset_r0(cells)..hexset_r0(cells) + hexset_h(cells) {
+    for q in hexset_q0(cells)..hexset_q0(cells) + hexset_w(cells) {
+      if !hexset_get(cells, q, r) { continue; }
+      k = lattice_k(q, r);
+      if !any || k < k0 { k0 = k; }
+      if !any || k > k1 { k1 = k; }
+      if !any || r < r0 { r0 = r; }
+      if !any || r > r1 { r1 = r; }
+      any = true;
+    }
+  }
+  if !any { return StencilRows { sw_rows: [], sw_line: 0, sw_col: 0 }; }
+  // a line above the top row and one below the bottom row for their outer edges; a cell's width
+  // left of the leftmost and right of the rightmost for theirs
+  line = 2 * r1 + 1;
+  col = 2 - 2 * k0;
+  rows: vector<text> = [];
+  for li in 0..2 * (r1 - r0) + 3 {
+    out = "";
+    gap = "";
+    for at in 0..2 * (k1 - k0) + 5 {
+      s = text_spot(line - li + 4096, at - col + 8192);
+      ch = " ";
+      if s.kind == 1 && hexset_get(cells, s.qa - 2048, s.ra - 2048) {
+        l = label_get(st.sn_labels, s.qa - 2048, s.ra - 2048);
+        i = -1;
+        for j in 0..len(lg.sl_labels) { if i < 0 && lg.sl_labels[j] == l { i = j; } }
+        ch = if i < 0 { "?" } else { text_char(lg.sl_cells, i) };
+      } else if s.kind == 2 && stencil_has_edges(st) {
+        m = edge_mat(st.sn_edges, s.qa - 2048, s.ra - 2048, s.qb - 2048, s.rb - 2048);
+        if m != 0 && (hexset_get(cells, s.qa - 2048, s.ra - 2048) || hexset_get(cells, s.qb - 2048, s.rb - 2048)) {
+          i = -1;
+          for j in 0..len(lg.sl_mats) { if i < 0 && lg.sl_mats[j] == m { i = j; } }
+          ch = if i < 0 { "?" } else { text_char(lg.sl_edges, i) };
+        }
+      }
+      if ch == " " { gap += " "; } else {
+        out += gap + ch;
+        gap = "";
+      }
+    }
+    rows += [out];
+  }
+  StencilRows { sw_rows: rows, sw_line: line, sw_col: col }
+}

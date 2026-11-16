@@ -431,6 +431,8 @@ pub struct CellOutline {
   pub co_boundary: vector<WallEdge>,
   pub co_walls: vector<WallSurface>,
   pub co_corners: vector<(float, float)>,
+  // per wall, the edges it was solved from (indices into the boundary, in order); none for a step
+  pub co_runs: vector<vector<integer>> = [],
 }
 
 // @FR-HW-Step: two walls in a row that run the same way are joined by a step
@@ -457,10 +459,12 @@ pub fn cells_outline(b: const vector<WallEdge>, hint: integer = -1) -> CellOutli
   }
   solved: vector<WallSurface> = [for i in 0..len(rs) { cells_wall(b, rs[i] ?? [], hs[i] ?? 0) }];
   walls: vector<WallSurface> = [];
+  wall_runs: vector<vector<integer>> = [];
   n = len(solved);
   for i in 0..n {
     w = solved[i];
     walls += [w];
+    wall_runs += [rs[i] ?? []];
     nx = solved[(i + 1) % n ?? 0]!;
     if n > 1 && w.ws_dk * nx.ws_dm - w.ws_dm * nx.ws_dk == 0 {
       // the step: a short wall across the axis, of the other family, through the edge of the
@@ -469,6 +473,7 @@ pub fn cells_outline(b: const vector<WallEdge>, hint: integer = -1) -> CellOutli
       e = runs_step_edge(b, rs[i] ?? [], rs[(i + 1) % n ?? 0] ?? [], w, nx, h);
       (dk, dm) = head_step(h);
       walls += [WallSurface { ws_dk: dk, ws_dm: dm, ws_num_k: e.we_ak + e.we_bk, ws_num_m: e.we_am + e.we_bm, ws_den: 2, ws_n: 0 }];
+      wall_runs += [[]];
     }
   }
   corners: vector<(float, float)> = [];
@@ -478,7 +483,7 @@ pub fn cells_outline(b: const vector<WallEdge>, hint: integer = -1) -> CellOutli
     (x, y, _ok) = surface_meet(walls[i]!, walls[(i + 1) % nw ?? 0]!);
     corners += [(x, y)];
   }
-  CellOutline { co_boundary: b, co_walls: walls, co_corners: corners }
+  CellOutline { co_boundary: b, co_walls: walls, co_corners: corners, co_runs: wall_runs }
 }
 
 // @FR-HW-Step: a run is cut where its line steps over by a row

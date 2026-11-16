@@ -1,0 +1,249 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// cellrooms — THE ROOMS OF A STRUCTURE, AND ITS INNER WALLS AS STRAIGHT WALLS.
+//
+// `cellwalls` draws a structure's OUTER walls from its cells: the boundary between the cells
+// inside and those outside.  A structure has walls inside it too, marked on the edges between
+// two of its own cells.  They are drawn the same way, once it is said what they bound:
+//
+//   a ROOM is the cells an inner wall does not let you leave — walk from a cell to every
+//   neighbour across an edge that is not marked, and what you reach is its room (a door is a
+//   material on a wall's edges, so a door does not join two rooms);
+//
+//   an INNER WALL is where two rooms meet.  Each room is a structure of its own, and its
+//   boundary is solved into straight walls as any structure's is (`cells_outlines`); the stretch
+//   of one of its walls that borders another room is an inner wall, straight, along that wall's
+//   line.
+//
+// So an inner wall is the boundary of a filled region, as an outer wall is: it is closed where it
+// was drawn closed, it is as straight as an outer wall, and a marked edge that bounds no room — a
+// stub in the middle of a floor — is no wall at all, and is counted instead of drawn.
+//
+// From tile-world-game, whose houses' rooms are parted this way.
+use hex_field::*;
+use hex_form::*;
+use hexsurf::*;
+use cellwalls::*;
+use cellopen::*;
+use housedraw::*;
+
+// The rooms of a structure: a number per inside cell (0 .. `cr_n` - 1), -1 outside it, the rooms
+// numbered as their first cells come row by row.
+pub struct CellRooms {
+  pub cr_of: Labels,
+  pub cr_n:  integer,
+}
+
+// The rooms of `cells`, parted by the edges marked in `edges` between two of its cells.  With
+// nothing marked inside it a structure of one piece is one room.
+pub fn cells_rooms(cells: HexSet, edges: EdgeSet) -> CellRooms {
+  of = labels_new(hexset_q0(cells), hexset_r0(cells), hexset_w(cells), hexset_h(cells));
+  n = 0;
+  for r in hexset_r0(cells)..hexset_r0(cells) + hexset_h(cells) {
+    for q in hexset_q0(cells)..hexset_q0(cells) + hexset_w(cells) {
+      if !hexset_get(cells, q, r) || label_get(of, q, r) >= 0 { continue; }
+      label_set(of, q, r, n);
+      sq: vector<integer> = [q];
+      sr: vector<integer> = [r];
+      at = 0;
+      while at < len(sq) {
+        cq = sq[at] ?? 0;
+        cr = sr[at] ?? 0;
+        at += 1;
+        for d in 0..6 {
+          nq = nb_q(cq, cr, d);
+          nr = nb_r(cq, cr, d);
+          if !hexset_get(cells, nq, nr) || label_get(of, nq, nr) >= 0 { continue; }
+          if edge_mat(edges, cq, cr, nq, nr) != 0 { continue; }
+          label_set(of, nq, nr, n);
+          sq += [nq];
+          sr += [nr];
+        }
+      }
+      n += 1;
+    }
+  }
+  CellRooms { cr_of: of, cr_n: n }
+}
+
+// The cells of room `ri` as a set of their own, over the structure's window.
+pub fn room_cells(cells: HexSet, rooms: const CellRooms, ri: integer) -> HexSet {
+  out = hexset_chunk(hexset_q0(cells), hexset_r0(cells), hexset_w(cells), hexset_h(cells));
+  for r in hexset_r0(cells)..hexset_r0(cells) + hexset_h(cells) {
+    for q in hexset_q0(cells)..hexset_q0(cells) + hexset_w(cells) {
+      if label_get(rooms.cr_of, q, r) == ri { hexset_set(out, q, r, true); }
+    }
+  }
+  out
+}
+
+// An inner wall: the two rooms it lies between (the lower number first), its material (the most
+// common on its edges that is a wall's own, not a door's or a window's), how many edges it is,
+// its line (a surface, as an outer wall's) and the stretch of that line it covers, from a to b in
+// world units.
+pub struct InnerWall {
+  pub iw_a:       integer,
+  pub iw_b:       integer,
+  pub iw_mat:     integer,
+  pub iw_edges:   integer,
+  pub iw_surface: WallSurface,
+  pub iw_ax:      float,
+  pub iw_ay:      float,
+  pub iw_bx:      float,
+  pub iw_by:      float,
+}
+
+// A door or a window in an inner wall: which wall (an index into the inner walls), its kind, and
+// the span it is drawn over, its kind's width about its centre on the wall's line.
+pub struct InnerOpening {
+  pub io_wall: integer,
+  pub io_kind: integer,
+  pub io_cx:   float,
+  pub io_cy:   float,
+  pub io_ax:   float,
+  pub io_ay:   float,
+  pub io_bx:   float,
+  pub io_by:   float,
+}
+
+// A structure's inner walls and the openings in them.  `in_lost` is how many marked edges had
+// one room on both sides: they bound no room and are no wall.
+pub struct InnerWalls {
+  pub in_rooms: integer,
+  pub in_walls: vector<InnerWall>,
+  pub in_opens: vector<InnerOpening>,
+  pub in_lost:  integer,
+}
+
+fn inner_is_opening(m: integer) -> boolean { m == OPEN_DOOR || m == OPEN_WINDOW }
+
+// The most common of `mats` that is a wall's own; of all of them when there is no other.
+fn inner_material(mats: const vector<integer>) -> integer {
+  best = 0;
+  best_n = 0;
+  for pass in 0..2 {
+    for m in mats {
+      if m == 0 || (pass == 0 && inner_is_opening(m)) { continue; }
+      c = 0;
+      for o in mats { if o == m { c += 1; } }
+      if c > best_n {
+        best = m;
+        best_n = c;
+      }
+    }
+    if best_n > 0 { return best; }
+  }
+  best
+}
+
+// The inner walls of `cells` as straight walls, from the edges marked between its cells.  `hint`
+// (a heading, -1 for none) is asked for a room whose cells show no direction; `sz` gives a door's
+// and a window's width.
+//
+// Each room's outline is solved (`cells_outlines`), and along each of its walls every unbroken
+// stretch of edges that borders ONE other room is an inner wall on that wall's line — taken from
+// the room of the lower number, so each is found once.  Its extent is its edges' corners brought
+// onto the line, and the wall's own corner where the stretch runs to an end of the wall.  A stretch of fewer than three edges is the turn of a corner, as on an outer
+// wall, and no wall of its own.
+pub fn cells_inner_walls(cells: HexSet, edges: EdgeSet, hint: integer = -1,
+                         sz: OpeningSizes = opening_sizes_default()) -> InnerWalls {
+  rooms = cells_rooms(cells, edges);
+  walls: vector<InnerWall> = [];
+  opens: vector<InnerOpening> = [];
+  lost = 0;
+  for r in hexset_r0(cells)..hexset_r0(cells) + hexset_h(cells) {
+    for q in hexset_q0(cells)..hexset_q0(cells) + hexset_w(cells) {
+      if !hexset_get(cells, q, r) { continue; }
+      for d in 0..6 {
+        nq = nb_q(q, r, d);
+        nr = nb_r(q, r, d);
+        if !hexset_get(cells, nq, nr) || nr < r || (nr == r && nq < q) { continue; }
+        if edge_mat(edges, q, r, nq, nr) != 0 && label_get(rooms.cr_of, q, r) == label_get(rooms.cr_of, nq, nr) { lost += 1; }
+      }
+    }
+  }
+  if rooms.cr_n < 2 { return InnerWalls { in_rooms: rooms.cr_n, in_walls: walls, in_opens: opens, in_lost: lost }; }
+  for ri in 0..rooms.cr_n {
+    for o in cells_outlines(room_cells(cells, rooms, ri), hint) {
+      b = o.co_boundary;
+      for wi in 0..len(o.co_walls) {
+        w = o.co_walls[wi]!;
+        run = o.co_runs[wi] ?? [];
+        (dx, dy) = surface_dir(w);
+        mx = surface_mean_x(w);
+        my = surface_mean_y(w);
+        i = 0;
+        while i < len(run) {
+          e = b[run[i] ?? 0]!;
+          other = label_get(rooms.cr_of, e.we_qb, e.we_rb);
+          // a stretch against one room of a higher number
+          if !hexset_get(cells, e.we_qb, e.we_rb) || other <= ri {
+            i += 1;
+            continue;
+          }
+          lo = 1000000.0;
+          hi = -1000000.0;
+          mats: vector<integer> = [];
+          first = i;
+          while i < len(run) {
+            f = b[run[i] ?? 0]!;
+            if !hexset_get(cells, f.we_qb, f.we_rb) || label_get(rooms.cr_of, f.we_qb, f.we_rb) != other { break; }
+            mats += [edge_mat(edges, f.we_qa, f.we_ra, f.we_qb, f.we_rb)];
+            for c in [(f.we_ak, f.we_am), (f.we_bk, f.we_bm)] {
+              t = ((c.0 as float) * 0.8660254037844386 - mx) * dx + ((c.1 as float) * 0.5 - my) * dy;
+              if t < lo { lo = t; }
+              if t > hi { hi = t; }
+            }
+            i += 1;
+          }
+          // under three edges it is the turn of a corner — where this wall's run caught the end of
+          // the inner wall that meets it — and not a wall of its own
+          if i - first < 3 { continue; }
+          // where the stretch runs to an end of this wall it runs to the wall's corner — where
+          // its line meets the next wall's — whichever of the two walls the corner's own edges
+          // were counted with
+          nw = len(o.co_corners);
+          if first == 0 && nw > 0 {
+            c = o.co_corners[(wi + nw - 1) % nw ?? 0] ?? (0.0, 0.0);
+            t = (c.0 - mx) * dx + (c.1 - my) * dy;
+            if t < lo { lo = t; }
+            if t > hi { hi = t; }
+          }
+          if i == len(run) && nw > 0 {
+            c = o.co_corners[wi] ?? (0.0, 0.0);
+            t = (c.0 - mx) * dx + (c.1 - my) * dy;
+            if t < lo { lo = t; }
+            if t > hi { hi = t; }
+          }
+          at = len(walls);
+          walls += [InnerWall { iw_a: ri, iw_b: other, iw_mat: inner_material(mats), iw_edges: i - first, iw_surface: w,
+                                iw_ax: mx + lo * dx, iw_ay: my + lo * dy, iw_bx: mx + hi * dx, iw_by: my + hi * dy }];
+          // its doors and windows: each unbroken stretch of one kind, centred on the line
+          j = first;
+          while j < i {
+            kind = mats[j - first] ?? 0;
+            if !inner_is_opening(kind) {
+              j += 1;
+              continue;
+            }
+            sum = 0.0;
+            count = 0;
+            while j < i && (mats[j - first] ?? 0) == kind {
+              g = b[run[j] ?? 0]!;
+              sum += (((g.we_ak + g.we_bk) as float) * 0.5 * 0.8660254037844386 - mx) * dx
+                   + (((g.we_am + g.we_bm) as float) * 0.25 - my) * dy;
+              count += 1;
+              j += 1;
+            }
+            t = (sum / (count as float)) ?? 0.0;
+            half = opening_size(kind, sz) * 0.5;
+            opens += [InnerOpening { io_wall: at, io_kind: kind, io_cx: mx + t * dx, io_cy: my + t * dy,
+                                     io_ax: mx + (t - half) * dx, io_ay: my + (t - half) * dy,
+                                     io_bx: mx + (t + half) * dx, io_by: my + (t + half) * dy }];
+          }
+        }
+      }
+    }
+  }
+  InnerWalls { in_rooms: rooms.cr_n, in_walls: walls, in_opens: opens, in_lost: lost }
+}

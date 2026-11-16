@@ -160,6 +160,17 @@ struct TurnThirty {
   offsets: vector<TurnOffset>,
   sx: float,
   sy: float,
+  // the frames it was made in: the drawing's axes (heading `c` and three on) and the turned
+  // ones, the rows the walls stand between along each, and the offset the walls were moved by
+  c: integer,
+  co0: float,
+  si0: float,
+  co1: float,
+  si1: float,
+  row_x: float,
+  row_y: float,
+  off_x: float,
+  off_y: float,
 }
 
 // @FR-HT-Turn30: one odd step, from the drawn walls
@@ -202,12 +213,16 @@ fn turn_thirty(cells: HexSet, pq: integer, pr: integer, r: integer, way: integer
   poly: vector<(float, float)> = [];
   sx = 0.0;
   sy = 0.0;
+  off_x = 0.0;
+  off_y = 0.0;
   if way == TURN_BY_OUTLINE {
     poly = outline_moved(corners, us, vs, hexset_count(cells));
   } else {
     snap = walls_snapped(corners, row_x, row_y);
     poly = snap.poly;
     // the offset, along headings c + 1 and c + 4, in world units
+    off_x = snap.off_x;
+    off_y = snap.off_y;
     sx = snap.off_x * co1 - snap.off_y * si1;
     sy = snap.off_x * si1 + snap.off_y * co1;
   }
@@ -215,7 +230,8 @@ fn turn_thirty(cells: HexSet, pq: integer, pr: integer, r: integer, way: integer
   for i in 0..len(ks) {
     if turn_in_poly(poly, us[i] ?? 0.0, vs[i] ?? 0.0) { out += [TurnOffset { dk: ks[i] ?? 0, dm: ms[i] ?? 0 }]; }
   }
-  TurnThirty { offsets: out, sx: sx, sy: sy }
+  TurnThirty { offsets: out, sx: sx, sy: sy, c: c, co0: co0, si0: si0, co1: co1, si1: si1, row_x: row_x, row_y: row_y,
+               off_x: off_x, off_y: off_y }
 }
 
 // ── each wall to the nearest line ───────────────────────────────────────────
@@ -391,4 +407,494 @@ pub fn marked_turn(d: Marked, pq: integer, pr: integer, steps: integer, way: int
     cells_place_opening(turned, out.mk_marks, o.op_kind, x, y, sz);
   }
   out
+}
+
+// ── a stencil through a turn ────────────────────────────────────────────────
+//
+// A stencil is more than its cells: a height and a label per cell, named layers, and edges — the
+// outer walls with their doors and windows, and the INNER walls between its rooms.  Through a
+// 60-degree step all of it turns exactly (`hex_field::stencil_rotate`).  Through an odd step:
+//
+//   the cells         as `cells_turn` turns them: the drawn walls, each to the nearest line;
+//   the outer walls   each turned wall takes the material of the drawn wall it is, and the doors
+//                     and windows are placed again at their centres (as `marked_turn`);
+//   the inner walls   are the boundaries between ROOMS.  A room is the cells an inner wall does
+//                     not let you leave; each room is a structure of its own, with straight walls
+//                     of its own (`cells_outlines`).  Its outline turns with the stencil and its
+//                     walls go to the nearest lines, the same lines the outer walls go to — so an
+//                     inner wall comes out straight, meets the outer wall it met, and closes what
+//                     it closed.  The turned cells inside a room's turned outline are the room;
+//                     an inner wall is wherever two rooms meet.  A wall is the boundary of a
+//                     filled region here too, never a line buffered: it cannot leak;
+//   what a cell holds a turned cell reads the height, label and layers of the drawn cell nearest
+//                     where it came from, in its own room.
+//
+// What cannot come through is said: a marked edge with the same room on both sides — a wall that
+// closes nothing — bounds no room, and is counted in `tu_lost`.
+
+// A stencil turned: the stencil, the turn (for `turned_point`), how many rooms its inner walls
+// make, and how many marked edges bounded no room and were not carried (0 for an even step, which
+// carries every edge).
+pub struct StencilTurn {
+  pub tu_stencil: Stencil,
+  pub tu_turn:    Turned,
+  pub tu_rooms:   integer,
+  pub tu_lost:    integer,
+}
+
+fn turn_opening(m: integer) -> boolean { m == OPEN_DOOR || m == OPEN_WINDOW }
+
+// The most common of `mats` that is a wall's own (not a door's or a window's); the most common of
+// all when there is no other; 0 for none.
+fn wall_material(mats: const vector<integer>) -> integer {
+  best = 0;
+  best_n = 0;
+  for pass in 0..2 {
+    for m in mats {
+      if m == 0 || (pass == 0 && turn_opening(m)) { continue; }
+      c = 0;
+      for o in mats { if o == m { c += 1; } }
+      if c > best_n {
+        best = m;
+        best_n = c;
+      }
+    }
+    if best_n > 0 { return best; }
+  }
+  best
+}
+
+// A marked edge between two rooms of the drawing: the rooms (the lower first), its material and
+// its midpoint in world units.
+struct RoomEdge {
+  a: integer,
+  b: integer,
+  mat: integer,
+  x: float,
+  y: float,
+}
+
+// One odd step of a stencil about its cell (0, 0), by walls.
+// The parts of the rooms `of` gives the cells: a part is cells of one room joined cell to cell.
+// A number per cell, and per part its size and its room.
+struct TurnParts {
+  part: Labels,
+  size: vector<integer>,
+  room: vector<integer>,
+}
+
+fn room_parts(cells: HexSet, of: Labels) -> TurnParts {
+  part = labels_new(hexset_q0(cells), hexset_r0(cells), hexset_w(cells), hexset_h(cells));
+  size: vector<integer> = [];
+  room: vector<integer> = [];
+  for r in hexset_r0(cells)..hexset_r0(cells) + hexset_h(cells) {
+    for q in hexset_q0(cells)..hexset_q0(cells) + hexset_w(cells) {
+      if !hexset_get(cells, q, r) || label_get(part, q, r) >= 0 { continue; }
+      id = len(size);
+      mine = label_get(of, q, r);
+      label_set(part, q, r, id);
+      sq: vector<integer> = [q];
+      sr: vector<integer> = [r];
+      at = 0;
+      while at < len(sq) {
+        cq = sq[at] ?? 0;
+        cr = sr[at] ?? 0;
+        at += 1;
+        for d in 0..6 {
+          nq = nb_q(cq, cr, d);
+          nr = nb_r(cq, cr, d);
+          if !hexset_get(cells, nq, nr) || label_get(part, nq, nr) >= 0 || label_get(of, nq, nr) != mine { continue; }
+          label_set(part, nq, nr, id);
+          sq += [nq];
+          sr += [nr];
+        }
+      }
+      size += [len(sq)];
+      room += [mine];
+    }
+  }
+  TurnParts { part: part, size: size, room: room }
+}
+
+// Make every room one piece.  A room one cell wide comes through a turn of 30 degrees as cells
+// that do not touch — along an odd heading a single row's cells stand a step and a half apart —
+// and each loose cell would be a room of its own, walled in.  So while a room is in parts, its
+// smallest part is joined to the rest of it along the shortest way through other rooms' cells
+// (at most three, which take its room: the corridor is widened where it must be), and a part
+// with no such way is given to the room it touches most.  Answers how many cells changed room.
+fn rooms_whole(cells: HexSet, of: Labels) -> integer {
+  changed = 0;
+  for _round in 0..256 {
+    ps = room_parts(cells, of);
+    pick = -1;
+    for i in 0..len(ps.size) {
+      second = false;
+      for j in 0..len(ps.size) {
+        if j != i && ps.room[j] == ps.room[i] && ((ps.size[j] ?? 0) > (ps.size[i] ?? 0) || ((ps.size[j] ?? 0) == (ps.size[i] ?? 0) && j < i)) { second = true; }
+      }
+      if second && (pick < 0 || (ps.size[i] ?? 0) < (ps.size[pick] ?? 0)) { pick = i; }
+    }
+    if pick < 0 { break; }
+    mine = ps.room[pick] ?? -1;
+    // the shortest way from the part to another part of its room
+    seen = labels_new(hexset_q0(cells), hexset_r0(cells), hexset_w(cells), hexset_h(cells));
+    bq: vector<integer> = [];
+    br: vector<integer> = [];
+    from: vector<integer> = [];
+    deep: vector<integer> = [];
+    for r in hexset_r0(cells)..hexset_r0(cells) + hexset_h(cells) {
+      for q in hexset_q0(cells)..hexset_q0(cells) + hexset_w(cells) {
+        if label_get(ps.part, q, r) != pick { continue; }
+        label_set(seen, q, r, 1);
+        bq += [q];
+        br += [r];
+        from += [-1];
+        deep += [0];
+      }
+    }
+    at = 0;
+    reached = -1;
+    while at < len(bq) && reached < 0 {
+      cq = bq[at] ?? 0;
+      cr = br[at] ?? 0;
+      for d in 0..6 {
+        nq = nb_q(cq, cr, d);
+        nr = nb_r(cq, cr, d);
+        if !hexset_get(cells, nq, nr) || label_get(seen, nq, nr) >= 0 { continue; }
+        if label_get(of, nq, nr) == mine {
+          reached = at;
+          break;
+        }
+        if (deep[at] ?? 0) >= 3 { continue; }
+        label_set(seen, nq, nr, 1);
+        bq += [nq];
+        br += [nr];
+        from += [at];
+        deep += [(deep[at] ?? 0) + 1];
+      }
+      at += 1;
+    }
+    if reached >= 0 {
+      // the cells of the way take the room
+      while reached >= 0 && (deep[reached] ?? 0) > 0 {
+        label_set(of, bq[reached] ?? 0, br[reached] ?? 0, mine);
+        changed += 1;
+        reached = from[reached] ?? -1;
+      }
+      continue;
+    }
+    // no way: the part goes to the room it touches most
+    touch: vector<integer> = [];
+    count: vector<integer> = [];
+    for r in hexset_r0(cells)..hexset_r0(cells) + hexset_h(cells) {
+      for q in hexset_q0(cells)..hexset_q0(cells) + hexset_w(cells) {
+        if label_get(ps.part, q, r) != pick { continue; }
+        for d in 0..6 {
+          nq = nb_q(q, r, d);
+          nr = nb_r(q, r, d);
+          if !hexset_get(cells, nq, nr) || label_get(ps.part, nq, nr) == pick { continue; }
+          o = label_get(of, nq, nr);
+          at_o = -1;
+          for i in 0..len(touch) { if touch[i] == o { at_o = i; } }
+          if at_o < 0 {
+            touch += [o];
+            count += [1];
+          } else { count[at_o] += 1; }
+        }
+      }
+    }
+    best = -1;
+    for i in 0..len(touch) { if best < 0 || (count[i] ?? 0) > (count[best] ?? 0) { best = i; } }
+    if best < 0 { break; }
+    for r in hexset_r0(cells)..hexset_r0(cells) + hexset_h(cells) {
+      for q in hexset_q0(cells)..hexset_q0(cells) + hexset_w(cells) {
+        if label_get(ps.part, q, r) == pick {
+          label_set(of, q, r, touch[best] ?? -1);
+          changed += 1;
+        }
+      }
+    }
+  }
+  changed
+}
+
+fn stencil_thirty(st: Stencil, sz: OpeningSizes) -> StencilTurn {
+  cells = st.sn_cells;
+  has_e = stencil_has_edges(st);
+  reach = turn_reach(cells, 0, 0);
+  th = turn_thirty(cells, 0, 0, reach, TURN_BY_WALLS);
+  win = 2 * reach + 1;
+  cells30 = hexset_chunk(0 - reach, 0 - reach, win, win);
+  for o in th.offsets {
+    (q, r) = lattice_to_cell(o.dk, o.dm);
+    hexset_set(cells30, q, r, true);
+  }
+  t30 = Turned { tn_cells: cells30, tn_pk: 0, tn_pm: 0, tn_steps: 1, tn_sx: th.sx, tn_sy: th.sy };
+  // the rooms, and each room's outline in the turned frame, its walls on the lines
+  rooms = cells_rooms(cells, if has_e { st.sn_edges } else { edgeset_new(hexset_q0(cells), hexset_r0(cells), hexset_w(cells), hexset_h(cells)) });
+  polys: vector<vector<(float, float)>> = [];
+  areas: vector<float> = [];
+  for ri in 0..rooms.cr_n {
+    room = room_cells(cells, rooms, ri);
+    poly: vector<(float, float)> = [];
+    os = if rooms.cr_n > 1 { cells_outlines(room, th.c) } else { [] };
+    if len(os) > 0 {
+      for p in os[0]!.co_corners {
+        poly += [(to_line(p.0 * th.co0 + p.1 * th.si0, th.row_x, th.off_x), to_line(-p.0 * th.si0 + p.1 * th.co0, th.row_y, th.off_y))];
+      }
+    }
+    area = 0.0;
+    for i in 0..len(poly) {
+      a = poly[(i + len(poly) - 1) % len(poly) ?? 0] ?? (0.0, 0.0);
+      b = poly[i] ?? (0.0, 0.0);
+      area += a.0 * b.1 - b.0 * a.1;
+    }
+    polys += [poly];
+    areas += [fabs(area)];
+  }
+  // each turned cell's room: the smallest room whose turned outline holds it; outside them all,
+  // the room of the drawn cell nearest where it came from.  Then every room made one piece.
+  hz = heights_new(0 - reach, 0 - reach, win, win);
+  lb = labels_new(0 - reach, 0 - reach, win, win);
+  ly = layers_new(0 - reach, 0 - reach, win, win);
+  for li in 0..layer_count(st.sn_layers) { layer_add(ly, layer_name(st.sn_layers, li)); }
+  room30 = labels_new(0 - reach, 0 - reach, win, win);
+  for pass in 0..2 {
+    if pass == 1 && rooms.cr_n > 1 { rooms_whole(cells30, room30); }
+    for o in th.offsets {
+      (q, r) = lattice_to_cell(o.dk, o.dm);
+      dx = (o.dk as float) * 0.8660254037844386;
+      dy = (o.dm as float) * 0.5;
+      u = dx * th.co1 + dy * th.si1;
+      v = -dx * th.si1 + dy * th.co1;
+      mine = if pass == 1 { label_get(room30, q, r) } else { -1 };
+      if pass == 0 {
+        for ri in 0..rooms.cr_n {
+          if len(polys[ri]!) < 3 || !turn_in_poly(polys[ri]!, u, v) { continue; }
+          if mine < 0 || (areas[ri] ?? 0.0) < (areas[mine] ?? 0.0) { mine = ri; }
+        }
+      }
+      // where it came from in the drawing: the frame's coordinates less the offset, in the
+      // drawing's own frame
+      fx = u - th.off_x;
+      fy = v - th.off_y;
+      wx = fx * th.co0 - fy * th.si0;
+      wy = fx * th.si0 + fy * th.co0;
+      (hq, hr) = hex_at(wx, wy);
+      // the drawn cell nearest that: of its room among the cells round it, of its room anywhere,
+      // then any
+      sq = 0;
+      sr = 0;
+      found = false;
+      best = 0.0;
+      for way in 0..3 {
+        if found { break; }
+        if way == 1 {
+          if pass == 0 || mine < 0 { continue; }
+          for cr in hexset_r0(cells)..hexset_r0(cells) + hexset_h(cells) {
+            for cq in hexset_q0(cells)..hexset_q0(cells) + hexset_w(cells) {
+              if label_get(rooms.cr_of, cq, cr) != mine { continue; }
+              ex = cell_x(cq, cr) - wx;
+              ey = cell_y(cq, cr) - wy;
+              dist = ex * ex + ey * ey;
+              if !found || dist < best {
+                found = true;
+                best = dist;
+                sq = cq;
+                sr = cr;
+              }
+            }
+          }
+          continue;
+        }
+        for d in -1..6 {
+          cq = if d < 0 { hq } else { nb_q(hq, hr, d) };
+          cr = if d < 0 { hr } else { nb_r(hq, hr, d) };
+          if !hexset_get(cells, cq, cr) { continue; }
+          if way == 0 && mine >= 0 && label_get(rooms.cr_of, cq, cr) != mine { continue; }
+          ex = cell_x(cq, cr) - wx;
+          ey = cell_y(cq, cr) - wy;
+          dist = ex * ex + ey * ey;
+          if !found || dist < best {
+            found = true;
+            best = dist;
+            sq = cq;
+            sr = cr;
+          }
+        }
+      }
+      if pass == 0 {
+        if mine < 0 && found { mine = label_get(rooms.cr_of, sq, sr); }
+        label_set(room30, q, r, mine);
+        continue;
+      }
+      if !found { continue; }
+      if stencil_has_heights(st) { height_set(hz, q, r, height_get(st.sn_heights, sq, sr)); }
+      if stencil_has_labels(st) { label_set(lb, q, r, label_get(st.sn_labels, sq, sr)); }
+      for li in 0..layer_count(st.sn_layers) { layer_set_at(ly, li, q, r, layer_get_at(st.sn_layers, li, sq, sr)); }
+    }
+  }
+  lost = 0;
+  edges30 = edgeset_new(0 - reach, 0 - reach, win, win);
+  if has_e {
+    // the outer walls: each turned wall the material of the drawn wall it is
+    drawn = cells_built(cells, 1, th.c);
+    turned = cells_built(cells30, 1, th.c + 1);
+    for j in 0..len(turned.cw_walls) {
+      wj = turned.cw_walls[j]!;
+      mate = -1;
+      near = 0.0;
+      for i in 0..len(drawn.cw_walls) {
+        wi = drawn.cw_walls[i]!;
+        if head_norm(surface_heading(wi) + 1) != surface_heading(wj) { continue; }
+        (tx, ty) = turned_point(t30, surface_mean_x(wi), surface_mean_y(wi));
+        ex = tx - surface_mean_x(wj);
+        ey = ty - surface_mean_y(wj);
+        if mate < 0 || ex * ex + ey * ey < near {
+          mate = i;
+          near = ex * ex + ey * ey;
+        }
+      }
+      if mate < 0 { continue; }
+      mats: vector<integer> = [];
+      for i in drawn.cw_runs[mate] ?? [] {
+        e = drawn.cw_boundary[i]!;
+        mats += [edge_mat(st.sn_edges, e.we_qa, e.we_ra, e.we_qb, e.we_rb)];
+      }
+      mat = wall_material(mats);
+      if mat == 0 { continue; }
+      for i in turned.cw_runs[j] ?? [] {
+        e = turned.cw_boundary[i]!;
+        edge_set_mat(edges30, e.we_qa, e.we_ra, e.we_qb, e.we_rb, mat);
+      }
+    }
+    for o in cells_openings(drawn.cw_boundary, drawn.cw_runs, drawn.cw_walls, st.sn_edges, sz) {
+      (x, y) = turned_point(t30, o.op_cx, o.op_cy);
+      cells_place_opening(turned, edges30, o.op_kind, x, y, sz);
+    }
+    // the inner walls of the drawing, by the two rooms each lies between
+    between: vector<RoomEdge> = [];
+    for r in hexset_r0(cells)..hexset_r0(cells) + hexset_h(cells) {
+      for q in hexset_q0(cells)..hexset_q0(cells) + hexset_w(cells) {
+        if !hexset_get(cells, q, r) { continue; }
+        for d in 0..6 {
+          nq = nb_q(q, r, d);
+          nr = nb_r(q, r, d);
+          // each edge once: from the cell that comes first, row by row
+          if !hexset_get(cells, nq, nr) || nr < r || (nr == r && nq < q) { continue; }
+          m = edge_mat(st.sn_edges, q, r, nq, nr);
+          if m == 0 { continue; }
+          ra = label_get(rooms.cr_of, q, r);
+          rb = label_get(rooms.cr_of, nq, nr);
+          if ra == rb {
+            lost += 1;
+            continue;
+          }
+          between += [RoomEdge { a: if ra < rb { ra } else { rb }, b: if ra < rb { rb } else { ra }, mat: m,
+                                 x: (cell_x(q, r) + cell_x(nq, nr)) * 0.5, y: (cell_y(q, r) + cell_y(nq, nr)) * 0.5 }];
+        }
+      }
+    }
+    every: vector<integer> = [for e in between { e.mat }];
+    // the turned inner walls: wherever two rooms meet
+    inner: vector<RoomEdge> = [];
+    iq: vector<integer> = [];
+    ir: vector<integer> = [];
+    jq: vector<integer> = [];
+    jr: vector<integer> = [];
+    for o in th.offsets {
+      (q, r) = lattice_to_cell(o.dk, o.dm);
+      for d in 0..6 {
+        nq = nb_q(q, r, d);
+        nr = nb_r(q, r, d);
+        if !hexset_get(cells30, nq, nr) || nr < r || (nr == r && nq < q) { continue; }
+        ra = label_get(room30, q, r);
+        rb = label_get(room30, nq, nr);
+        if ra == rb { continue; }
+        lo = if ra < rb { ra } else { rb };
+        hi = if ra < rb { rb } else { ra };
+        mats: vector<integer> = [];
+        for e in between { if e.a == lo && e.b == hi { mats += [e.mat]; } }
+        mat = wall_material(if len(mats) > 0 { mats } else { every });
+        if mat == 0 { continue; }
+        edge_set_mat(edges30, q, r, nq, nr, mat);
+        inner += [RoomEdge { a: lo, b: hi, mat: mat, x: (cell_x(q, r) + cell_x(nq, nr)) * 0.5, y: (cell_y(q, r) + cell_y(nq, nr)) * 0.5 }];
+        iq += [q];
+        ir += [r];
+        jq += [nq];
+        jr += [nr];
+      }
+    }
+    // the doors and windows in them: each stretch of one kind between two rooms, its centre
+    // carried through the turn, on the edges of the turned wall within half its width
+    taken: vector<boolean> = [for _ in 0..len(between) { false }];
+    for bi in 0..len(between) {
+      first = between[bi]!;
+      if (taken[bi] ?? true) || !turn_opening(first.mat) { continue; }
+      // the stretch: every edge of that kind between those rooms reached edge by edge
+      group: vector<integer> = [bi];
+      taken[bi] = true;
+      at = 0;
+      while at < len(group) {
+        g = between[group[at] ?? 0]!;
+        at += 1;
+        for oi in 0..len(between) {
+          e = between[oi]!;
+          if (taken[oi] ?? true) || e.a != first.a || e.b != first.b || e.mat != first.mat { continue; }
+          if (e.x - g.x) * (e.x - g.x) + (e.y - g.y) * (e.y - g.y) > 1.1 { continue; }
+          taken[oi] = true;
+          group += [oi];
+        }
+      }
+      cx = 0.0;
+      cy = 0.0;
+      for gi in group {
+        cx += between[gi]!.x;
+        cy += between[gi]!.y;
+      }
+      (x, y) = turned_point(t30, (cx / (len(group) as float)) ?? 0.0, (cy / (len(group) as float)) ?? 0.0);
+      half = opening_size(first.mat, sz) * 0.5;
+      nearest = -1;
+      near = 0.0;
+      put = 0;
+      for ii in 0..len(inner) {
+        e = inner[ii]!;
+        if e.a != first.a || e.b != first.b { continue; }
+        dist = sqrt((e.x - x) * (e.x - x) + (e.y - y) * (e.y - y)) ?? 0.0;
+        if dist <= half + 0.000000001 {
+          edge_set_mat(edges30, iq[ii] ?? 0, ir[ii] ?? 0, jq[ii] ?? 0, jr[ii] ?? 0, first.mat);
+          put += 1;
+        }
+        if nearest < 0 || dist < near {
+          nearest = ii;
+          near = dist;
+        }
+      }
+      if put == 0 && nearest >= 0 {
+        edge_set_mat(edges30, iq[nearest] ?? 0, ir[nearest] ?? 0, jq[nearest] ?? 0, jr[nearest] ?? 0, first.mat);
+      }
+    }
+  }
+  out = if has_e { stencil_with_edges(cells30, hz, lb, edges30, stencil_has_heights(st), stencil_has_labels(st)) }
+        else { stencil_from(cells30, hz, lb, stencil_has_heights(st), stencil_has_labels(st)) };
+  out.sn_layers = ly;
+  StencilTurn { tu_stencil: out, tu_turn: t30, tu_rooms: rooms.cr_n, tu_lost: lost }
+}
+
+// @FR-HT-Pivot, @FR-HT-Turn60, @FR-HT-Turn30: a stencil turned whole
+// Stencil `st` turned `steps` x 30 degrees anticlockwise about its own cell (0, 0), with all it
+// carries.  An even step is `hex_field::stencil_rotate`, exact.  An odd step is one step of 30
+// degrees — the cells by their drawn walls, the outer walls with their materials and openings,
+// the inner walls as the straight boundaries of its rooms, what each cell holds read from the
+// drawing — and then the 60-degree steps that remain, exact.  `sz` is the width a door and a
+// window keep.  The window of the result is fitted to its cells.
+pub fn stencil_turn(st: Stencil, steps: integer, sz: OpeningSizes = opening_sizes_default()) -> StencilTurn {
+  s = ((steps % 12) + 12) % 12 ?? 0;
+  whole = cells_turn(st.sn_cells, 0, 0, s);
+  if s % 2 == 0 {
+    return StencilTurn { tu_stencil: stencil_rotate(st, s / 2 ?? 0), tu_turn: whole,
+                         tu_rooms: cells_rooms(st.sn_cells, st.sn_edges).cr_n, tu_lost: 0 };
+  }
+  one = stencil_thirty(st, sz);
+  StencilTurn { tu_stencil: stencil_rotate(one.tu_stencil, s / 2 ?? 0), tu_turn: whole, tu_rooms: one.tu_rooms, tu_lost: one.tu_lost }
 }

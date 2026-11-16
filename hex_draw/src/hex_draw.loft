@@ -11,3 +11,4 @@ pub use housedraw::*;
 pub use hexsurf::*;
 pub use cellwalls::*;
 pub use cellopen::*;
+pub use cellrooms::*;

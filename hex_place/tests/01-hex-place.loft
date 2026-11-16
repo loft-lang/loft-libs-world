@@ -225,3 +225,349 @@ fn test_a_seat_blends_the_ground_round_the_footprint() {
   flat = heights_new(-3, -3, 7, 7);
   assert(seat_blend(empty, flat, 5.0, 2.5, 1.5) == 5.0 && height_get(flat, 0, 0) == 0.0, "nothing to seat, nothing written");
 }
+
+// ── a stencil through a turn ────────────────────────────────────────────────
+
+const OUTER = 7;
+const INNER = 5;
+
+// A hall as a stencil: 24 hex steps by 16 about cell (0, 0), its outer walls of material 7, a
+// door in the middle of its first wall, and inner walls of material 5: one across it where the
+// doubled column passes `split`, with a door in it — and, when `tee`, one more down the east part
+// where the doubled row passes 0.  Each cell's label and its layer "room" are its room's number
+// (0 west; 1 east, or north-east; 2 south-east), its height its room's number and a half.
+fn hall_stencil(split: integer, tee: boolean) -> Stencil {
+  reach = 30;
+  cells = turn_drawn(24, 16, 0, reach);
+  edges = edgeset_new(0 - reach, 0 - reach, 2 * reach + 1, 2 * reach + 1);
+  hex_draw::draw_walls(cells, edges, OUTER);
+  hz = heights_new(0 - reach, 0 - reach, 2 * reach + 1, 2 * reach + 1);
+  lb = labels_new(0 - reach, 0 - reach, 2 * reach + 1, 2 * reach + 1);
+  for r in 0 - reach..reach + 1 {
+    for q in 0 - reach..reach + 1 {
+      if !hexset_get(cells, q, r) { continue; }
+      room = if lattice_k(q, r) < split { 0 } else if tee && lattice_m(q, r) < 0 { 2 } else { 1 };
+      label_set(lb, q, r, room);
+      height_set(hz, q, r, (room as float) + 0.5);
+    }
+  }
+  // the inner walls: wherever two cells of different rooms meet
+  for r in 0 - reach..reach + 1 {
+    for q in 0 - reach..reach + 1 {
+      if !hexset_get(cells, q, r) { continue; }
+      for d in 0..6 {
+        nq = nb_q(q, r, d);
+        nr = nb_r(q, r, d);
+        if hexset_get(cells, nq, nr) && label_get(lb, q, r) != label_get(lb, nq, nr) {
+          // a door in the wall across the hall, two edges of it just north of the middle
+          door = label_get(lb, q, r) + label_get(lb, nq, nr) == 1 && lattice_m(q, r) == 6 && lattice_m(nq, nr) == 6;
+          edge_set_mat(edges, q, r, nq, nr, if door { hex_draw::OPEN_DOOR } else { INNER });
+        }
+      }
+    }
+  }
+  built = hex_draw::cells_built(cells, OUTER, 0);
+  a = built.cw_corners[len(built.cw_corners) - 1] ?? (0.0, 0.0);
+  b = built.cw_corners[0] ?? (0.0, 0.0);
+  hex_draw::cells_place_opening(built, edges, hex_draw::OPEN_DOOR, (a.0 + b.0) * 0.5, (a.1 + b.1) * 0.5, hex_draw::opening_sizes_default());
+  st = stencil_with_edges(cells, hz, lb, edges, true, true);
+  layer_add(st.sn_layers, "room");
+  for r in 0 - reach..reach + 1 {
+    for q in 0 - reach..reach + 1 {
+      if hexset_get(cells, q, r) { layer_set(st.sn_layers, "room", q, r, label_get(lb, q, r)); }
+    }
+  }
+  st
+}
+
+// What a turned hall keeps.  Its rooms, counted afresh by walking from cell to cell wherever no
+// edge is marked, are `rooms`: no inner wall leaks and none is doubled.  In each such room every
+// cell has one label, one height and one "room" layer — the drawn room's — so what a cell holds
+// came through with its room.  The inner walls are there in their material with their door; the
+// outer walls in theirs with theirs.
+fn stencil_keeps(name: text, st: Stencil, t: StencilTurn, rooms: integer, step: integer) {
+  cells = t.tu_stencil.sn_cells;
+  edges = t.tu_stencil.sn_edges;
+  seen = labels_new(hexset_q0(cells), hexset_r0(cells), hexset_w(cells), hexset_h(cells));
+  found = 0;
+  inner = 0;
+  inner_doors = 0;
+  outer_doors = 0;
+  outer = 0;
+  for r in hexset_r0(cells)..hexset_r0(cells) + hexset_h(cells) {
+    for q in hexset_q0(cells)..hexset_q0(cells) + hexset_w(cells) {
+      if !hexset_get(cells, q, r) { continue; }
+      for d in 0..6 {
+        nq = nb_q(q, r, d);
+        nr = nb_r(q, r, d);
+        m = edge_mat(edges, q, r, nq, nr);
+        if !hexset_get(cells, nq, nr) {
+          assert(m == OUTER || m == hex_draw::OPEN_DOOR, "{name} at {30 * step}: an outer edge of material {m}");
+          outer += 1;
+          if m == hex_draw::OPEN_DOOR { outer_doors += 1; }
+        } else if m != 0 && (nr > r || (nr == r && nq > q)) {
+          assert(m == INNER || m == hex_draw::OPEN_DOOR, "{name} at {30 * step}: an inner edge of material {m}");
+          inner += 1;
+          if m == hex_draw::OPEN_DOOR { inner_doors += 1; }
+        }
+      }
+      if label_get(seen, q, r) >= 0 { continue; }
+      // a room: from this cell to every cell reached across no marked edge
+      label_set(seen, q, r, found);
+      want = label_get(t.tu_stencil.sn_labels, q, r);
+      sq: vector<integer> = [q];
+      sr: vector<integer> = [r];
+      at = 0;
+      while at < len(sq) {
+        cq = sq[at] ?? 0;
+        cr = sr[at] ?? 0;
+        at += 1;
+        assert(label_get(t.tu_stencil.sn_labels, cq, cr) == want, "{name} at {30 * step}: one label a room");
+        assert(height_get(t.tu_stencil.sn_heights, cq, cr) == (want as float) + 0.5, "{name} at {30 * step}: its room's height");
+        assert(layer_get(t.tu_stencil.sn_layers, "room", cq, cr) == want, "{name} at {30 * step}: its room's layer");
+        for d in 0..6 {
+          nq = nb_q(cq, cr, d);
+          nr = nb_r(cq, cr, d);
+          if !hexset_get(cells, nq, nr) || label_get(seen, nq, nr) >= 0 || edge_mat(edges, cq, cr, nq, nr) != 0 { continue; }
+          label_set(seen, nq, nr, found);
+          sq += [nq];
+          sr += [nr];
+        }
+      }
+      assert(len(sq) > 20, "{name} at {30 * step}: a room of {len(sq)} cells");
+      found += 1;
+    }
+  }
+  assert(found == rooms && t.tu_rooms == rooms, "{name} at {30 * step}: {rooms} rooms, walked {found}, told {t.tu_rooms}");
+  assert(t.tu_lost == 0, "{name} at {30 * step}: no wall lost");
+  assert(inner >= 14 && inner_doors >= 1 && inner_doors <= 3, "{name} at {30 * step}: the inner wall ({inner} edges) and its door ({inner_doors})");
+  assert(outer_doors >= 1 && outer_doors <= 3 && outer > 60, "{name} at {30 * step}: the outer wall ({outer} edges) and its door ({outer_doors})");
+  _ = st;
+}
+
+// A hall of two rooms and one of three (a wall meeting a wall), at all twelve steps.  An even
+// step is `stencil_rotate`, to the edge.
+fn test_a_stencil_turns_with_its_rooms() {
+  for tee in 0..2 {
+    st = hall_stencil(5, tee == 1);
+    name = if tee == 1 { "a hall of three rooms" } else { "a hall of two rooms" };
+    for s in 0..12 {
+      t = stencil_turn(st, s);
+      stencil_keeps(name, st, t, 2 + tee, s);
+      if s % 2 == 0 {
+        exact = stencil_rotate(st, s / 2 ?? 0);
+        assert(edgeset_equal(t.tu_stencil.sn_edges, exact.sn_edges), "{name} at {30 * s}: stencil_rotate's edges");
+        assert(hexset_count(t.tu_stencil.sn_cells) == hexset_count(exact.sn_cells), "{name} at {30 * s}: stencil_rotate's cells");
+      }
+    }
+  }
+}
+
+// The inner wall comes out straight.  Drawn, the wall across the hall runs north (heading 3);
+// turned `s` steps it runs along heading 3 + s, and every one of its edges' midpoints lies within
+// half a hex of one line along that heading.
+fn test_an_inner_wall_stays_straight() {
+  st = hall_stencil(5, false);
+  for s in 0..12 {
+    t = stencil_turn(st, s);
+    cells = t.tu_stencil.sn_cells;
+    a = ((3 + s) as float) * PI / 6.0;
+    lo = 1000000.0;
+    hi = -1000000.0;
+    n = 0;
+    for r in hexset_r0(cells)..hexset_r0(cells) + hexset_h(cells) {
+      for q in hexset_q0(cells)..hexset_q0(cells) + hexset_w(cells) {
+        if !hexset_get(cells, q, r) { continue; }
+        for d in 0..6 {
+          nq = nb_q(q, r, d);
+          nr = nb_r(q, r, d);
+          if !hexset_get(cells, nq, nr) || edge_mat(t.tu_stencil.sn_edges, q, r, nq, nr) == 0 { continue; }
+          mx = (hex_form::cell_x(q, r) + hex_form::cell_x(nq, nr)) * 0.5;
+          my = (hex_form::cell_y(q, r) + hex_form::cell_y(nq, nr)) * 0.5;
+          across = -mx * sin(a) + my * cos(a);
+          if across < lo { lo = across; }
+          if across > hi { hi = across; }
+          n += 1;
+        }
+      }
+    }
+    assert(n >= 28, "at {30 * s}: the inner wall's edges, each seen from both its cells: {n}");
+    assert(hi - lo < 0.9, "at {30 * s}: the inner wall within a band of {hi - lo} across heading {(3 + s) % 12 ?? 0}");
+  }
+}
+
+// A wall that closes nothing — a stub three edges long in the middle of a room — bounds no room.
+// An even step carries it, edge for edge; an odd step cannot, and says how many edges it lost.
+fn test_a_wall_that_closes_nothing_is_counted() {
+  st = hall_stencil(5, false);
+  stub = 0;
+  for q in -9..-6 {
+    edge_set_mat(st.sn_edges, q, 2, nb_q(q, 2, 4), nb_r(q, 2, 4), INNER);
+    stub += 1;
+  }
+  even = stencil_turn(st, 2);
+  assert(even.tu_lost == 0 && edgeset_equal(even.tu_stencil.sn_edges, stencil_rotate(st, 1).sn_edges), "60 degrees carries every edge");
+  odd = stencil_turn(st, 1);
+  assert(odd.tu_lost == stub && odd.tu_rooms == 2, "30 degrees: the stub's {stub} edges lost and told, {odd.tu_lost}; the two rooms kept");
+}
+
+// How long an inner wall is.
+fn inner_length(w: hex_draw::InnerWall) -> float {
+  sqrt((w.iw_bx - w.iw_ax) * (w.iw_bx - w.iw_ax) + (w.iw_by - w.iw_ay) * (w.iw_by - w.iw_ay)) ?? 0.0
+}
+
+// The inner walls read back as straight walls (`hex_draw::cells_inner_walls`), drawn and at every
+// turn.  The hall of two rooms has one, between rooms 0 and 1, of material 5, with its door; the
+// hall of three has three — the wall across it is two stretches, one against each room east of it,
+// and the wall between those two.  Turned `s` steps there are as many, each along one of the
+// turned axes, each as long as it was drawn to within a hex step, and the door is in one of them.
+fn test_inner_walls_read_back_straight_at_every_turn() {
+  for tee in 0..2 {
+    st = hall_stencil(5, tee == 1);
+    drawn = hex_draw::cells_inner_walls(st.sn_cells, st.sn_edges, 0);
+    want = if tee == 1 { 3 } else { 1 };
+    assert(drawn.in_rooms == 2 + tee && len(drawn.in_walls) == want && drawn.in_lost == 0, "drawn, {2 + tee} rooms: {len(drawn.in_walls)} inner walls");
+    assert(len(drawn.in_opens) == 1 && drawn.in_opens[0]!.io_kind == hex_draw::OPEN_DOOR, "drawn: its one door");
+    lengths: vector<float> = [];
+    for w in drawn.in_walls {
+      assert(w.iw_mat == INNER && w.iw_a < w.iw_b && w.iw_edges >= 6, "drawn: a wall of material 5 between two rooms, {w.iw_edges} edges");
+      lengths += [inner_length(w)];
+    }
+    lengths.sort();
+    for s in 0..12 {
+      t = stencil_turn(st, s);
+      got = hex_draw::cells_inner_walls(t.tu_stencil.sn_cells, t.tu_stencil.sn_edges, s);
+      assert(got.in_rooms == 2 + tee && got.in_lost == 0, "at {30 * s}: {got.in_rooms} rooms, {got.in_lost} lost");
+      assert(len(got.in_walls) == want, "at {30 * s}: {want} inner walls, got {len(got.in_walls)}");
+      assert(len(got.in_opens) == 1 && got.in_opens[0]!.io_kind == hex_draw::OPEN_DOOR, "at {30 * s}: the door, {len(got.in_opens)}");
+      turned: vector<float> = [];
+      for w in got.in_walls {
+        h = hex_draw::surface_heading(w.iw_surface);
+        assert(h >= 0 && hex_form::head_norm(h - s) % 3 == 0, "at {30 * s}: an inner wall along a turned axis, heading {h}");
+        assert(w.iw_mat == INNER, "at {30 * s}: of material 5");
+        turned += [inner_length(w)];
+      }
+      turned.sort();
+      for i in 0..want {
+        d = (turned[i] ?? 0.0) - (lengths[i] ?? 0.0);
+        assert(d < 1.8 && d > -1.8, "at {30 * s}: wall {i} as long as drawn to within a hex step, {turned[i] ?? 0.0} against {lengths[i] ?? 0.0}");
+      }
+      // the door's span lies on its wall
+      o = got.in_opens[0]!;
+      w = got.in_walls[o.io_wall]!;
+      (dx, dy) = hex_draw::surface_dir(w.iw_surface);
+      off = (o.io_cx - w.iw_ax) * (0.0 - dy) + (o.io_cy - w.iw_ay) * dx;
+      assert(off < 0.000001 && off > -0.000001, "at {30 * s}: the door's centre on its wall's line");
+    }
+  }
+}
+
+// A room one cell wide: a corridor down the hall, a room either side.  Along an odd heading a
+// single row's cells stand apart, so the corridor's cells would come through 30 degrees loose,
+// each a room of its own.  It comes through in one piece instead — three rooms at every step,
+// counted afresh — and each side room still has most of its cells.
+fn test_a_corridor_one_cell_wide_stays_one_room() {
+  reach = 30;
+  cells = turn_drawn(24, 16, 0, reach);
+  edges = edgeset_new(0 - reach, 0 - reach, 2 * reach + 1, 2 * reach + 1);
+  hex_draw::draw_walls(cells, edges, OUTER);
+  lb = labels_new(0 - reach, 0 - reach, 2 * reach + 1, 2 * reach + 1);
+  sizes = [0, 0, 0];
+  for r in 0 - reach..reach + 1 {
+    for q in 0 - reach..reach + 1 {
+      if !hexset_get(cells, q, r) { continue; }
+      // one straight row of cells, each touching the next
+      room = if r < 0 { 0 } else if r == 0 { 1 } else { 2 };
+      label_set(lb, q, r, room);
+      sizes[room] += 1;
+    }
+  }
+  for r in 0 - reach..reach + 1 {
+    for q in 0 - reach..reach + 1 {
+      if !hexset_get(cells, q, r) { continue; }
+      for d in 0..6 {
+        nq = nb_q(q, r, d);
+        nr = nb_r(q, r, d);
+        if hexset_get(cells, nq, nr) && label_get(lb, q, r) != label_get(lb, nq, nr) { edge_set_mat(edges, q, r, nq, nr, INNER); }
+      }
+    }
+  }
+  st = stencil_with_edges(cells, heights_new(0 - reach, 0 - reach, 2 * reach + 1, 2 * reach + 1), lb, edges, false, true);
+  assert(hex_draw::cells_rooms(cells, edges).cr_n == 3 && sizes[1] > 6 && sizes[1] < sizes[0] / 4, "drawn: a corridor of {sizes[1]} cells between rooms of {sizes[0]} and {sizes[2]}");
+  for s in 0..12 {
+    t = stencil_turn(st, s);
+    rooms = hex_draw::cells_rooms(t.tu_stencil.sn_cells, t.tu_stencil.sn_edges);
+    assert(rooms.cr_n == 3 && t.tu_rooms == 3 && t.tu_lost == 0, "at {30 * s}: three rooms, counted {rooms.cr_n}, told {t.tu_rooms}");
+    got = [0, 0, 0];
+    for r in hexset_r0(t.tu_stencil.sn_cells)..hexset_r0(t.tu_stencil.sn_cells) + hexset_h(t.tu_stencil.sn_cells) {
+      for q in hexset_q0(t.tu_stencil.sn_cells)..hexset_q0(t.tu_stencil.sn_cells) + hexset_w(t.tu_stencil.sn_cells) {
+        if hexset_get(t.tu_stencil.sn_cells, q, r) { got[label_get(t.tu_stencil.sn_labels, q, r)] += 1; }
+      }
+    }
+    assert(got[1] >= sizes[1] / 2 && got[0] * 10 >= sizes[0] * 8 && got[2] * 10 >= sizes[2] * 8, "at {30 * s}: the corridor {got[1]} of {sizes[1]} cells, the rooms {got[0]} of {sizes[0]} and {got[2]} of {sizes[2]}");
+  }
+}
+
+// ── a stencil as text ───────────────────────────────────────────────────────
+
+fn hall_legend() -> StencilLegend {
+  StencilLegend { sl_cells: "abc", sl_labels: [0, 1, 2], sl_edges: "#:D", sl_mats: [OUTER, INNER, hex_draw::OPEN_DOOR] }
+}
+
+// Three cells drawn by hand: a and b side by side, c above and between them.  A wall between a
+// and b, a door between a and c, nothing between b and c; an outer wall west of a and east of b.
+fn test_a_stencil_is_read_from_its_text() {
+  rows = ["    c",
+          "   D",
+          "# a : b #"];
+  got = stencil_read(rows, hall_legend(), 2, 2);
+  assert(len(got.sr_errors) == 0, "read whole: {got.sr_errors}");
+  st = got.sr_stencil;
+  assert(hexset_count(st.sn_cells) == 3 && hexset_get(st.sn_cells, 0, 0) && hexset_get(st.sn_cells, 1, 0) && hexset_get(st.sn_cells, 0, 1), "cells (0,0), (1,0) and (0,1)");
+  assert(label_get(st.sn_labels, 0, 0) == 0 && label_get(st.sn_labels, 1, 0) == 1 && label_get(st.sn_labels, 0, 1) == 2, "their labels");
+  // c touches both a and b: it is drawn between them, a row up
+  touches = 0;
+  for d in 0..6 {
+    if nb_q(0, 1, d) == 0 && nb_r(0, 1, d) == 0 { touches += 1; }
+    if nb_q(0, 1, d) == 1 && nb_r(0, 1, d) == 0 { touches += 1; }
+  }
+  assert(touches == 2, "the cell drawn above and between touches both");
+  assert(edge_mat(st.sn_edges, 0, 0, 1, 0) == INNER, "the wall between a and b");
+  assert(edge_mat(st.sn_edges, 0, 0, 0, 1) == hex_draw::OPEN_DOOR, "the door between a and c");
+  assert(edge_mat(st.sn_edges, 1, 0, 0, 1) == 0, "nothing between b and c");
+  assert(edge_mat(st.sn_edges, 0, 0, -1, 0) == OUTER && edge_mat(st.sn_edges, 1, 0, 2, 0) == OUTER, "the outer walls west and east");
+  assert(edgeset_count_all(st.sn_edges) == 4, "four marks in all: {edgeset_count_all(st.sn_edges)}");
+  // what cannot be read is said, a line each
+  bad = stencil_read(["    c", "  D", "# a z b #  :"], hall_legend(), 2, 2);
+  assert(len(bad.sr_errors) == 3, "an edge between the grid's places, a cell not of the legend, an edge that touches no cell: {bad.sr_errors}");
+}
+
+// Written and read again a stencil is the same: the hall of three rooms with its doors, drawn and
+// turned 30 degrees — every cell, every label, every mark.  And the text of what was read is the
+// text it was read from.
+fn test_a_stencil_written_reads_back_the_same() {
+  for s in 0..2 {
+    st = stencil_turn(hall_stencil(5, true), s).tu_stencil;
+    w = stencil_rows(st, hall_legend());
+    got = stencil_read(w.sw_rows, hall_legend(), w.sw_line, w.sw_col);
+    assert(len(got.sr_errors) == 0, "at {30 * s}: read whole: {got.sr_errors}");
+    back = got.sr_stencil;
+    assert(hexset_count(back.sn_cells) == hexset_count(st.sn_cells) && hexset_count(st.sn_cells) > 100, "at {30 * s}: as many cells");
+    marks = 0;
+    for r in hexset_r0(st.sn_cells)..hexset_r0(st.sn_cells) + hexset_h(st.sn_cells) {
+      for q in hexset_q0(st.sn_cells)..hexset_q0(st.sn_cells) + hexset_w(st.sn_cells) {
+        if !hexset_get(st.sn_cells, q, r) { continue; }
+        assert(hexset_get(back.sn_cells, q, r) && label_get(back.sn_labels, q, r) == label_get(st.sn_labels, q, r), "at {30 * s}: cell ({q}, {r}) and its label");
+        for d in 0..6 {
+          m = edge_mat(st.sn_edges, q, r, nb_q(q, r, d), nb_r(q, r, d));
+          assert(edge_mat(back.sn_edges, q, r, nb_q(q, r, d), nb_r(q, r, d)) == m, "at {30 * s}: the mark on side {d} of ({q}, {r})");
+          if m != 0 { marks += 1; }
+        }
+      }
+    }
+    assert(marks > 100, "at {30 * s}: marks compared: {marks}");
+    again = stencil_rows(back, hall_legend());
+    assert(len(again.sw_rows) == len(w.sw_rows) && again.sw_line == w.sw_line && again.sw_col == w.sw_col, "at {30 * s}: the same lines about the same place");
+    for i in 0..len(w.sw_rows) { assert(again.sw_rows[i] == w.sw_rows[i], "at {30 * s}: line {i} the same"); }
+  }
+}

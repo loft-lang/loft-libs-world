@@ -1188,6 +1188,14 @@ pub fn stencil_with_edges(s: HexSet, hz: Heights, lb: Labels, eg: EdgeSet,
   }
 }
 
+// Does the stencil carry heights?  A stencil built without them leaves the target's alone when
+// stamped; whoever makes one stencil from another (a turn, a cut) needs to ask.
+pub fn stencil_has_heights(st: const Stencil) -> boolean { st.sn_has_h }
+// Does the stencil carry labels?
+pub fn stencil_has_labels(st: const Stencil) -> boolean { st.sn_has_l }
+// Does the stencil carry edges (walls)?
+pub fn stencil_has_edges(st: const Stencil) -> boolean { st.sn_has_e }
+
 // Rotate a whole stencil n × 60° about its own (0,0), re-fitting the extent to
 // whatever the rotated cells need.
 // Example: @HXL-007

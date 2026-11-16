@@ -1092,3 +1092,163 @@ fn unstack(w: World, x: integer, y: integer, z: integer) {
   w.stacks[x, y, z] = null;
   mark(w, x, y, z);
 }
+
+// --- A stamp turned, mirrored and laid ---
+//
+// A stamp (`copy`) is a part of a world: a room's corner, a cellar, a broken wall.  The same
+// part is wanted the other way round — a back door on any of a house's four walls — so a stamp
+// can be MIRRORED east to west and TURNED clockwise a quarter at a time: the eight ways a part
+// of a square grid can lie.  And it is wanted LAID as well as pasted: a template of a house's
+// part takes the shape of the house it is laid on, so a cell it left unset stays as the world
+// has it and an edge it does not hold is left alone — it adds and changes, and removes nothing
+// it does not name.
+
+fn quarter(turn: integer) -> integer { ((turn % 4) + 4) % 4 }
+
+/// The box of a stamp: the cells it set or put things on, over every layer, as (x0, y0, x1, y1),
+/// corners included.  A cell that only holds an edge, a rise, a slant or a ceiling is not counted:
+/// a part's size is its cells'.  An empty stamp's box is the single cell (0, 0).
+pub fn stamp_box(s: const World) -> (integer, integer, integer, integer) {
+  any = false;
+  x0 = 0;
+  y0 = 0;
+  x1 = 0;
+  y1 = 0;
+  for c in s.chunks {
+    for j in 0..CHUNK {
+      for i in 0..CHUNK {
+        if ((c.cells[j * CHUNK + i] ?? 0) as integer) == UNSET { continue; }
+        fx = c.cx * CHUNK + i;
+        fy = c.cy * CHUNK + j;
+        if !any || fx < x0 { x0 = fx; }
+        if !any || fx > x1 { x1 = fx; }
+        if !any || fy < y0 { y0 = fy; }
+        if !any || fy > y1 { y1 = fy; }
+        any = true;
+      }
+    }
+  }
+  for st in s.stacks {
+    if !any || st.x < x0 { x0 = st.x; }
+    if !any || st.x > x1 { x1 = st.x; }
+    if !any || st.y < y0 { y0 = st.y; }
+    if !any || st.y > y1 { y1 = st.y; }
+    any = true;
+  }
+  (x0, y0, x1, y1)
+}
+
+/// The size of a stamp's box, (width, height), once turned `turn` quarters.
+pub fn stamp_size(s: const World, turn: integer) -> (integer, integer) {
+  b = stamp_box(s);
+  if quarter(turn) % 2 == 1 { (b.3 - b.1 + 1, b.2 - b.0 + 1) } else { (b.2 - b.0 + 1, b.3 - b.1 + 1) }
+}
+
+/// Where cell (x, y) of a stamp whose box is (x0, y0, x1, y1) lands, counted from the turned box's
+/// north-west corner: mirrored east to west first (`flip`), then turned clockwise `turn` quarters.
+/// For what a game keeps beside its world — a figure on a cell, a lock on a door — to go where its
+/// cell goes.  A cell outside the box lands outside the turned box, as far.
+pub fn stamp_spot(x0: integer, y0: integer, x1: integer, y1: integer, turn: integer, flip: boolean,
+                  x: integer, y: integer) -> (integer, integer) {
+  u = x - x0;
+  v = y - y0;
+  w = x1 - x0 + 1;
+  h = y1 - y0 + 1;
+  if flip { u = w - 1 - u; }
+  for _ in 0..quarter(turn) {
+    nu = h - 1 - v;
+    v = u;
+    u = nu;
+    hw = w;
+    w = h;
+    h = hw;
+  }
+  (u, v)
+}
+
+/// The side (NORTH, EAST, SOUTH, WEST) `side` becomes: mirrored east to west, then turned clockwise.
+pub fn turned_side(side: integer, turn: integer, flip: boolean) -> integer {
+  s = side;
+  if flip && (s == EAST || s == WEST) { s = 4 - s; }
+  (s + quarter(turn)) % 4
+}
+
+/// The way a slant looks (NORTH_EAST .. NORTH_WEST, 0 for none) once mirrored and turned.
+pub fn turned_slant(way: integer, turn: integer, flip: boolean) -> integer {
+  if way <= 0 || way > NORTH_WEST { return 0; }
+  s = if flip { 5 - way } else { way };
+  for _ in 0..quarter(turn) { s = s % 4 + 1; }
+  s
+}
+
+/// Stamp `s` mirrored east to west (`flip`) and then turned clockwise `turn` quarters, as a stamp:
+/// its box's north-west corner at (0, 0), its layers as they were.  Every cell goes where
+/// `stamp_spot` says, with its terrain, rise, ceiling and stack; its slant looks the turned way;
+/// its edges are on their turned sides.  Turned four times, or mirrored twice, it is the stamp
+/// again (moved so its box begins at (0, 0)).
+pub fn turned(s: const World, turn: integer, flip: boolean = false) -> World {
+  out = world();
+  out.terrains = s.terrains;
+  out.objects = s.objects;
+  out.edges = s.edges;
+  b = stamp_box(s);
+  for c in s.chunks {
+    for j in 0..CHUNK {
+      for i in 0..CHUNK {
+        fx = c.cx * CHUNK + i;
+        fy = c.cy * CHUNK + j;
+        r = raw(s, fx, fy, c.z);
+        v = word(s, fx, fy, c.z);
+        if r == UNSET && v == 0 { continue; }
+        at = stamp_spot(b.0, b.1, b.2, b.3, turn, flip, fx, fy);
+        if r != UNSET { put_raw(out, at.0, at.1, c.z, r); }
+        if ((v >> 16) & 15) != 0 { set_rise(out, at.0, at.1, c.z, (v >> 16) & 15); }
+        if ((v >> 20) & 7) != 0 { set_slant(out, at.0, at.1, c.z, turned_slant((v >> 20) & 7, turn, flip)); }
+        if ((v >> 23) & 15) != 0 { set_ceiling(out, at.0, at.1, c.z, (v >> 23) & 15); }
+        if (v & 255) != 0 { set_edge(out, at.0, at.1, c.z, turned_side(NORTH, turn, flip), v & 255); }
+        if ((v >> 8) & 255) != 0 { set_edge(out, at.0, at.1, c.z, turned_side(WEST, turn, flip), (v >> 8) & 255); }
+      }
+    }
+  }
+  for st in s.stacks {
+    at = stamp_spot(b.0, b.1, b.2, b.3, turn, flip, st.x, st.y);
+    for t in st.things { place(out, at.0, at.1, st.z, t); }
+  }
+  out
+}
+
+/// Lay stamp `from` on `w` with its (0, 0, 0) at (x, y, z): only what the stamp holds is written.
+///   - a cell it SET (to anything, void included) replaces the cell there: its terrain, rise,
+///     slant and ceiling, and its stack (none when the stamp's cell has none);
+///   - a cell it left UNSET leaves `w`'s cell as it is, so the stamp takes the shape of what it is
+///     laid on;
+///   - an edge it holds is written; an edge it does not hold is left alone, so a stamp adds and
+///     changes edges and never removes one;
+///   - things on a cell it left unset still replace the stack there.
+/// `paste` is the other rule: there every cell the stamp holds anything at is replaced whole, its
+/// edges with it.
+pub fn lay(w: World, from: const World, x: integer, y: integer, z: integer) {
+  for c in from.chunks {
+    for j in 0..CHUNK {
+      for i in 0..CHUNK {
+        fx = c.cx * CHUNK + i;
+        fy = c.cy * CHUNK + j;
+        r = raw(from, fx, fy, c.z);
+        v = word(from, fx, fy, c.z);
+        if r == UNSET && v == 0 { continue; }
+        if (v & 255) != 0 { set_edge(w, x + fx, y + fy, z + c.z, NORTH, v & 255); }
+        if ((v >> 8) & 255) != 0 { set_edge(w, x + fx, y + fy, z + c.z, WEST, (v >> 8) & 255); }
+        if r == UNSET { continue; }
+        put_raw(w, x + fx, y + fy, z + c.z, r);
+        set_rise(w, x + fx, y + fy, z + c.z, (v >> 16) & 15);
+        set_slant(w, x + fx, y + fy, z + c.z, (v >> 20) & 7);
+        set_ceiling(w, x + fx, y + fy, z + c.z, (v >> 23) & 15);
+        unstack(w, x + fx, y + fy, z + c.z);
+      }
+    }
+  }
+  for s in from.stacks {
+    unstack(w, x + s.x, y + s.y, z + s.z);
+    for t in s.things { place(w, x + s.x, y + s.y, z + s.z, t); }
+  }
+}
