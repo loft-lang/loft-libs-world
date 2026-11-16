@@ -349,3 +349,158 @@ pub fn ground_sharpen(g: Ground, sharp: Heights, areas: const vector<GroundBox>,
     }
   }
 }
+
+// ── THE GROUND READ: A SMOOTH SURFACE THROUGH THE CELLS ────────────────────
+//
+// The cells hold one height each; the ground they stand for is smooth.  It is read as it is
+// drawn: each cell a fan of six triangles from its centre, each corner of the fan at the MEAN
+// height of the cells round it.  A corner is shared by three cells, so the three fans agree
+// there and the surface has no crack — along a fan's rim, between two cells, both read the line
+// between the same two corner heights.
+//
+// A corner on the window's rim has fewer than three cells in the window; it takes the mean of
+// those it has, and a corner none of whose cells are in the window reads 0.
+
+// @FR-HG-Surface: a corner's height is the mean of the cells round it
+// The height of the corner at doubled coordinates (k, m): the mean of the cells round it that
+// the ground's window holds, 0 when it holds none.  (k, m) must be a corner of the lattice.
+pub fn ground_corner_height(g: const Ground, k: integer, m: integer) -> float {
+  // the three cells whose corner this is, each a corner offset back from it; those the window
+  // holds are kept in row order, then along the row, so the sum is taken in one order whoever
+  // asks (no list is built: this is asked six times a cell when a ground is drawn)
+  n = 0;
+  qa = 0;
+  ra = 0;
+  qb = 0;
+  rb = 0;
+  qc = 0;
+  rc = 0;
+  for i in 0..6 {
+    ck = k - corner_k(i);
+    cm = m - corner_m(i);
+    if ((cm % 3) + 3) % 3 != 0 { continue; }
+    (q, r) = lattice_to_cell(ck, cm);
+    if lattice_k(q, r) != ck || lattice_m(q, r) != cm { continue; }
+    if q < g.gr_q0 || q >= g.gr_q0 + g.gr_w || r < g.gr_r0 || r >= g.gr_r0 + g.gr_h { continue; }
+    if n == 0 {
+      qa = q;
+      ra = r;
+    } else if n == 1 {
+      if r < ra || (r == ra && q < qa) {
+        qb = qa;
+        rb = ra;
+        qa = q;
+        ra = r;
+      } else {
+        qb = q;
+        rb = r;
+      }
+    } else if r < ra || (r == ra && q < qa) {
+      qc = qb;
+      rc = rb;
+      qb = qa;
+      rb = ra;
+      qa = q;
+      ra = r;
+    } else if r < rb || (r == rb && q < qb) {
+      qc = qb;
+      rc = rb;
+      qb = q;
+      rb = r;
+    } else {
+      qc = q;
+      rc = r;
+    }
+    n += 1;
+  }
+  if n == 0 { return 0.0; }
+  sum = height_get(g.gr_heights, qa, ra);
+  if n > 1 { sum += height_get(g.gr_heights, qb, rb); }
+  if n > 2 { sum += height_get(g.gr_heights, qc, rc); }
+  (sum / (n as float)) ?? 0.0
+}
+
+// The ground's height at (x, y), in its unit, as it is drawn: within the triangle of its cell's
+// fan that holds the point, between the cell's centre and two of its corners.
+pub fn ground_height_at(g: const Ground, x: float, y: float) -> float {
+  (q, r) = ground_cell_near(g.gr_step, x, y);
+  (cx, cy) = ground_centre(g.gr_step, q, r);
+  k = lattice_k(q, r);
+  m = lattice_m(q, r);
+  // the corner the point lies past, going round anticlockwise from corner 0 (north): corner j
+  // sits at 90 + 60 j degrees
+  a = atan2(y - cy, x - cx) * 180.0 / PI;
+  j0 = (((floor((a - 90.0) / 60.0) as integer) % 6) + 6) % 6 ?? 0;
+  j1 = (j0 + 1) % 6 ?? 0;
+  kx = g.gr_step * 0.5;
+  my = g.gr_step * 0.28867513459481287;
+  ax = (corner_k(j0) as float) * kx;
+  ay = (corner_m(j0) as float) * my;
+  bx = (corner_k(j1) as float) * kx;
+  by = (corner_m(j1) as float) * my;
+  // barycentric in the triangle (centre, a, b)
+  px = x - cx;
+  py = y - cy;
+  det = ax * by - ay * bx;
+  wa = ((px * by - py * bx) / det) ?? 0.0;
+  wb = ((ax * py - ay * px) / det) ?? 0.0;
+  wc = 1.0 - wa - wb;
+  wc * height_get(g.gr_heights, q, r) + wa * ground_corner_height(g, k + corner_k(j0), m + corner_m(j0))
+    + wb * ground_corner_height(g, k + corner_k(j1), m + corner_m(j1))
+}
+
+// A cell's level: `levels`' label within the ground's window, 0 beyond it.
+fn ground_level(g: const Ground, levels: const Labels, q: integer, r: integer) -> integer {
+  if q < g.gr_q0 || q >= g.gr_q0 + g.gr_w || r < g.gr_r0 || r >= g.gr_r0 + g.gr_h { return 0; }
+  label_get(levels, q, r)
+}
+
+// Corner (k, m), the j-th of a cell, as the mean of the cells round it on one side of the cliff
+// of `level`: the cells lie away from it along corner offsets j, j + 2 and j + 4.
+fn corner_on_side(g: const Ground, levels: const Labels, k: integer, m: integer, j: integer, level: integer,
+                  high: boolean, own: float) -> float {
+  sum = 0.0;
+  n = 0;
+  for t in 0..3 {
+    i = (j + 2 * t) % 6 ?? 0;
+    (q, r) = lattice_to_cell(k - corner_k(i), m - corner_m(i));
+    if (ground_level(g, levels, q, r) >= level) == high {
+      sum += height_get(g.gr_heights, q, r);
+      n += 1;
+    }
+  }
+  if n == 0 { own } else { (sum / (n as float)) ?? own }
+}
+
+// @FR-HG-Cliff: either side of a cliff its own surface, from the cells on that side only
+// The ground's height at (x, y) on one side of a cliff of `level`: on its high side (`high`, the
+// cells of `level` and up, by `levels`) or its low one.  Each corner is the mean of the cells
+// round it on that side only, so the ground does not slope down the cliff.  A corner with no
+// cell on that side, or the centre of a cell on the other, takes that side's own height: its
+// level times `storey`.
+pub fn ground_height_on(g: const Ground, levels: const Labels, x: float, y: float, level: integer, high: boolean,
+                        storey: float) -> float {
+  (q, r) = ground_cell_near(g.gr_step, x, y);
+  (cx, cy) = ground_centre(g.gr_step, q, r);
+  k = lattice_k(q, r);
+  m = lattice_m(q, r);
+  a = atan2(y - cy, x - cx) * 180.0 / PI;
+  j0 = (((floor((a - 90.0) / 60.0) as integer) % 6) + 6) % 6 ?? 0;
+  j1 = (j0 + 1) % 6 ?? 0;
+  own = (if high { level } else { level - 1 } as float) * storey;
+  hc = if (ground_level(g, levels, q, r) >= level) == high { height_get(g.gr_heights, q, r) } else { own };
+  ha = corner_on_side(g, levels, k + corner_k(j0), m + corner_m(j0), j0, level, high, own);
+  hb = corner_on_side(g, levels, k + corner_k(j1), m + corner_m(j1), j1, level, high, own);
+  kx = g.gr_step * 0.5;
+  my = g.gr_step * 0.28867513459481287;
+  ax = (corner_k(j0) as float) * kx;
+  ay = (corner_m(j0) as float) * my;
+  bx = (corner_k(j1) as float) * kx;
+  by = (corner_m(j1) as float) * my;
+  px = x - cx;
+  py = y - cy;
+  det = ax * by - ay * bx;
+  wa = ((px * by - py * bx) / det) ?? 0.0;
+  wb = ((ax * py - ay * px) / det) ?? 0.0;
+  (1.0 - wa - wb) * hc + wa * ha + wb * hb
+}

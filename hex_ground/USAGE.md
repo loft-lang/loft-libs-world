@@ -28,6 +28,9 @@ a dig and cliffs.
 - **cliffs** — `ground_cliffs` for the stretches of a level's straight sides inside the cliff
   areas (`GroundBox`), `ground_sharpen` to stand the ground at its level's height there
 
+- **read the ground** — `ground_height_at` for the smooth surface at a point, `ground_corner_height`
+  for a corner (the mean of its cells), `ground_height_on` for one side of a cliff
+
 ## The rules that bite
 
 - **One unit.** Heights, distances and `step` are all in the unit you chose; nothing here converts.

@@ -181,7 +181,7 @@ pub fn heights_new(q0: integer, r0: integer, w: integer, h: integer) -> Heights 
   Heights { hz_q0: q0, hz_r0: r0, hz_w: w, hz_h: h, hz_z: z }
 }
 
-fn hz_index(f: Heights, q: integer, r: integer) -> integer {
+fn hz_index(f: const Heights, q: integer, r: integer) -> integer {
   dq = q - f.hz_q0;
   dr = r - f.hz_r0;
   if dq < 0 || dr < 0 || dq >= f.hz_w || dr >= f.hz_h { return -1; }
@@ -195,7 +195,7 @@ pub fn height_set(f: Heights, q: integer, r: integer, z: float) {
 }
 
 // One cell's height, or 0.0 outside the window — probe a neighbour without guarding.
-pub fn height_get(f: Heights, q: integer, r: integer) -> float {
+pub fn height_get(f: const Heights, q: integer, r: integer) -> float {
   i = hz_index(f, q, r);
   if i < 0 { return 0.0; }
   f.hz_z[i] ?? 0.0
@@ -225,7 +225,7 @@ pub fn labels_new(q0: integer, r0: integer, w: integer, h: integer) -> Labels {
   Labels { lb_q0: q0, lb_r0: r0, lb_w: w, lb_h: h, lb_v: v }
 }
 
-fn lb_index(f: Labels, q: integer, r: integer) -> integer {
+fn lb_index(f: const Labels, q: integer, r: integer) -> integer {
   dq = q - f.lb_q0;
   dr = r - f.lb_r0;
   if dq < 0 || dr < 0 || dq >= f.lb_w || dr >= f.lb_h { return -1; }
@@ -239,7 +239,7 @@ pub fn label_set(f: Labels, q: integer, r: integer, v: integer) {
 }
 
 // One cell's label, or -1 when unset or outside the window.
-pub fn label_get(f: Labels, q: integer, r: integer) -> integer {
+pub fn label_get(f: const Labels, q: integer, r: integer) -> integer {
   i = lb_index(f, q, r);
   if i < 0 { return -1; }
   f.lb_v[i] ?? -1
