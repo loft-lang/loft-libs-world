@@ -195,7 +195,7 @@ fn part_within(head: integer, p: integer, lo: integer, hi: integer) -> boolean {
 // (cq, cr), its u along heading `rot` (0..11, thirty degrees a step), u flipped when `mir`.
 // Answers how many it marked.
 pub fn parts_fill(cq: integer, cr: integer, rot: integer, mir: boolean,
-                  parts: vector<BoxPart>, cells: HexSet) -> integer {
+                  parts: const vector<BoxPart>, cells: HexSet) -> integer {
   us = head_step(rot);
   vs = head_step(rot + 3);
   ck = lattice_k(cq, cr);
@@ -224,7 +224,7 @@ pub fn parts_fill(cq: integer, cr: integer, rot: integer, mir: boolean,
 
 // How far from the plan's origin, in cells, a window must reach to hold the plan at any
 // rotation: its furthest line in half steps, and a margin.
-pub fn parts_reach(parts: vector<BoxPart>) -> integer {
+pub fn parts_reach(parts: const vector<BoxPart>) -> integer {
   r = 0;
   for pi in 0..len(parts) {
     pt = parts[pi]!;

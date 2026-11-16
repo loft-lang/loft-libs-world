@@ -9,3 +9,4 @@
 // Entry point: re-exports `housedraw`, `hexsurf`.
 pub use housedraw::*;
 pub use hexsurf::*;
+pub use cellwalls::*;
