@@ -116,6 +116,14 @@ pub fn surface_mean_y(w: WallSurface) -> float {
   (((w.ws_num_m as float) / (w.ws_den as float)) ?? 0.0) * 0.5
 }
 
+// The surface's direction as a unit vector in world units ((0, 0) for a surface of no edges).
+pub fn surface_dir(w: WallSurface) -> (float, float) {
+  wx = (w.ws_dk as float) * 0.8660254037844386;
+  wy = (w.ws_dm as float) * 0.5;
+  ln = sqrt(wx * wx + wy * wy);
+  ((wx / ln) ?? 0.0, (wy / ln) ?? 0.0)
+}
+
 fn perp_x(w: WallSurface) -> float {
   wx = (w.ws_dk as float) * 0.8660254037844386;
   wy = (w.ws_dm as float) * 0.5;
@@ -254,8 +262,13 @@ pub fn surface_fitted_spread(p: Plan, cells: HexSet, side: integer) -> float {
 // Example: @HXD-003
 pub fn surface_miter(p: Plan, cells: HexSet, sa: integer, sb: integer)
                      -> (float, float, boolean) {
-  wa = surface_of(p, cells, sa);
-  wb = surface_of(p, cells, sb);
+  surface_meet(surface_of(p, cells, sa), surface_of(p, cells, sb))
+}
+
+// Where two surfaces' lines meet, in world units: `surface_miter` for surfaces that are not two
+// sides of one `Plan` — the walls of a structure known only by its cells, an L's, a road's.
+// `ok` is false when the lines are parallel.
+pub fn surface_meet(wa: WallSurface, wb: WallSurface) -> (float, float, boolean) {
   ax = surface_mean_x(wa);
   ay = surface_mean_y(wa);
   bx = surface_mean_x(wb);

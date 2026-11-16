@@ -224,6 +224,23 @@ pub fn perp_m(k: integer, _m: integer) -> integer { 3 * k }
 // 4 * the squared world length of an arbitrary doubled-coordinate vector.
 pub fn vec_n2_4(k: integer, m: integer) -> integer { 3 * k * k + m * m }
 
+// 4 * the world dot product of two doubled-coordinate vectors — `vec_n2_4` is this of a vector
+// with itself.  Exact, so "which of two headings does this run along more" and "are these two
+// walls at a right angle" (a zero) are integer questions.
+pub fn vec_dot_4(ak: integer, am: integer, bk: integer, bm: integer) -> integer { 3 * ak * bk + am * bm }
+
+// The sign of a + b*sqrt(3): -1, 0 or 1, exactly.  A length along an odd heading is a whole
+// number times sqrt(3) where one along an even heading is a whole number, so comparing the two
+// is this question — and sqrt(3) being irrational, the answer is 0 only when a and b both are.
+pub fn sign_root3(a: integer, b: integer) -> integer {
+  sa = if a > 0 { 1 } else if a < 0 { -1 } else { 0 };
+  sb = if b > 0 { 1 } else if b < 0 { -1 } else { 0 };
+  if sa == sb { return sa; }
+  if sa == 0 { return sb; }
+  if sb == 0 { return sa; }
+  if a * a > 3 * b * b { sa } else { sb }
+}
+
 // ── THE INSIDE TEST, EXACT — NO HEX EVER LIES ON THE BOUNDARY (S3) ──────────
 //
 // A hex must be unambiguously INSIDE or OUTSIDE; a wall never runs through a hex, only along

@@ -65,6 +65,11 @@ somewhere else: a file, or a consumer's own builder. Two hexes emitted as two ci
 joined at their shared corners give twelve legal hex-edge segments whose shoelace is
 exactly `12 × 2`, so every other check here passes them.
 
+`trace_edges(s)` is `trace` with each edge's two cells kept (`EdgeMap`): the same corners, loops
+and canonical starts, and for every edge the cell inside the set and the cell outside it — what
+cutting a boundary into walls, or marking a door on some of its edges, needs.  It walks the
+boundary a step at a time, where `trace` searches every edge for each.
+
 ## Scale is the CONSUMER's, not this package's
 
 Every threshold here is **dimensionless** — hex steps, lattice world units, or pure ratios.

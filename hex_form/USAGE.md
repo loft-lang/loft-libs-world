@@ -20,6 +20,7 @@ what makes a project file diffable and an undo history exact.
 - **author a form and check it closes** — `form_new · form_admissible · form_fill`
 - **save and reload byte-identically** — `form_write · form_read · form_eq`
 - **one shape, one text, whatever corner it was drawn from** — `form_canon_text`
+- **compare lengths and angles without a float** — `vec_dot_4` (a right angle is 0) and `sign_root3` (the sign of a + b·√3)
 
 ## The worked examples, in the tests
 
