@@ -175,3 +175,88 @@ fn test_cliffs_run_along_the_straight_sides() {
   assert(ground_box_distance(area[0]!, ex, ey) > 0.0 && height_get(g.gr_heights, 5, 0) > 0.7 && height_get(g.gr_heights, 5, 0) < 2.6,
          "just outside the area: blended between, {height_get(g.gr_heights, 5, 0)}");
 }
+
+// The ground read as a smooth surface: at a cell's centre its own height; at a corner the mean
+// of the three cells round it; along the rim between two cells the same height from either
+// side, so the fans leave no crack; and flat ground reads flat everywhere (@FR-HG-Surface).
+fn test_the_ground_reads_as_one_smooth_surface() {
+  g = ground_new(-10, -10, 21, 21, 1.5, 0);
+  ground_hill(g, 1.0, -2.0, 11.0, 5.0);
+  ground_hill(g, -6.0, 4.0, 5.0, -2.0);
+  for r in -6..7 {
+    for q in -6..7 {
+      (cx, cy) = ground_centre(1.5, q, r);
+      assert(near(ground_height_at(g, cx, cy), height_get(g.gr_heights, q, r)), "at {q},{r}'s centre: its height");
+      k = lattice_k(q, r);
+      m = lattice_m(q, r);
+      for j in 0..6 {
+        // corner j, and the three cells round it: this one and its neighbours across the two edges at j
+        ck = k + corner_k(j);
+        cm = m + corner_m(j);
+        sum = 0.0;
+        cells = 0;
+        for rr in r - 1..r + 2 {
+          for qq in q - 1..q + 2 {
+            dk = ck - lattice_k(qq, rr);
+            dm = cm - lattice_m(qq, rr);
+            if 3 * dk * dk + dm * dm == 4 {
+              sum += height_get(g.gr_heights, qq, rr);
+              cells += 1;
+            }
+          }
+        }
+        assert(cells == 3, "a corner has three cells round it, got {cells}");
+        want = sum / 3.0 ?? 0.0;
+        assert(near(ground_corner_height(g, ck, cm), want), "corner {j} of {q},{r}: the mean of its three cells");
+        x = (ck as float) * 0.75;
+        y = (cm as float) * 0.4330127018922193;
+        assert(near(ground_height_at(g, x, y), want), "and the surface passes through it");
+        // the middle of the rim to the next corner, read a hair inside this cell and a hair beyond it
+        j1 = (j + 1) % 6 ?? 0;
+        mx = cx + ((corner_k(j) + corner_k(j1)) as float) * 0.375;
+        my = cy + ((corner_m(j) + corner_m(j1)) as float) * 0.21650635094610965;
+        inner = ground_height_at(g, cx + (mx - cx) * 0.999999, cy + (my - cy) * 0.999999);
+        outer = ground_height_at(g, cx + (mx - cx) * 1.000001, cy + (my - cy) * 1.000001);
+        assert(inner - outer < 0.00001 && outer - inner < 0.00001, "the rim of {q},{r} past corner {j}: no crack ({inner}, {outer})");
+      }
+    }
+  }
+  flat = ground_new(-6, -6, 13, 13, 1.7320508075688772, 0);
+  for r in -6..7 { for q in -6..7 { height_set(flat.gr_heights, q, r, 4.25); } }
+  for i in 0..40 {
+    assert(near(ground_height_at(flat, -3.0 + (i as float) * 0.17, 2.0 - (i as float) * 0.11), 4.25), "flat ground reads flat, at any step");
+  }
+  rim = ground_new(0, 0, 3, 3, 1.5, 0);
+  for r in 0..3 { for q in 0..3 { height_set(rim.gr_heights, q, r, 6.0); } }
+  assert(near(ground_corner_height(rim, lattice_k(0, 0) + corner_k(3), lattice_m(0, 0) + corner_m(3)), 6.0), "a corner on the rim: the mean of the cells it has");
+  assert(ground_corner_height(rim, lattice_k(9, 9) + corner_k(0), lattice_m(9, 9) + corner_m(0)) == 0.0, "a corner beyond the window: 0");
+}
+
+// Either side of a cliff its own surface: a terrace a storey up, its ground at 2.6 and the
+// ground below at 0.  Read as one surface the ground would slope between them; read on the
+// cliff's high side it is 2.6 right up to the edge, on its low side 0 (@FR-HG-Cliff).
+fn test_either_side_of_a_cliff_its_own_surface() {
+  cells = box(12, 6, 24);
+  g = ground_new(-24, -24, 49, 49, 1.5, 0);
+  levels = labels_new(-24, -24, 49, 49);
+  for r in -24..25 {
+    for q in -24..25 {
+      up = hexset_get(cells, q, r);
+      label_set(levels, q, r, if up { 1 } else { 0 });
+      height_set(g.gr_heights, q, r, if up { 2.6 } else { 0.0 });
+    }
+  }
+  sloped = 0;
+  for i in 0..120 {
+    x = -12.0 + (i as float) * 0.2;
+    for y in [0.0, 1.1, -2.3] {
+      hi = ground_height_on(g, levels, x, y, 1, true, 2.6);
+      lo = ground_height_on(g, levels, x, y, 1, false, 2.6);
+      assert(near(hi, 2.6), "the high side at {x},{y}: the terrace's height, {hi}");
+      assert(near(lo, 0.0), "the low side at {x},{y}: the ground below, {lo}");
+      one = ground_height_at(g, x, y);
+      if one > 0.1 && one < 2.5 { sloped += 1; }
+    }
+  }
+  assert(sloped > 0, "read as one surface, the ground slopes across the edge");
+}
