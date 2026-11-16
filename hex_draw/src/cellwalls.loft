@@ -1,0 +1,585 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// cellwalls — STRAIGHT WALLS FROM THE CELLS ALONE.  No `Plan`, no angle, no side numbers.
+//
+// `hexsurf` reads a wall's surface off the edges of one side of a `Plan`: it has to be told the
+// rectangle the cells were drawn from.  Here nothing is told.  A structure is a set of cells —
+// each cell inside it or outside it — and its walls follow from them: an L, a hall with wings, a
+// house the editor turned by 30 degrees and kept only the cells of, a road, a stream's bed.
+//
+// From a set of cells, in order:
+//   1. the boundary, walked (`cells_loops`, on `hex_field::trace_edges`): every edge between a
+//      cell inside and one outside, the structure on the left;
+//   2. the two axes its walls run along, read off the boundary (`cells_axes`: each edge votes for
+//      the heading nearest the way the boundary travels round it; cells that show no direction
+//      answer -1, and the caller's hint decides), and the boundary cut into runs, one per
+//      straight wall (`cells_runs`);
+//   3. each run's straight wall (`cells_wall`): one routine for each of the two kinds of wall
+//      the lattice has, the answer a `WallSurface`, so `hexsurf`'s readers take it unchanged;
+//   4. the corners, each wall mitred into the next (`surface_meet`).
+// `cells_built` does the four for a structure of one loop; `cells_outlines` for any number of
+// loops, with the walls a road's outline needs besides (a step, a slanted stretch).
+//
+// Extracted from tile-world-game, whose rules these routines keep and cite by name (`@FR-HW-…`,
+// its `formal/hex-houses.md`), and whose town they were checked on wall for wall.
+//
+// Lattice units, as `hex_field` keeps them: a cell centre is (2q + (r & 1), 3r) in doubled
+// coordinates (k, m), a point is at x = k*sqrt(3)/2, y = m/2 world units.
+use hex_field::*;
+use hex_form::*;
+use hexsurf::*;
+use housedraw::*;
+
+// One edge of a boundary: the structure's cell (qa, ra) and the outside one (qb, rb), and its
+// corners from (ak, am) to (bk, bm) in doubled coordinates, the structure on the left.
+pub struct WallEdge {
+  pub we_qa: integer,
+  pub we_ra: integer,
+  pub we_qb: integer,
+  pub we_rb: integer,
+  pub we_ak: integer,
+  pub we_am: integer,
+  pub we_bk: integer,
+  pub we_bm: integer,
+}
+
+// @FR-HW-Loops: every loop of an outline, a courtyard's and a block's too
+// Every loop of the boundary of `cells`, each in walking order with the cells on its left: the
+// outer loop of each piece and one round each hole in it (a courtyard, the block a ring of road
+// goes round).  `hex_field::trace_edges`, an edge at a time: its loops, their order and starts.
+pub fn cells_loops(cells: HexSet) -> vector<vector<WallEdge>> {
+  // @FR-HX-Edge: the boundary is the edges between a cell inside and one outside
+  em = trace_edges(cells);
+  out: vector<vector<WallEdge>> = [];
+  for li in 0..em.em_loops {
+    a = em.em_start[li] ?? 0;
+    b = em.em_start[li + 1] ?? 0;
+    walk: vector<WallEdge> = [];
+    for j in a..b {
+      nx = if j + 1 < b { j + 1 } else { a };
+      walk += [WallEdge { we_qa: em.em_qa[j] ?? 0, we_ra: em.em_ra[j] ?? 0, we_qb: em.em_qb[j] ?? 0, we_rb: em.em_rb[j] ?? 0,
+                          we_ak: em.em_k[j] ?? 0, we_am: em.em_m[j] ?? 0, we_bk: em.em_k[nx] ?? 0, we_bm: em.em_m[nx] ?? 0 }];
+    }
+    out += [walk];
+  }
+  out
+}
+
+// The boundary of a structure of one piece without a courtyard: its first loop.
+pub fn cells_boundary(cells: HexSet) -> vector<WallEdge> {
+  ls = cells_loops(cells);
+  if len(ls) == 0 { return []; }
+  ls[0]!
+}
+
+// ── the boundary cut into runs ──────────────────────────────────────────────
+
+// How many edges either side the travelling direction is read over: enough to span a period of
+// the zigzag (2 edges) and of the staircase (3).
+pub const CELLS_AROUND = 2;
+
+// Which way the boundary travels at edge i, over CELLS_AROUND edges either side: 0 along +u, 1 along
+// +v, 2 along -u, 3 along -v (u the house's heading, v the heading three steps on); -1 when it
+// is exactly between.  Exact: the two heading steps are √3 and 3 long, one each way round, so
+// the projections compare as squares, one of them times 3.
+fn edge_travel(turn: integer, b: const vector<WallEdge>, i: integer) -> integer {
+  n = len(b);
+  a = b[((i - CELLS_AROUND) % n + n) % n ?? 0]!;
+  z = b[(i + CELLS_AROUND) % n ?? 0]!;
+  wk = z.we_bk - a.we_ak;
+  wm = z.we_bm - a.we_am;
+  (uk, um) = head_step(turn);
+  (vk, vm) = head_step(turn + 3);
+  u = vec_dot_4(wk, wm, uk, um);
+  v = vec_dot_4(wk, wm, vk, vm);
+  // |u| / L_u against |v| / L_v: with L_u = √3, L_v = 3 that is 3u² against v²; the other way
+  // round, u² against 3v².
+  au = if turn % 2 == 0 { 3 * u * u } else { u * u };
+  av = if turn % 2 == 0 { v * v } else { 3 * v * v };
+  if au > av { if u > 0 { 0 } else { 2 } } else if av > au { if v > 0 { 1 } else { 3 } } else { -1 }
+}
+
+// The boundary cut into runs, one per straight wall, in order round the house.  A run shorter
+// than 2 edges is the turn of a corner, not a wall: it joins the run before it.
+// @FR-HW-Runs: one run per straight wall; a run under two edges joins the one before
+pub fn cells_runs(turn: integer, b: const vector<WallEdge>) -> vector<vector<integer>> {
+  n = len(b);
+  runs_merged(b, [for i in 0..n { edge_travel(turn, b, i) }])
+}
+
+// The boundary cut into runs of equal labels, in order round the loop: a label of -1 takes the
+// one before it, and a run shorter than 2 edges (the turn of a corner) joins the run before it.
+fn runs_merged(b: const vector<WallEdge>, given: const vector<integer>) -> vector<vector<integer>> {
+  n = len(b);
+  label: vector<integer> = [for i in 0..n { given[i] ?? -1 }];
+  for i in 0..n {
+    if label[i] < 0 { label[i] = label[(i + n - 1) % n ?? 0] ?? -1; }
+  }
+  out: vector<vector<integer>> = [];
+  for _ in 0..n {
+    out = runs_groups(label);
+    short = -1;
+    for g in 0..len(out) {
+      if short < 0 && len(out[g]) < 2 && len(out) > 1 { short = g; }
+    }
+    if short < 0 { break; }
+    prev = label[out[(short + len(out) - 1) % len(out) ?? 0][0] ?? 0] ?? 0;
+    for i in out[short] ?? [] { label[i] = prev; }
+  }
+  out
+}
+
+// The runs of equal labels round the loop, starting where a label changes.
+fn runs_groups(label: const vector<integer>) -> vector<vector<integer>> {
+  n = len(label);
+  start = 0;
+  for i in 0..n {
+    if start == 0 && label[i] != label[(i + n - 1) % n ?? 0] { start = i; }
+  }
+  out: vector<vector<integer>> = [];
+  cur: vector<integer> = [];
+  for j in 0..n {
+    i = (start + j) % n ?? 0;
+    if len(cur) > 0 && label[i] != label[cur[0] ?? 0] {
+      out += [cur];
+      cur = [];
+    }
+    cur += [i];
+  }
+  if len(cur) > 0 { out += [cur]; }
+  out
+}
+
+// ── the two kinds of straight wall, solved from the wall data ───────────────
+//
+// A straight wall on the hex grid is one of two kinds (one routine for each):
+//
+//   TOPS   (an even heading, the grid's own edge directions): the wobble across the tops of a row
+//          of hexes, edges zigzagging between the row's apexes and shoulders.  Turned to run due
+//          east, every edge's midpoint lies on one line, half way up the band (ROUNDTRIP §6.2,
+//          band 1/2 unit) — so the line is exact from any of its edges, a whole run or a cut one.
+//   SIDES  (an odd heading, the grid's corner directions): the line along the sides of hexes
+//          under each other, upright sides alternating with short slanted connectors where the
+//          rows shift by half a cell.  Turned to run due north, every connector's midpoint lies on
+//          the line, in the middle of the band (√3/2 unit); the upright sides lie on its two
+//          edges.
+//
+// So each routine turns its run into its own frame (a 60° turn is exact on the lattice, X1),
+// reads the line off the edges that make its pattern — the most common midpoint: an edge of the
+// next wall, caught in the run at a corner, has a midpoint of its own and is outvoted — and turns
+// the line back.  The direction is the heading itself, exactly.  The answer is a
+// `WallSurface`, so `hex_draw`'s readers and its miter (`surface_meet`) take it unchanged.  On a
+// whole tops run (a side of a box) it is the line `surface_of` gives; on a sides run it
+// lies 0.048 unit beside it (measured on a 5 x 4 box): the average counts the corner's edges in,
+// this outvotes them.
+
+// Turned `steps` × 60° anticlockwise.
+pub fn lattice_turned(k: integer, m: integer, steps: integer) -> (integer, integer) {
+  tk = k;
+  tm = m;
+  for _ in 0..((steps % 6) + 6) % 6 ?? 0 { (tk, tm) = lattice_rot60(tk, tm); }
+  (tk, tm)
+}
+
+// A rational point (`nk / d`, `nm / d`) turned `steps` × 60°: the numerators doubled first, so
+// the halving stays exact.
+fn rational_turned(nk: integer, nm: integer, d: integer, steps: integer) -> (integer, integer, integer) {
+  tk = nk;
+  tm = nm;
+  td = d;
+  for _ in 0..((steps % 6) + 6) % 6 ?? 0 {
+    (tk, tm) = (tk - tm, 3 * tk + tm);
+    td = 2 * td;
+  }
+  (tk, tm, td)
+}
+
+// The most common value of `vals`, ties going to the one nearest the mean (`sum / n`).
+fn most_common(vals: const vector<integer>, sum: integer, n: integer) -> integer {
+  best = 0;
+  best_n = 0;
+  for v in vals {
+    c = 0;
+    for w in vals { if w == v { c += 1; } }
+    far = v * n - sum;
+    if far < 0 { far = -far; }
+    best_far = best * n - sum;
+    if best_far < 0 { best_far = -best_far; }
+    if c > best_n || c == best_n && far < best_far {
+      best = v;
+      best_n = c;
+    }
+  }
+  best
+}
+
+// A TOPS wall (heading `h` even) through the run's edges.
+// @FR-HW-Tops
+pub fn cells_wall_tops(b: const vector<WallEdge>, run: const vector<integer>, h: integer) -> WallSurface {
+  s = (6 - h / 2 ?? 0) % 6 ?? 0;        // turns heading h to 0, due east
+  mids: vector<integer> = [];
+  sk = 0;
+  sm = 0;
+  for i in run {
+    e = b[i];
+    (ak, am) = lattice_turned(e.we_ak, e.we_am, s);
+    (bk, bm) = lattice_turned(e.we_bk, e.we_bm, s);
+    mids += [am + bm];
+    sk += ak + bk;
+    sm += am + bm;
+  }
+  n = len(run);
+  // Due east, the line is m = common / 2: the point (sk / 2n, common / 2).
+  line_m = most_common(mids, sm, n);
+  (nk, nm, d) = rational_turned(sk, n * line_m, 2 * n, 6 - s);
+  (dk, dm) = head_step(h);
+  WallSurface { ws_dk: dk, ws_dm: dm, ws_num_k: nk, ws_num_m: nm, ws_den: d, ws_n: n }
+}
+
+// A SIDES wall (heading `h` odd) through the run's edges.
+// @FR-HW-Sides
+pub fn cells_wall_sides(b: const vector<WallEdge>, run: const vector<integer>, h: integer) -> WallSurface {
+  s = ((3 - h) / 2 ?? 0) % 6 ?? 0;      // turns heading h to 3, due north
+  links: vector<integer> = [];
+  sk = 0;
+  sm = 0;
+  lk = 0;
+  for i in run {
+    e = b[i];
+    (ak, am) = lattice_turned(e.we_ak, e.we_am, s);
+    (bk, bm) = lattice_turned(e.we_bk, e.we_bm, s);
+    if ak != bk {
+      links += [ak + bk];
+      lk += ak + bk;
+    }
+    sk += ak + bk;
+    sm += am + bm;
+  }
+  n = len(run);
+  // Due north, the line is k = common / 2 of the connectors (of every edge, when the run has
+  // none: one cell's upright side): the point (common / 2, sm / 2n).
+  line_k = if len(links) > 0 { most_common(links, lk, len(links)) } else { most_common(links, sk, n) };
+  if len(links) == 0 { line_k = sk / n ?? 0; }
+  (nk, nm, d) = rational_turned(n * line_k, sm, 2 * n, 6 - s);
+  (dk, dm) = head_step(h);
+  WallSurface { ws_dk: dk, ws_dm: dm, ws_num_k: nk, ws_num_m: nm, ws_den: d, ws_n: n }
+}
+
+// The straight wall through a run of wall edges running along heading `h`: a tops wall on an
+// even heading, a sides wall on an odd one.
+// @FR-HW-Straight: a wall's direction is its heading's step, exactly
+pub fn cells_wall(b: const vector<WallEdge>, run: const vector<integer>, h: integer) -> WallSurface {
+  if head_norm(h) % 2 == 0 { cells_wall_tops(b, run, head_norm(h)) }
+  else { cells_wall_sides(b, run, head_norm(h)) }
+}
+
+// The heading a run of the boundary travels along: the way most of its edges travel (`travel`),
+// as a heading of the house (`turn` for +u, three steps on for +v, and so on).
+pub fn cells_run_heading(turn: integer, b: const vector<WallEdge>, run: const vector<integer>) -> integer {
+  count = [0, 0, 0, 0];
+  for i in run {
+    t = edge_travel(turn, b, i);
+    if t >= 0 { count[t] += 1; }
+  }
+  best = 0;
+  for t in 1..4 { if count[t] > count[best] { best = t; } }
+  head_norm(turn + 3 * best)
+}
+
+// The axes a boundary's walls run along, read off the boundary itself: 0 for the headings 0, 3,
+// 6 and 9 (0°, 90°, …), 1 for 1, 4, 7 and 10, 2 for 2, 5, 8 and 11.  Each edge votes for the
+// heading nearest the way the boundary travels round it (`CELLS_AROUND` edges either side); the axes
+// with the most votes win, and -1 answers a tie: cells that show no direction (the smallest
+// house, one hex and its six neighbours, is the same seven cells at every angle).  Exact: a
+// heading step is √3 or 3 long, so the projections compare as squares, scaled by 9 or 3.
+// @FR-HW-Axes, @FR-HX-Size: the axes read off the cells; a tie is cells that show no direction
+pub fn cells_axes(b: const vector<WallEdge>) -> integer {
+  votes = [0, 0, 0];
+  n = len(b);
+  for i in 0..n {
+    a = b[((i - CELLS_AROUND) % n + n) % n ?? 0]!;
+    z = b[(i + CELLS_AROUND) % n ?? 0]!;
+    wk = z.we_bk - a.we_ak;
+    wm = z.we_bm - a.we_am;
+    best = -1;
+    best_d = 0;
+    best_l = 1;
+    for h in 0..12 {
+      (sk, sm) = head_step(h);
+      d = vec_dot_4(wk, wm, sk, sm);
+      if d <= 0 { continue; }
+      l = if h % 2 == 0 { 3 } else { 9 };   // the step's length squared, in these units
+      // d / √l against best_d / √best_l: d² · best_l against best_d² · l
+      if best < 0 || d * d * best_l > best_d * best_d * l {
+        best = h;
+        best_d = d;
+        best_l = l;
+      }
+    }
+    if best >= 0 { votes[best % 3] += 1; }
+  }
+  if votes[0] > votes[1] && votes[0] > votes[2] { 0 }
+  else if votes[1] > votes[0] && votes[1] > votes[2] { 1 }
+  else if votes[2] > votes[0] && votes[2] > votes[1] { 2 }
+  else { -1 }
+}
+
+// ── a structure built ───────────────────────────────────────────────────────
+
+// How a wall of a built structure runs.  Straight along one of the 12 headings is all there is
+// today; the kind is kept per wall so a wall that curves, or runs between two headings, can
+// stand beside these without their readers changing.
+pub const WALL_STRAIGHT = 0;
+
+// A structure as built from its cells: the cells, its thin walls (an `EdgeSet` over the cells'
+// window and a cell round it, every boundary edge of material `wall_mat`), the boundary in
+// walking order, the runs (each a list of indices into the boundary, in order round the
+// structure), a surface and a kind per run, and the corners (corner i is where wall i meets
+// wall i + 1, in world units).
+pub struct CellWalls {
+  pub cw_cells:    HexSet,
+  pub cw_edges:    EdgeSet,
+  pub cw_boundary: vector<WallEdge>,
+  pub cw_runs:     vector<vector<integer>>,
+  pub cw_walls:    vector<WallSurface>,
+  pub cw_kinds:    vector<integer>,
+  pub cw_corners:  vector<(float, float)>,
+}
+
+// An edge set over the cells' window and a cell round it, with nothing marked.
+pub fn cells_no_marks(cells: HexSet) -> EdgeSet {
+  edgeset_new(hexset_q0(cells) - 1, hexset_r0(cells) - 1, hexset_w(cells) + 2, hexset_h(cells) + 2)
+}
+
+// @FR-HX-Cells, @FR-HX-Editor: the walls from the cells alone, no plan and no angle
+// A structure from its cells alone: the thin walls, the boundary, the axes it runs along, a run
+// per straight wall, the wall solved for each and the corners.  The axes are read off the
+// cells; `hint` (a heading, -1 for none) is asked only when the cells show no direction.  One
+// piece without a courtyard, big enough for its cells to carry its walls (@FR-HX-Size);
+// `cells_outlines` takes anything.
+pub fn cells_built(cells: HexSet, wall_mat: integer, hint: integer = -1) -> CellWalls {
+  edges = cells_no_marks(cells);
+  // @FR-HX-Edge: the thin walls
+  draw_walls(cells, edges, wall_mat);
+  b = cells_boundary(cells);
+  turn = cells_axes(b);
+  if turn < 0 { turn = if hint >= 0 { hint % 3 ?? 0 } else { 0 }; }
+  rs = cells_runs(turn, b);
+  walls: vector<WallSurface> = [for run in rs { cells_wall(b, run, cells_run_heading(turn, b, run)) }];
+  corners: vector<(float, float)> = [];
+  nw = len(walls);
+  for i in 0..nw {
+    // @FR-HW-Miter: each wall mitred into the next
+    (x, y, _ok) = surface_meet(walls[i]!, walls[(i + 1) % nw ?? 0]!);
+    corners += [(x, y)];
+  }
+  CellWalls { cw_cells: cells, cw_edges: edges, cw_boundary: b, cw_runs: rs, cw_walls: walls,
+              cw_kinds: [for _ in 0..nw { WALL_STRAIGHT }], cw_corners: corners }
+}
+
+// ── outlines with any number of loops ───────────────────────────────────────
+
+// One loop of an outline drawn as straight walls: its boundary, its walls (in order round it)
+// and their corners (corner i where wall i meets wall i + 1, world units).
+pub struct CellOutline {
+  pub co_boundary: vector<WallEdge>,
+  pub co_walls: vector<WallSurface>,
+  pub co_corners: vector<(float, float)>,
+}
+
+// @FR-HW-Step: two walls in a row that run the same way are joined by a step
+// A loop's straight walls, as `cells_built` draws a house's, with one thing more: where two walls
+// in a row run along the same axis (a street stepping over by a row, a lane's dead end), a short
+// wall across joins them, through the midpoint of the edge where the boundary changes row, so
+// every corner is a right angle and the step's line lies between two hex centres.  None (no walls) for a loop of fewer than three walls: too small
+// to carry walls (HX-Size).
+pub fn cells_outline(b: const vector<WallEdge>, hint: integer = -1) -> CellOutline {
+  turn = cells_axes(b);
+  if turn < 0 { turn = if hint >= 0 { hint % 3 ?? 0 } else { 0 }; }
+  // the runs, each along the nearest of the twelve headings (a road's stretches run every way),
+  // each cut where its line steps over (`split_by_line`), each part with its heading
+  rs: vector<vector<integer>> = [];
+  hs: vector<integer> = [];
+  heads = edge_headings(b, turn);
+  for run in runs_merged(b, heads) {
+    h = heads[run[0] ?? 0] ?? turn;
+    for part in cells_split_by_line(b, run, h) {
+      rs += [part];
+      hs += [h];
+    }
+  }
+  solved: vector<WallSurface> = [for i in 0..len(rs) { cells_wall(b, rs[i] ?? [], hs[i] ?? 0) }];
+  walls: vector<WallSurface> = [];
+  n = len(solved);
+  for i in 0..n {
+    w = solved[i];
+    walls += [w];
+    nx = solved[(i + 1) % n ?? 0]!;
+    if n > 1 && w.ws_dk * nx.ws_dm - w.ws_dm * nx.ws_dk == 0 {
+      // the step: a short wall across the axis, of the other family, through the edge of the
+      // step that marks that family's line (`step_edge`)
+      h = head_norm(surface_heading(w) + 3);
+      e = runs_step_edge(b, rs[i] ?? [], rs[(i + 1) % n ?? 0] ?? [], w, nx, h);
+      (dk, dm) = head_step(h);
+      walls += [WallSurface { ws_dk: dk, ws_dm: dm, ws_num_k: e.we_ak + e.we_bk, ws_num_m: e.we_am + e.we_bm, ws_den: 2, ws_n: 0 }];
+    }
+  }
+  corners: vector<(float, float)> = [];
+  nw = len(walls);
+  if nw < 3 { return CellOutline { co_boundary: b, co_walls: [], co_corners: [] }; }
+  for i in 0..nw {
+    (x, y, _ok) = surface_meet(walls[i]!, walls[(i + 1) % nw ?? 0]!);
+    corners += [(x, y)];
+  }
+  CellOutline { co_boundary: b, co_walls: walls, co_corners: corners }
+}
+
+// @FR-HW-Step: a run is cut where its line steps over by a row
+// A run cut where the line it runs along steps over: along a tops wall each edge's midpoint is on
+// the line, along a sides wall each slanted connector's is, so where that midpoint moves to
+// another row (and stays there for two edges or more), a new part begins.  A single edge off the
+// line (the next wall's, caught at a corner) stays with its part, and so does a part of fewer
+// than three edges at either end of the run.
+pub fn cells_split_by_line(b: const vector<WallEdge>, run: const vector<integer>, h: integer) -> vector<vector<integer>> {
+  tops = head_norm(h) % 2 == 0;
+  s = if tops { (6 - head_norm(h) / 2 ?? 0) % 6 ?? 0 } else { ((3 - head_norm(h)) / 2 ?? 0) % 6 ?? 0 };
+  // each edge's line, -1000000 where the edge marks none (an upright side of a sides wall)
+  at: vector<integer> = [];
+  for i in run {
+    e = b[i];
+    (ak, am) = lattice_turned(e.we_ak, e.we_am, s);
+    (bk, bm) = lattice_turned(e.we_bk, e.we_bm, s);
+    if tops { at += [am + bm]; } else if ak != bk { at += [ak + bk]; } else { at += [-1000000]; }
+  }
+  parts: vector<vector<integer>> = [];
+  cur: vector<integer> = [];
+  line = -1000000;
+  for j in 0..len(run) {
+    v = at[j] ?? -1000000;
+    // a new line, held by this edge and the next one that marks a line
+    if v != -1000000 && line != -1000000 && v != line {
+      nxt = -1000000;
+      for k in j + 1..len(run) { if nxt == -1000000 && (at[k] ?? -1000000) != -1000000 { nxt = at[k] ?? -1000000; } }
+      if nxt == v && len(cur) > 0 {
+        parts += [cur];
+        cur = [];
+      }
+    }
+    if v != -1000000 && (line == -1000000 || len(cur) == 0 || v == line) { line = v; }
+    if v != -1000000 && len(cur) == 0 { line = v; }
+    cur += [run[j] ?? 0];
+  }
+  if len(cur) > 0 { parts += [cur]; }
+  // a part of fewer than three edges at either end of the run is a corner's edges caught there,
+  // not a step: it joins the part beside it
+  n = len(parts);
+  if n < 2 { return parts; }
+  out: vector<vector<integer>> = [];
+  for i in 0..n {
+    pt = parts[i] ?? [];
+    if i == 1 && len(parts[0] ?? []) < 3 { out = [(parts[0] ?? []) + pt]; continue; }
+    if i == 0 && len(pt) < 3 { continue; }
+    if i == n - 1 && len(pt) < 3 && len(out) > 0 {
+      last = out[len(out) - 1] ?? [];
+      out[len(out) - 1] = last + pt;
+      continue;
+    }
+    out += [pt];
+  }
+  out
+}
+
+// How many edges a heading off the loop's two axes must hold for to make a wall of its own: fewer
+// are the bevel of a step, which stays on the axes.
+pub const CELLS_SLANT = 6;
+
+// @FR-HW-Slant: a stretch off the loop's axes keeps its heading when it holds it long enough
+// Each edge's heading: along the loop's axes as a house's walls run (`travel`), except where the
+// boundary keeps to another of the twelve headings for CELLS_SLANT edges or more (a road's slanted
+// stretch).
+fn edge_headings(b: const vector<WallEdge>, turn: integer) -> vector<integer> {
+  n = len(b);
+  free: vector<integer> = [for i in 0..n { edge_nearest_heading(b, i) }];
+  out: vector<integer> = [];
+  for i in 0..n {
+    t = edge_travel(turn, b, i);
+    out += [if t < 0 { -1 } else { head_norm(turn + 3 * t) }];
+  }
+  i = 0;
+  while i < n {
+    h = free[i] ?? -1;
+    j = i;
+    while j < n && (free[j] ?? -1) == h { j += 1; }
+    if h >= 0 && ((h - turn) % 3 + 3) % 3 != 0 && j - i >= CELLS_SLANT {
+      for k in i..j { out[k] = h; }
+    }
+    i = if j > i { j } else { i + 1 };
+  }
+  out
+}
+
+// The heading nearest the way the boundary travels at edge i, over CELLS_AROUND edges either side
+// (as `axes_of` votes), -1 when it does not travel.
+fn edge_nearest_heading(b: const vector<WallEdge>, i: integer) -> integer {
+  n = len(b);
+  a = b[((i - CELLS_AROUND) % n + n) % n ?? 0]!;
+  z = b[(i + CELLS_AROUND) % n ?? 0]!;
+  wk = z.we_bk - a.we_ak;
+  wm = z.we_bm - a.we_am;
+  best = -1;
+  best_d = 0;
+  best_l = 1;
+  for h in 0..12 {
+    (sk, sm) = head_step(h);
+    d = vec_dot_4(wk, wm, sk, sm);
+    if d <= 0 { continue; }
+    l = if h % 2 == 0 { 3 } else { 9 };
+    if best < 0 || d * d * best_l > best_d * best_d * l {
+      best = h;
+      best_d = d;
+      best_l = l;
+    }
+  }
+  best
+}
+
+// The edge a step between two parallel walls `wa` and `wb` (the end of run `ra`, the start of
+// `rb`) runs through, the step along heading `h`: of the edges lying between the two walls'
+// lines, one that marks a line of the step's family — any edge for a tops wall (every edge's
+// midpoint is on its line), a slanted one for a sides wall (an upright side lies in line with
+// the next row's centres).  The run's last edge when none lies between.
+fn runs_step_edge(b: const vector<WallEdge>, ra: const vector<integer>, rb: const vector<integer>,
+             wa: WallSurface, wb: WallSurface, h: integer) -> WallEdge {
+  // the walls' common normal, and their lines' places along it (doubled coordinates, scaled)
+  nk = -wa.ws_dm;
+  nm = wa.ws_dk;
+  oa = ((3 * wa.ws_num_k * nk + wa.ws_num_m * nm) as float) / (wa.ws_den as float) ?? 0.0;
+  ob = ((3 * wb.ws_num_k * nk + wb.ws_num_m * nm) as float) / (wb.ws_den as float) ?? 0.0;
+  lo = if oa < ob { oa } else { ob };
+  hi = if oa < ob { ob } else { oa };
+  sides = head_norm(h) % 2 == 1;
+  s = if sides { ((3 - head_norm(h)) / 2 ?? 0) % 6 ?? 0 } else { (6 - head_norm(h) / 2 ?? 0) % 6 ?? 0 };
+  cand: vector<integer> = [];
+  for j in 0..4 { if len(ra) - 1 - j >= 0 { cand += [ra[len(ra) - 1 - j] ?? 0]; } }
+  for j in 0..4 { if j < len(rb) { cand += [rb[j] ?? 0]; } }
+  best = -1;
+  for i in cand {
+    e = b[i];
+    p = ((3 * (e.we_ak + e.we_bk) * nk + (e.we_am + e.we_bm) * nm) as float) * 0.5;
+    if p <= lo + 0.001 || p >= hi - 0.001 { continue; }
+    if sides {
+      (ak, _am) = lattice_turned(e.we_ak, e.we_am, s);
+      (bk, _bm) = lattice_turned(e.we_bk, e.we_bm, s);
+      if ak == bk { continue; }
+    }
+    if best < 0 { best = i; }
+  }
+  if best < 0 { best = ra[len(ra) - 1] ?? 0; }
+  b[best]!
+}
+
+// Every loop of `cells` as straight walls (`outline_of`): a structure with courtyards, a road
+// network with the blocks it goes round.
+pub fn cells_outlines(cells: HexSet, hint: integer = -1) -> vector<CellOutline> {
+  [for l in cells_loops(cells) { cells_outline(l, hint) }]
+}

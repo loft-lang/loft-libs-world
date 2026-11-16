@@ -86,3 +86,174 @@ fn test_surface_meet_is_the_miter_of_two_surfaces() {
     }
   }
 }
+
+// ── cellwalls: straight walls from the cells alone ──────────────────────────
+
+fn box_cells(rot: integer, mir: boolean) -> HexSet {
+  cells = hexset_chunk(-20, -20, 41, 41);
+  types = labels_new(-20, -20, 41, 41);
+  draw_floor(plan_new(0, 0, 5, 4, rot, mir), cells, types, 1);
+  cells
+}
+
+// How far the point (px, py) lies to the left of surface `w`'s line, in world units.
+fn left_of(w: WallSurface, px: float, py: float) -> float {
+  (dx, dy) = surface_dir(w);
+  (px - surface_mean_x(w)) * (0.0 - dy) + (py - surface_mean_y(w)) * dx
+}
+
+// A box known only by its cells, at all 12 orientations: four walls, each exactly along a
+// heading, each square to the next, every boundary edge in one run, each corner on both its
+// walls — and every cell centre clearly inside all four or outside one (@FR-HW-Clear).
+fn test_a_box_from_its_cells_has_four_square_walls() {
+  for rot in 0..6 {
+    for mir in 0..2 {
+      cells = box_cells(rot, mir == 1);
+      b = cells_built(cells, 9);
+      assert(len(b.cw_walls) == 4 && len(b.cw_corners) == 4 && len(b.cw_kinds) == 4, "rot {rot} mir {mir}: four walls, got {len(b.cw_walls)}");
+      assert(len(b.cw_boundary) == 38, "rot {rot}: the 38 edges draw_walls marks, got {len(b.cw_boundary)}");
+      inrun = 0;
+      for run in b.cw_runs { inrun += len(run); }
+      assert(inrun == 38, "rot {rot}: every edge in one run");
+      for i in 0..4 {
+        w = b.cw_walls[i]!;
+        nx = b.cw_walls[(i + 1) % 4 ?? 0]!;
+        assert(surface_heading(w) >= 0, "rot {rot} wall {i}: along a heading");
+        assert(head_norm(surface_heading(nx) - surface_heading(w)) == 3, "rot {rot} wall {i}: the next a quarter turn on");
+        assert(vec_dot_4(w.ws_dk, w.ws_dm, nx.ws_dk, nx.ws_dm) == 0, "rot {rot} wall {i}: square to the next, exactly");
+        c = b.cw_corners[i] ?? (0.0, 0.0);
+        assert(abs(left_of(w, c.0, c.1)) < 0.000000001 && abs(left_of(nx, c.0, c.1)) < 0.000000001, "rot {rot} corner {i}: on both its walls");
+        assert(b.cw_kinds[i] == WALL_STRAIGHT, "rot {rot} wall {i}: straight");
+      }
+      for r in -20..21 {
+        for q in -20..21 {
+          least = 1000.0;
+          for w in b.cw_walls {
+            d = left_of(w, cell_x(q, r), cell_y(q, r));
+            if d < least { least = d; }
+          }
+          if hexset_get(cells, q, r) {
+            assert(least > 0.2, "rot {rot}: cell {q},{r} of the box lies clearly inside its walls ({least})");
+          } else {
+            assert(least < -0.2, "rot {rot}: cell {q},{r} outside lies clearly outside a wall ({least})");
+          }
+        }
+      }
+    }
+  }
+}
+
+// Against `surface_of`, which is told the `Plan`: a TOPS wall (an even heading) is the same line,
+// exactly — the two rationals name one point across it.  A SIDES wall (an odd heading) is not:
+// `surface_of` averages every edge its side holds, the corner's with them, where `cells_wall`
+// reads the line off the slanted connectors and outvotes the corner's.  On the 5 x 4 box they
+// lie 0.0481 world units (4 cm) apart.  Both are exact; they answer two questions.
+fn test_a_wall_from_cells_against_the_plans_surface() {
+  for rot in 0..6 {
+    p = plan_new(0, 0, 5, 4, rot, false);
+    cells = box_cells(rot, false);
+    b = cells_built(cells, 9);
+    tops = 0;
+    sides = 0;
+    for side in 0..4 {
+      s = surface_of(p, cells, side);
+      for w in b.cw_walls {
+        if surface_heading(w) != surface_heading(s) { continue; }
+        // the offset of s's mean from w's line, x 4 x both denominators x |w's step|: exact
+        ek = s.ws_num_k * w.ws_den - w.ws_num_k * s.ws_den;
+        em = s.ws_num_m * w.ws_den - w.ws_num_m * s.ws_den;
+        cross = 3 * ek * perp_k(w.ws_dk, w.ws_dm) + em * perp_m(w.ws_dk, w.ws_dm);
+        if head_is_edge(surface_heading(w)) {
+          assert(cross == 0, "rot {rot} side {side}: a tops wall is surface_of's line");
+          tops += 1;
+        } else {
+          off = abs(left_of(w, surface_mean_x(s), surface_mean_y(s)));
+          assert(cross != 0 && off > 0.0481 && off < 0.0482, "rot {rot} side {side}: a sides wall lies 0.0481 beside surface_of's ({off})");
+          sides += 1;
+        }
+      }
+    }
+    assert(tops == 2 && sides == 2, "rot {rot}: two walls of each kind, got {tops} and {sides}");
+  }
+}
+
+// Is `p` (a coordinate along heading `head`, scaled) between the lines `lo` and `hi` half steps out?
+fn between(head: integer, p: integer, lo: integer, hi: integer) -> boolean {
+  if head_is_edge(head) { return p >= 12 * lo && p <= 12 * hi; }
+  sign_root3(p, -12 * lo) >= 0 && sign_root3(p, -12 * hi) <= 0
+}
+
+// An L along heading `h`, by exact tests: a body 5 hex steps by 3, a wing 2 by 2 on one end of
+// its far side (in half steps: u -5 .. 5, v -3 .. 3 and u -5 .. -1, v 3 .. 7).
+fn ell_cells(h: integer) -> HexSet {
+  cells = hexset_chunk(-20, -20, 41, 41);
+  us = head_step(h);
+  vs = head_step(h + 3);
+  for r in -20..21 {
+    for q in -20..21 {
+      u = vec_dot_4(2 * lattice_k(q, r), 2 * lattice_m(q, r), us.0, us.1);
+      v = vec_dot_4(2 * lattice_k(q, r), 2 * lattice_m(q, r), vs.0, vs.1);
+      body = between(h, u, -5, 5) && between(h + 3, v, -3, 3);
+      wing = between(h, u, -5, -1) && between(h + 3, v, 3, 7);
+      if body || wing { hexset_set(cells, q, r, true); }
+    }
+  }
+  cells
+}
+
+// An L (two rectangles): six walls, five corners turning left and one right, all square; seven
+// cells (a hex and its neighbours) show no direction, so the axes are the caller's hint
+// (@FR-HX-Size); and `cells_boundary` is `cells_loops`' first loop, closed.
+fn test_an_ell_and_a_structure_too_small() {
+  for rot in 0..6 {
+    cells = ell_cells(2 * rot);
+    b = cells_built(cells, 9);
+    assert(len(b.cw_walls) == 6, "rot {rot}: an L has six walls, got {len(b.cw_walls)}");
+    left = 0;
+    right = 0;
+    for i in 0..6 {
+      w = b.cw_walls[i]!;
+      nx = b.cw_walls[(i + 1) % 6 ?? 0]!;
+      assert(vec_dot_4(w.ws_dk, w.ws_dm, nx.ws_dk, nx.ws_dm) == 0, "rot {rot} wall {i}: square to the next");
+      if w.ws_dk * nx.ws_dm - w.ws_dm * nx.ws_dk > 0 { left += 1; } else { right += 1; }
+    }
+    assert(left == 5 && right == 1, "rot {rot}: five corners turn left, one right: {left} and {right}");
+    bd = cells_boundary(cells);
+    n = len(bd);
+    for i in 0..n {
+      e = bd[i]!;
+      f = bd[(i + 1) % n ?? 0]!;
+      assert(e.we_bk == f.we_ak && e.we_bm == f.we_am, "rot {rot}: edge {i} ends where the next begins");
+    }
+  }
+  seven = hexset_chunk(-4, -4, 9, 9);
+  hexdisk_into(seven, 0, 0, 1);
+  assert(cells_axes(cells_boundary(seven)) == -1, "a hex and its six neighbours show no direction");
+}
+
+// Any number of loops: a hall round a court is two outlines of four walls, the court's walked
+// the other way round (its cells still on its left); every corner of both square.
+fn test_outlines_of_a_hall_round_a_court() {
+  cells = hexset_chunk(-24, -24, 49, 49);
+  types = labels_new(-24, -24, 49, 49);
+  draw_floor(plan_new(0, 0, 12, 10, 0, false), cells, types, 1);
+  court = hexset_chunk(-24, -24, 49, 49);
+  draw_floor(plan_new(0, 0, 5, 4, 0, false), court, types, 1);
+  for r in -24..25 { for q in -24..25 { if hexset_get(court, q, r) { hexset_set(cells, q, r, false); } } }
+  os = cells_outlines(cells, 0);
+  assert(len(os) == 2, "a hall round a court: two loops, got {len(os)}");
+  turns: vector<integer> = [];
+  for o in os {
+    n = len(o.co_walls);
+    assert(n == 4 && len(o.co_corners) == 4, "four walls a loop, got {n}");
+    left = 0;
+    for i in 0..n {
+      w = o.co_walls[i]!;
+      nx = o.co_walls[(i + 1) % n ?? 0]!;
+      assert(vec_dot_4(w.ws_dk, w.ws_dm, nx.ws_dk, nx.ws_dm) == 0, "wall {i}: square to the next");
+      if w.ws_dk * nx.ws_dm - w.ws_dm * nx.ws_dk > 0 { left += 1; }
+    }
+    turns += [left];
+  }
+  assert(turns == [4, 0], "the hall's loop turns left four times, the court's right: {turns}");
+}

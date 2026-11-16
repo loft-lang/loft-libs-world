@@ -21,6 +21,10 @@ geometry itself.
 - **count what a wall still holds** — `wall_edge_count`
 - **get a wall's collision surface** — `surface_of · surface_is_exact · surface_span`
 - **the mitered render quad** — `surface_quad`
+- **the walls of a structure known only by its cells** (an L, a hall with wings, a turned house, a
+  road) — `cells_built` for one loop, `cells_outlines` for any number; the pieces are `cells_loops ·
+  cells_axes · cells_runs · cells_wall`.  A sides wall from cells is not `surface_of`'s line: 0.048
+  apart on a 5 x 4 box (`tests/01-hex-draw.loft`)
 - **the corner of two walls that are not a `Plan`'s sides** — `surface_meet`, and `surface_dir` for a wall's direction
 
 A guide that runs: [`docs/01-getting-started.loft`](docs/01-getting-started.loft).
