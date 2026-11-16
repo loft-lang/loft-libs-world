@@ -25,7 +25,7 @@
 //
 // It reads nothing but the cells, so it does not matter which way the structure was drawn, or
 // how.  Extracted from tile-world-game, whose rules these routines keep and cite by name
-// (`@FR-HT-…`, `@FR-HO-…`, its `formal/hex-houses.md`).
+// (the HT and HO rules, its `formal/hex-houses.md`).
 use hex_field::*;
 use hex_form::*;
 use hex_draw::*;

@@ -16,7 +16,7 @@
 //
 // `cells_place_opening` goes from a point to marked edges; `cells_openings` from marked edges
 // back to centres and spans.  Extracted from tile-world-game, whose rules these keep and cite by
-// name (`@FR-HO-…`, its `formal/hex-houses.md`).
+// name (the HO rules, its `formal/hex-houses.md`).
 use hex_field::*;
 use hex_form::*;
 use hexsurf::*;

@@ -20,7 +20,7 @@
 // `cells_built` does the four for a structure of one loop; `cells_outlines` for any number of
 // loops, with the walls a road's outline needs besides (a step, a slanted stretch).
 //
-// Extracted from tile-world-game, whose rules these routines keep and cite by name (`@FR-HW-…`,
+// Extracted from tile-world-game, whose rules these routines keep and cite by name (the HW rules,
 // its `formal/hex-houses.md`), and whose town they were checked on wall for wall.
 //
 // Lattice units, as `hex_field` keeps them: a cell centre is (2q + (r & 1), 3r) in doubled
