@@ -1,0 +1,177 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// hex_ground — the conformance tests: the ground of a place, shaped by terraces, a hill, a seat,
+// a dig and cliffs.  Contract only; the consumer's check is tile-world-game's town, which
+// regenerates byte for byte from these routines.
+use hex_ground::*;
+use hex_field::*;
+use hex_form::*;
+use hex_draw::*;
+
+// A box of cells about (0, 0), w by d hex steps.
+fn box(w: integer, d: integer, reach: integer) -> HexSet {
+  cells = hexset_chunk(0 - reach, 0 - reach, 2 * reach + 1, 2 * reach + 1);
+  types = labels_new(0 - reach, 0 - reach, 2 * reach + 1, 2 * reach + 1);
+  draw_floor(plan_new(0, 0, w, d, 0, false), cells, types, 1);
+  cells
+}
+
+fn near(a: float, b: float) -> boolean { a - b < 0.000000001 && b - a < 0.000000001 }
+
+fn main() {
+  g = ground_new(-4, -4, 9, 9, 1.5, 3);
+  assert(height_get(g.gr_heights, 0, 0) == 0.0 && label_get(g.gr_kinds, 2, -3) == 3, "flat ground of one kind");
+}
+
+// A centre and the cell nearest it are inverse, at a step of 1.5 (metres) and of sqrt(3) (the
+// lattice's world unit, where it is `hex_form::cell_x` / `cell_y` and `hex_field::hex_at`).
+fn test_a_centre_and_its_cell() {
+  for step in [1.5, 1.7320508075688772] {
+    for r in -9..10 {
+      for q in -9..10 {
+        (x, y) = ground_centre(step, q, r);
+        (cq, cr) = ground_cell_near(step, x + 0.2, y - 0.2);
+        assert(cq == q && cr == r, "step {step}: the cell near {q},{r}'s centre is it");
+      }
+    }
+  }
+  (x, y) = ground_centre(1.7320508075688772, 5, 3);
+  assert(near(x, cell_x(5, 3)) && near(y, cell_y(5, 3)), "at sqrt(3) a centre is the lattice's own");
+  (mx, my) = ground_centre(1.5, 5, 3);
+  assert(mx == 8.25 && near(my, 9.0 * 0.4330127018922193), "at 1.5 a centre is 0.75 a doubled k: {mx} {my}");
+  assert(near(ground_unit(1.5), 0.8660254037844386) && near(ground_unit(1.7320508075688772), 1.0), "the unit per world unit");
+}
+
+// Terraces: a map of two levels, the upper one east of x = 0.  Far up the terrace the ground is a
+// storey high, far below it is 0, on the step's edge half way, and it only climbs between
+// (@FR-HG-Terrace); the flat tops stay flat.
+fn test_terraces_are_smooth_and_their_tops_flat() {
+  level: vector<integer> = [];
+  for _j in 0..20 { for i in 0..20 { level += [if i >= 10 { 1 } else { 0 }]; } }
+  s = GroundSteps { gs_x0: -15.0, gs_y0: -15.0, gs_size: 1.5, gs_nx: 20, gs_ny: 20, gs_level: level };
+  m = ground_measures(2.6, 6.0, 2.5, 2.5);
+  assert(near(terrace_height(s, 8.0, 0.0, m, 0, 1), 2.6), "well up the terrace: a storey");
+  assert(near(terrace_height(s, -8.0, 0.0, m, 0, 1), 0.0), "well below it: 0");
+  assert(near(terrace_height(s, 0.0, 0.0, m, 0, 1), 1.3), "on the step's edge: half a storey, {terrace_height(s, 0.0, 0.0, m, 0, 1)}");
+  last = -1.0;
+  for i in 0..81 {
+    h = terrace_height(s, -4.0 + (i as float) * 0.1, 0.0, m, 0, 1);
+    assert(h >= last, "it only climbs going east");
+    last = h;
+  }
+  g = ground_new(-12, -12, 25, 25, 1.5, 0);
+  ground_terraces(g, s, m, 0, 1);
+  (x, y) = ground_centre(1.5, 6, 0);
+  assert(height_get(g.gr_heights, 6, 0) == terrace_height(s, x, y, m, 0, 1), "each cell at its centre's height");
+  assert(near(height_get(g.gr_heights, 6, 0), 2.6) && near(height_get(g.gr_heights, 7, 3), 2.6), "the top flat");
+}
+
+// A hill: its height at its top, half of it half way down, nothing at its foot and beyond
+// (@FR-HG-Hill); added to the ground that is there.
+fn test_a_hill_is_a_cosine() {
+  g = ground_new(-12, -12, 25, 25, 1.5, 0);
+  for r in -12..13 { for q in -12..13 { height_set(g.gr_heights, q, r, 1.0); } }
+  ground_hill(g, 0.0, 0.0, 6.0, 4.0);
+  assert(near(height_get(g.gr_heights, 0, 0), 5.0), "its top: the ground's 1 and its 4");
+  assert(near(height_get(g.gr_heights, 2, 0), 3.0), "3 from the top of a hill 6 across: half, {height_get(g.gr_heights, 2, 0)}");
+  assert(near(height_get(g.gr_heights, 4, 0), 1.0) && near(height_get(g.gr_heights, 8, 5), 1.0), "its foot and beyond: the ground's own");
+}
+
+// A structure seated on a slope: its footprint level at its floor, the lowest the ground was
+// under it answered, the ground far off untouched and the ground beside it between the two
+// (@FR-HG-Seat).
+fn test_a_seat_levels_the_footprint_and_blends() {
+  g = ground_new(-20, -20, 41, 41, 1.5, 0);
+  for r in -20..21 {
+    for q in -20..21 {
+      (x, _y) = ground_centre(1.5, q, r);
+      height_set(g.gr_heights, q, r, 0.2 * x);
+    }
+  }
+  cells = box(5, 4, 20);
+  lowest = 1000.0;
+  for r in -20..21 { for q in -20..21 { if hexset_get(cells, q, r) && height_get(g.gr_heights, q, r) < lowest { lowest = height_get(g.gr_heights, q, r); } } }
+  m = ground_measures(2.6, 6.0, 2.5, 2.5);
+  low = ground_seat(g, cells, 3.0, m);
+  assert(low == lowest && low < 0.0, "the lowest the ground was under it: {low}");
+  for r in -20..21 { for q in -20..21 { if hexset_get(cells, q, r) { assert(height_get(g.gr_heights, q, r) == 3.0, "the footprint at its floor"); } } }
+  (fx, _fy) = ground_centre(1.5, 12, 0);
+  assert(near(height_get(g.gr_heights, 12, 0), 0.2 * fx), "far off: the ground's own");
+  (bx, _by) = ground_centre(1.5, 4, 0);
+  beside = height_get(g.gr_heights, 4, 0);
+  assert(!hexset_get(cells, 4, 0) && beside < 3.0 && beside > 0.2 * bx, "beside it: between its floor and the slope, {beside}");
+}
+
+// A bed dug: well inside its straight sides the ground lies `depth` lower, well outside it is
+// untouched, and across a side it is half way down (@FR-HG-Dig) — the bank on the straight side,
+// which `sides_distance` measures from.
+fn test_a_dig_follows_the_straight_sides() {
+  g = ground_new(-24, -24, 49, 49, 1.5, 0);
+  cells = box(12, 6, 24);
+  m = ground_measures(2.6, 6.0, 2.0, 2.5);
+  ground_dig(g, cells, 2.0, m);
+  assert(near(height_get(g.gr_heights, 0, 0), -2.0), "its middle: the depth down, {height_get(g.gr_heights, 0, 0)}");
+  assert(near(height_get(g.gr_heights, 0, 12), 0.0) && near(height_get(g.gr_heights, 16, 0), 0.0), "well outside: untouched");
+  sides: vector<(float, float, float, float)> = [];
+  for o in cells_outlines(cells, 0) {
+    n = len(o.co_corners);
+    for i in 0..n {
+      a = o.co_corners[(i + n - 1) % n ?? 0] ?? (0.0, 0.0);
+      b = o.co_corners[i] ?? (0.0, 0.0);
+      sides += [(a.0 * ground_unit(1.5), a.1 * ground_unit(1.5), b.0 * ground_unit(1.5), b.1 * ground_unit(1.5))];
+    }
+  }
+  assert(len(sides) == 4, "a box's four straight sides");
+  for r in -24..25 {
+    for q in -24..25 {
+      (x, y) = ground_centre(1.5, q, r);
+      d = sides_distance(sides, x, y);
+      z = height_get(g.gr_heights, q, r);
+      if d > 1.0 { assert(near(z, -2.0), "a bank's half inside its sides: the bed"); }
+      if d < -1.0 { assert(near(z, 0.0), "a bank's half outside them: the ground"); }
+      if d > -1.0 && d < 1.0 { assert(z < 0.000000001 && z > -2.000000001, "on the bank: between"); }
+      assert(hexset_get(cells, q, r) == (d > 0.0), "inside the sides is the bed's cells");
+    }
+  }
+}
+
+// Cliffs: a terrace a level up, a box of 12 by 6 hex steps.  With the whole of it a cliff area,
+// its four straight sides come back as cliffs of level 1, the ground on their left; clipped to
+// its east half, less of them; with no area, none (@FR-HG-Cliff).  And the ground made sharp:
+// in the area each cell at its level's height, beyond the blend untouched.
+fn test_cliffs_run_along_the_straight_sides() {
+  cells = box(12, 6, 24);
+  levels = labels_new(-24, -24, 49, 49);
+  for r in -24..25 { for q in -24..25 { label_set(levels, q, r, if hexset_get(cells, q, r) { 1 } else { 0 }); } }
+  all = [GroundBox { gb_x0: -100.0, gb_y0: -100.0, gb_x1: 100.0, gb_y1: 100.0 }];
+  cs = ground_cliffs(levels, -24, -24, 49, 49, 0, 1, all, 1.5);
+  assert(len(cs) == 4, "four cliffs round the terrace, got {len(cs)}");
+  total = 0.0;
+  for c in cs {
+    assert(c.gc_level == 1, "each the cliff of level 1");
+    // the terrace's middle on its left
+    assert((c.gc_bx - c.gc_ax) * (0.0 - c.gc_ay) - (c.gc_by - c.gc_ay) * (0.0 - c.gc_ax) > 0.0, "the higher ground on its left");
+    total += sqrt((c.gc_bx - c.gc_ax) * (c.gc_bx - c.gc_ax) + (c.gc_by - c.gc_ay) * (c.gc_by - c.gc_ay)) ?? 0.0;
+  }
+  east = [GroundBox { gb_x0: 0.0, gb_y0: -100.0, gb_x1: 100.0, gb_y1: 100.0 }];
+  half = 0.0;
+  for c in ground_cliffs(levels, -24, -24, 49, 49, 0, 1, east, 1.5) {
+    assert(c.gc_ax >= -0.000000001 && c.gc_bx >= -0.000000001, "clipped to the area");
+    half += sqrt((c.gc_bx - c.gc_ax) * (c.gc_bx - c.gc_ax) + (c.gc_by - c.gc_ay) * (c.gc_by - c.gc_ay)) ?? 0.0;
+  }
+  assert(near(half, total * 0.5), "the east half of a terrace about 0: half its cliffs, {half} of {total}");
+  none: vector<GroundBox> = [];
+  assert(len(ground_cliffs(levels, -24, -24, 49, 49, 0, 1, none, 1.5)) == 0, "no cliff area, no cliff");
+
+  g = ground_new(-24, -24, 49, 49, 1.5, 0);
+  for r in -24..25 { for q in -24..25 { height_set(g.gr_heights, q, r, 0.7); } }
+  sharp = heights_new(-24, -24, 49, 49);
+  for r in -24..25 { for q in -24..25 { height_set(sharp, q, r, 2.6 * (label_get(levels, q, r) as float)); } }
+  area = [GroundBox { gb_x0: -6.0, gb_y0: -6.0, gb_x1: 6.0, gb_y1: 6.0 }];
+  ground_sharpen(g, sharp, area, ground_measures(2.6, 6.0, 2.5, 2.5));
+  assert(near(height_get(g.gr_heights, 0, 0), 2.6), "in the area, on the terrace: its level's height");
+  assert(near(height_get(g.gr_heights, 12, 0), 0.7) && near(height_get(g.gr_heights, 0, 10), 0.7), "beyond the blend: the ground it had");
+  (ex, ey) = ground_centre(1.5, 5, 0);
+  assert(ground_box_distance(area[0]!, ex, ey) > 0.0 && height_get(g.gr_heights, 5, 0) > 0.7 && height_get(g.gr_heights, 5, 0) < 2.6,
+         "just outside the area: blended between, {height_get(g.gr_heights, 5, 0)}");
+}

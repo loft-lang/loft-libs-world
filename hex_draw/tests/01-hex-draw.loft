@@ -257,3 +257,56 @@ fn test_outlines_of_a_hall_round_a_court() {
   }
   assert(turns == [4, 0], "the hall's loop turns left four times, the court's right: {turns}");
 }
+
+// ── cellopen: doors and windows on walls from cells ─────────────────────────
+
+// An opening placed at a point marks edges of the nearest wall, reads back as one opening on
+// that wall with its centre on the wall's line and a span of its kind's width, clear of both
+// corners — on every wall of a box at all 12 orientations, and of two widths.  The walls are
+// built once for all of them; the marks never change the walls (@FR-HO-Point, HO-Place, HO-Clear).
+fn test_an_opening_at_a_point_reads_back_on_its_wall() {
+  for rot in 0..6 {
+    for wide in 0..2 {
+      cells = box_cells(rot, false);
+      cw = cells_built(cells, 9);
+      sz = opening_sizes(1.0 + (wide as float) * 1.2, 1.0, 0.8660254037844386);
+      marks = cells_no_marks(cells);
+      for i in 0..4 {
+        // a point a third of the way along wall i, a little outside it
+        a = cw.cw_corners[(i + 3) % 4 ?? 0] ?? (0.0, 0.0);
+        b = cw.cw_corners[i] ?? (0.0, 0.0);
+        (dx, dy) = surface_dir(cw.cw_walls[i]!);
+        px = a.0 + (b.0 - a.0) / 3.0 + dy * 0.3;
+        py = a.1 + (b.1 - a.1) / 3.0 - dx * 0.3;
+        kind = if i % 2 == 0 { OPEN_DOOR } else { OPEN_WINDOW };
+        assert(cells_place_opening(cw, marks, kind, px, py, sz), "rot {rot} wall {i}: placed");
+      }
+      ops = cells_openings(cw.cw_boundary, cw.cw_runs, cw.cw_walls, marks, sz);
+      assert(len(ops) == 4, "rot {rot} width {wide}: four openings read back, got {len(ops)}");
+      for o in ops {
+        i = o.op_wall;
+        w = cw.cw_walls[i]!;
+        assert(o.op_kind == (if i % 2 == 0 { OPEN_DOOR } else { OPEN_WINDOW }), "rot {rot} wall {i}: its kind");
+        assert(abs(left_of(w, o.op_cx, o.op_cy)) < 0.000000001, "rot {rot} wall {i}: its centre on the wall's line");
+        span = sqrt((o.op_bx - o.op_ax) * (o.op_bx - o.op_ax) + (o.op_by - o.op_ay) * (o.op_by - o.op_ay)) ?? 0.0;
+        assert(abs(span - opening_size(o.op_kind, sz)) < 0.000000001, "rot {rot} wall {i}: its kind's width, {span}");
+        a = cw.cw_corners[(i + 3) % 4 ?? 0] ?? (0.0, 0.0);
+        b = cw.cw_corners[i] ?? (0.0, 0.0);
+        (dx, dy) = surface_dir(w);
+        from_a = (o.op_ax - a.0) * dx + (o.op_ay - a.1) * dy;
+        to_b = (b.0 - o.op_bx) * dx + (b.1 - o.op_by) * dy;
+        assert(from_a > 0.0 && to_b > 0.0, "rot {rot} wall {i}: between its wall's corners ({from_a}, {to_b})");
+        assert(len(o.op_edges) >= 1, "rot {rot} wall {i}: on an edge at least");
+        for ei in o.op_edges {
+          e = cw.cw_boundary[ei]!;
+          assert(edge_mat(marks, e.we_qa, e.we_ra, e.we_qb, e.we_rb) == o.op_kind, "rot {rot} wall {i}: its edges marked");
+        }
+      }
+      again = cells_built(cells, 9);
+      for i in 0..4 {
+        assert(again.cw_walls[i]!.ws_num_k == cw.cw_walls[i]!.ws_num_k && again.cw_walls[i]!.ws_num_m == cw.cw_walls[i]!.ws_num_m,
+               "rot {rot}: the walls are the cells', whatever is marked");
+      }
+    }
+  }
+}

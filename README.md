@@ -37,6 +37,7 @@ chunk and consume hex_world types via dep.
 |---|---|---|
 | `hex_world/` | hex_world | ✅ 0.1.0 — sparse 32×32-chunk world, 4-byte Cell, save/load |
 | [`tile_world/`](tile_world/) | an unbounded, layered square-grid world, and the routines that answer questions about it: paths, sight and light |
+| [`hex_ground/`](hex_ground/) | hex_ground | the ground of a place: a height and a surface kind per cell, shaped by terraces, a hill, a seat, a dig and cliffs |
 | `hex_walls/` | hex_walls | (planned, depends on curve-detection design) |
 | `hex_terrain/` | hex_terrain | (planned) |
 | `hex_items/` | hex_items | (planned) |

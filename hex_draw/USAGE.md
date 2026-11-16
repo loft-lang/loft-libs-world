@@ -25,6 +25,8 @@ geometry itself.
   road) — `cells_built` for one loop, `cells_outlines` for any number; the pieces are `cells_loops ·
   cells_axes · cells_runs · cells_wall`.  A sides wall from cells is not `surface_of`'s line: 0.048
   apart on a 5 x 4 box (`tests/01-hex-draw.loft`)
+- **a door or a window on such walls** — `cells_place_opening` at a point, `cells_openings` to read them
+  back as centres and spans; `opening_sizes` for the widths.  The walls are built once for any number
 - **the corner of two walls that are not a `Plan`'s sides** — `surface_meet`, and `surface_dir` for a wall's direction
 
 A guide that runs: [`docs/01-getting-started.loft`](docs/01-getting-started.loft).
