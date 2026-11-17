@@ -2,6 +2,9 @@
 name    = "hex_ground"
 version = "0.1.1"
 loft    = ">=2026.10.0"
+repository = "loft-libs-world"
+description = "The ground of one place: a height and a surface kind per cell, shaped into terraces, a hill, a seat, a cut and cliffs"
+categories  = ["geometry", "world"]
 
 api_compatible_with  = "0.1.0"   # oldest own release this is a drop-in for
 data_compatible_with = "0.1.0"   # oldest own release whose stored data this reads

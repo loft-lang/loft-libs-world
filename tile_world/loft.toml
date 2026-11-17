@@ -6,9 +6,13 @@ repository = "loft-libs-world"
 description = "An unbounded, layered square-grid world, and the routines that answer questions about it: paths, sight and light"
 categories  = ["game", "world"]
 
-# 0.3.0 holds the world and its routines only; the game rules of 0.1 and 0.2 moved to the game.
-api_compatible_with  = "0.3.0"   # oldest own release this is a drop-in for
-data_compatible_with = "0.1.0"   # oldest own release whose stored data this reads
+# 0.14.0 declares a break on both axes (the floors were 0.3.0 and 0.1.0).  `World` gained the
+# fields `changes`, `marks`, `layer_marks` and `kinds_at` since 0.9.0, the last release published:
+# private, so no consumer's code changes, but a whole-record read of a `World` — JSON, printing,
+# a reflection walk — now carries them (API), and its record layout is another (data).  So 0.7.0
+# and 0.9.0 are not drop-ins (`loft compat floor`); the registry keeps them installable.
+api_compatible_with  = "0.14.0"  # oldest own release this is a drop-in for
+data_compatible_with = "0.14.0"  # oldest own release whose stored data this reads
 
 [library]
 entry = "src/tile_world.loft"
