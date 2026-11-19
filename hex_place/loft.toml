@@ -8,8 +8,11 @@ data_compatible_with = "0.1.0"   # oldest own release whose stored data this rea
 [library]
 entry = "src/hex_place.loft"
 
-# REGISTRY DEPENDENCIES (added to the index entry at publish time, NOT declared here): hex_field, hex_form, hex_draw
-# Declared as `[dependencies] x = ">=0.1"` they break `--lib` multi-library consumption -- loft
-# resolves the dep from the registry instead of the --lib path. Install reads deps from the
-# registry INDEX, not this file (loft src/install.rs resolve_recursive uses version.deps), so the
-# deps live in the index entry. See hexbody plans/lib-split.
+# The registry dependencies.  Each floor is the release this version was tested against: a
+# floor behind a dependency's declared break holds an installed copy on the old line, which
+# lacks what this source calls (loft#2566).  A sibling handed by `--lib` is still the one
+# used: a local library wins over the registry's.
+[dependencies]
+hex_field = ">=0.1.11"
+hex_form  = ">=0.1.8"
+hex_draw  = ">=0.1.9"
