@@ -358,7 +358,7 @@ fn test_a_material_past_the_slot_is_refused_not_narrowed() {
 // against w*h, which is how truncation is detected at all.
 fn test_the_reader_refuses_rather_than_partly_parsing() {
   bad_magic = tmp("magic");
-  raw_header(bad_magic, 0x99999999, HXF_SCHEMA, 0, 0, 2, 2, 0, 0);
+  raw_header(bad_magic, 0x19999999, HXF_SCHEMA, 0, 0, 2, 2, 0, 0);
   assert(doc_read(bad_magic).doc_code == HXF_BAD_MAGIC, "a foreign file is refused");
   delete(bad_magic);
 
