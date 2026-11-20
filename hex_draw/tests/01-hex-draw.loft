@@ -9,6 +9,13 @@ use hex_field::*;
 
 fn plan5x4() -> Plan { plan_new(0, 0, 5, 4, 0, false) }
 
+// How far two positions may lie apart and be the same: a thousand millionth where a `float` is
+// a double, a hundred thousandth where it is a single (a 32-bit program), which holds about
+// seven digits — the boxes here reach ten units from the origin, and a hex edge is one.
+fn same_place() -> float {
+  if 1.0 + 0.000000000001 > 1.0 { 0.000000001 } else { 0.00001 }
+}
+
 fn main() {
   p = plan5x4();
   cells = hexset_chunk(-20, -20, 41, 41);
@@ -75,15 +82,25 @@ fn test_surface_meet_is_the_miter_of_two_surfaces() {
         w = surface_of(p, cells, side);
         (dx, dy) = surface_dir(w);
         ln = dx * dx + dy * dy;
-        assert(ln > 0.999999999 && ln < 1.000000001, "rot {rot} side {side}: a unit direction");
+        assert(ln > 1.0 - same_place() && ln < 1.0 + same_place(), "rot {rot} side {side}: a unit direction, {ln}");
         st = head_step(surface_heading(w));
-        assert(dx * (st.1 as float) * 0.5 - dy * (st.0 as float) * 0.8660254037844386 < 0.000000001
-               && dx * (st.1 as float) * 0.5 - dy * (st.0 as float) * 0.8660254037844386 > -0.000000001,
+        assert(dx * (st.1 as float) * 0.5 - dy * (st.0 as float) * 0.8660254037844386 < same_place()
+               && dx * (st.1 as float) * 0.5 - dy * (st.0 as float) * 0.8660254037844386 > -same_place(),
                "rot {rot} side {side}: along its heading");
       }
       (_x, _y, par) = surface_meet(surface_of(p, cells, 0), surface_of(p, cells, 2));
       assert(!par, "rot {rot} mir {mir}: opposite sides do not meet");
     }
+  }
+  // Parallel is a question of the two directions, whatever the walls' lengths: one step along
+  // each heading against three steps back along it, on another line.  (Asked of rounded
+  // products, 3 944 of 18 252 such pairs met where a `float` is a single.)
+  for h in 0..12 {
+    st = head_step(h);
+    a = WallSurface { ws_dk: st.0, ws_dm: st.1, ws_num_k: 4, ws_num_m: 2, ws_den: 2, ws_n: 1 };
+    b = WallSurface { ws_dk: -3 * st.0, ws_dm: -3 * st.1, ws_num_k: 40, ws_num_m: -22, ws_den: 2, ws_n: 1 };
+    (_px, _py, meets) = surface_meet(a, b);
+    assert(!meets, "heading {h}: two parallel walls of different lengths do not meet");
   }
 }
 
@@ -122,7 +139,7 @@ fn test_a_box_from_its_cells_has_four_square_walls() {
         assert(head_norm(surface_heading(nx) - surface_heading(w)) == 3, "rot {rot} wall {i}: the next a quarter turn on");
         assert(vec_dot_4(w.ws_dk, w.ws_dm, nx.ws_dk, nx.ws_dm) == 0, "rot {rot} wall {i}: square to the next, exactly");
         c = b.cw_corners[i] ?? (0.0, 0.0);
-        assert(abs(left_of(w, c.0, c.1)) < 0.000000001 && abs(left_of(nx, c.0, c.1)) < 0.000000001, "rot {rot} corner {i}: on both its walls");
+        assert(abs(left_of(w, c.0, c.1)) < same_place() && abs(left_of(nx, c.0, c.1)) < same_place(), "rot {rot} corner {i}: on both its walls");
         assert(b.cw_kinds[i] == WALL_STRAIGHT, "rot {rot} wall {i}: straight");
       }
       for r in -20..21 {
@@ -283,13 +300,20 @@ fn test_an_opening_at_a_point_reads_back_on_its_wall() {
       }
       ops = cells_openings(cw.cw_boundary, cw.cw_runs, cw.cw_walls, marks, sz);
       assert(len(ops) == 4, "rot {rot} width {wide}: four openings read back, got {len(ops)}");
+      // An edge exactly half the opening's width from its centre is the opening's: turned 60
+      // degrees, the door one unit wide takes two edges and the window one.
+      if rot == 1 && wide == 0 {
+        taken = "";
+        for o in ops { taken += "{len(o.op_edges)}"; }
+        assert(taken == "2121", "rot 1: a door of two edges, a window of one, got {taken}");
+      }
       for o in ops {
         i = o.op_wall;
         w = cw.cw_walls[i]!;
         assert(o.op_kind == (if i % 2 == 0 { OPEN_DOOR } else { OPEN_WINDOW }), "rot {rot} wall {i}: its kind");
-        assert(abs(left_of(w, o.op_cx, o.op_cy)) < 0.000000001, "rot {rot} wall {i}: its centre on the wall's line");
+        assert(abs(left_of(w, o.op_cx, o.op_cy)) < same_place(), "rot {rot} wall {i}: its centre on the wall's line");
         span = sqrt((o.op_bx - o.op_ax) * (o.op_bx - o.op_ax) + (o.op_by - o.op_ay) * (o.op_by - o.op_ay)) ?? 0.0;
-        assert(abs(span - opening_size(o.op_kind, sz)) < 0.000000001, "rot {rot} wall {i}: its kind's width, {span}");
+        assert(abs(span - opening_size(o.op_kind, sz)) < same_place(), "rot {rot} wall {i}: its kind's width, {span}");
         a = cw.cw_corners[(i + 3) % 4 ?? 0] ?? (0.0, 0.0);
         b = cw.cw_corners[i] ?? (0.0, 0.0);
         (dx, dy) = surface_dir(w);

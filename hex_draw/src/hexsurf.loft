@@ -278,6 +278,11 @@ pub fn surface_meet(wa: WallSurface, wb: WallSurface) -> (float, float, boolean)
   bux = (wb.ws_dk as float) * 0.8660254037844386;
   buy = (wb.ws_dm as float) * 0.5;
   den = aux * buy - auy * bux;
+  // Parallel is asked of the two exact directions, in whole numbers.  Asked of `den`, two
+  // parallel walls of different lengths leave a rounding of their products there: under a
+  // thousand millionth where a `float` is a double, and far over it where it is a single (a
+  // 32-bit program), where they were answered to meet, hundreds of millions of units away.
+  if wa.ws_dk * wb.ws_dm - wa.ws_dm * wb.ws_dk == 0 { return (0.0, 0.0, false); }
   if den < 0.000000001 && den > 0.0 - 0.000000001 { return (0.0, 0.0, false); }
   tt = (((bx - ax) * buy - (by - ay) * bux) / den) ?? 0.0;
   (ax + tt * aux, ay + tt * auy, true)

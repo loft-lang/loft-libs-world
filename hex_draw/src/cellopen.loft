@@ -168,6 +168,11 @@ pub fn cells_place_opening(cw: const CellWalls, marks: EdgeSet, kind: integer, x
   (dx, dy) = surface_dir(w);
   mx = surface_mean_x(w);
   my = surface_mean_y(w);
+  // An edge whose midpoint lies exactly half the width from the centre is in: the room beside
+  // it is what the sum is off by, a thousand millionth where a `float` is a double and four
+  // millionths of its size where it is a single (a 32-bit program) — there a door one unit
+  // wide lost the edge at its end, and was drawn a quarter of a unit to the side.
+  room = if 1.0 + 0.000000000001 > 1.0 { 0.000000001 } else { (1.0 + half + fabs(t)) * 0.000004 };
   picks: vector<integer> = [];
   nearest = -1;
   near_d = 0.0;
@@ -176,7 +181,7 @@ pub fn cells_place_opening(cw: const CellWalls, marks: EdgeSet, kind: integer, x
     ex = ((e.we_ak + e.we_bk) as float) * 0.5 * 0.8660254037844386;
     ey = ((e.we_am + e.we_bm) as float) * 0.25;
     off = fabs((ex - mx) * dx + (ey - my) * dy - t);
-    if off <= half + 0.000000001 { picks += [i]; }
+    if off <= half + room { picks += [i]; }
     if nearest < 0 || off < near_d {
       nearest = i;
       near_d = off;
