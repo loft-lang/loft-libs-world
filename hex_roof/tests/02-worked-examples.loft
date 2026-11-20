@@ -257,7 +257,22 @@ fn test_the_recovered_surface_is_the_thing_to_draw() {
   } } }
   pf = roof_match(s, plane, 0.001);
   assert(pf.rf_kind == ROOF_PLANE, "a plane is recognised as a plane");
-  assert(pf.rf_res < 0.000001, "with a residual of {pf.rf_res}");
+  // a millionth where a `float` is a double; where it is a single (a 32-bit program) it holds
+  // about seven digits, and a hundred thousandth of these heights, which reach 10
+  tight = if 1.0 + 0.000000000001 > 1.0 { 0.000001 } else { 0.0001 };
+  assert(pf.rf_res < tight, "with a residual of {pf.rf_res}");
+
+  // …wherever on the map it lies.  The same disc and the same plane 30 cells out: the fit is
+  // taken about the footprint's own middle, so its distance from the origin costs it nothing.
+  out = hexset_chunk(30, 30, W, H);
+  slope = heights_new(30, 30, W, H);
+  for r in 0..H { for q in 0..W { if hexset_get(s, q, r) {
+    hexset_set(out, 30 + q, 30 + r, true);
+    height_set(slope, 30 + q, 30 + r, 2.0 + 0.5 * (wx(30 + q, 30 + r) - wx(30, 30)) + 0.25 * (wy(30 + q, 30 + r) - wy(30, 30)));
+  } } }
+  of = roof_match(out, slope, 0.001);
+  assert(of.rf_kind == ROOF_PLANE, "a plane 30 cells out is a plane too, got kind {of.rf_kind} at {of.rf_res}");
+  assert(of.rf_res < tight, "with a residual of {of.rf_res}");
 
   // A field that is a cone comes back as a cone.
   cone = heights_new(0, 0, W, H);

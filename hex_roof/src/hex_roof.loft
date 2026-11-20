@@ -328,15 +328,30 @@ pub struct RoofFit {
 }
 
 // Least squares z = a*x + b*y + c.  Covers flat and every shed/mono-pitch.
+//
+// The sums are taken about the footprint's own middle (the mean of its cells), and the
+// plane is carried back to the world's origin at the end.  Taken about the world's origin
+// they are sums of squares of the footprint's DISTANCE from it, and the determinants are
+// small differences of those: a `float` that is a single (a 32-bit program) had no digits
+// left for the plane 30 cells out — a perfect plane read a residual of 0.019 and
+// `roof_match` answered `ROOF_UNKNOWN` — and a double was down to 0.0001 at 1000 cells.
 pub fn roof_plane_fit(s: HexSet, f: Heights) -> RoofFit {
-  sxx = 0.0; sxy = 0.0; sx = 0.0; syy = 0.0; sy = 0.0; sn = 0.0;
+  mx = 0.0; my = 0.0; sn = 0.0;
+  for r in hexset_r0(s)..hexset_r0(s) + hexset_h(s) {
+    for q in hexset_q0(s)..hexset_q0(s) + hexset_w(s) {
+      if hexset_get(s, q, r) { mx = mx + cellx(q, r); my = my + celly(q, r); sn = sn + 1.0; }
+    }
+  }
+  mx = mx / sn ?? 0.0;
+  my = my / sn ?? 0.0;
+  sxx = 0.0; sxy = 0.0; sx = 0.0; syy = 0.0; sy = 0.0;
   sxz = 0.0; syz = 0.0; sz = 0.0;
   for r in hexset_r0(s)..hexset_r0(s) + hexset_h(s) {
     for q in hexset_q0(s)..hexset_q0(s) + hexset_w(s) {
       if hexset_get(s, q, r) {
-        x = cellx(q, r); y = celly(q, r); z = height_get(f, q, r);
+        x = cellx(q, r) - mx; y = celly(q, r) - my; z = height_get(f, q, r);
         sxx = sxx + x * x; sxy = sxy + x * y; sx = sx + x;
-        syy = syy + y * y; sy = sy + y; sn = sn + 1.0;
+        syy = syy + y * y; sy = sy + y;
         sxz = sxz + x * z; syz = syz + y * z; sz = sz + z;
       }
     }
@@ -356,11 +371,14 @@ pub fn roof_plane_fit(s: HexSet, f: Heights) -> RoofFit {
      + sxz * (sxy * sy - syy * sx);
   a = da / det ?? 0.0;
   b = db / det ?? 0.0;
-  c = dc / det ?? 0.0;
+  // the height at the footprint's middle, then at the world's origin
+  mid = dc / det ?? 0.0;
+  c = mid - a * mx - b * my;
   res = 0.0;
   for r in hexset_r0(s)..hexset_r0(s) + hexset_h(s) {
     for q in hexset_q0(s)..hexset_q0(s) + hexset_w(s) {
       if hexset_get(s, q, r) {
+        // the residual of the plane as `roof_eval` draws it
         e = a * cellx(q, r) + b * celly(q, r) + c - height_get(f, q, r);
         if e < 0.0 { e = 0.0 - e; }
         if e > res { res = e; }
