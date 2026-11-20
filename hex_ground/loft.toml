@@ -1,6 +1,6 @@
 [package]
 name    = "hex_ground"
-version = "0.1.2"
+version = "0.1.3"
 loft    = ">=2026.10.0"
 repository = "loft-libs-world"
 description = "The ground of one place: a height and a surface kind per cell, shaped into terraces, a hill, a seat, a cut and cliffs"

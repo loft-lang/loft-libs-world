@@ -430,7 +430,7 @@ pub fn ground_height_at(g: const Ground, x: float, y: float) -> float {
   // the corner the point lies past, going round anticlockwise from corner 0 (north): corner j
   // sits at 90 + 60 j degrees
   a = atan2(y - cy, x - cx) * 180.0 / PI;
-  j0 = (((floor((a - 90.0) / 60.0) as integer) % 6) + 6) % 6 ?? 0;
+  j0 = (((floor((a - 90.0) / 60.0) as integer?) % 6) + 6) % 6 ?? 0;
   j1 = (j0 + 1) % 6 ?? 0;
   kx = g.gr_step * 0.5;
   my = g.gr_step * 0.28867513459481287;
@@ -485,7 +485,7 @@ pub fn ground_height_on(g: const Ground, levels: const Labels, x: float, y: floa
   k = lattice_k(q, r);
   m = lattice_m(q, r);
   a = atan2(y - cy, x - cx) * 180.0 / PI;
-  j0 = (((floor((a - 90.0) / 60.0) as integer) % 6) + 6) % 6 ?? 0;
+  j0 = (((floor((a - 90.0) / 60.0) as integer?) % 6) + 6) % 6 ?? 0;
   j1 = (j0 + 1) % 6 ?? 0;
   own = (if high { level } else { level - 1 } as float) * storey;
   hc = if (ground_level(g, levels, q, r) >= level) == high { height_get(g.gr_heights, q, r) } else { own };
