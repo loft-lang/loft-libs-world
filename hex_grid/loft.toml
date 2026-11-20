@@ -1,10 +1,11 @@
 [package]
 name    = "hex_grid"
-version = "0.1.4"
+version = "0.1.5"
 loft    = ">=0.8.5"
 
 api_compatible_with  = "0.1.0"   # oldest own release this is a drop-in for
 data_compatible_with = "0.1.0"   # oldest own release whose stored data this reads
+width32 = true   # its tests pass in a 32-bit program (loft --width 32); the library CI runs them there
 description = "Hex-grid geometry — pointy-top, ODD-R OFFSET coordinates: coordinate/pixel conversion, neighbours, distance, corners and canonical edges, plus a square local basis for right-angled structures placed on the hex world."
 [library]
 entry = "src/hex_grid.loft"
