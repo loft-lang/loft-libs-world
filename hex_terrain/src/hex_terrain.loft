@@ -156,17 +156,19 @@ pub fn terrain_flow_to(t: Terrain, c: integer, r: integer) -> (integer, integer)
 }
 
 // ── Hashed noise (deterministic, overflow-trap-safe) ───────────────────────
-// Every intermediate stays under 2^31 via masks, so products stay < 2^63.
+// Every intermediate stays under 2^31 via masks, so products stay < 2^63.  The products are
+// worked out in 64 bits on every build (`i64`): in a 32-bit program a 32-bit product reads
+// null, and every seed would build the same world.
 
 fn th_hash(seed: integer, ix: integer, iy: integer, ch: integer) -> integer {
-  a = (ix * 73856093) & 0x7FFFFFFF;
-  b = (iy * 19349663) & 0x7FFFFFFF;
-  c = (ch * 83492791) & 0x7FFFFFFF;
-  s = (seed * 1597334677) & 0x7FFFFFFF;
-  n = a ^ b ^ c ^ s;
+  a = ((ix as i64) * 73856093) & 0x7FFFFFFF;
+  b = ((iy as i64) * 19349663) & 0x7FFFFFFF;
+  c = ((ch as i64) * 83492791) & 0x7FFFFFFF;
+  s = ((seed as i64) * 1597334677) & 0x7FFFFFFF;
+  n: i64 = a ^ b ^ c ^ s;
   n = n ^ (n >> 13);
   n = (n * 1274126177) & 0x7FFFFFFF;
-  n ^ (n >> 16)
+  ((n ^ (n >> 16)) & 0x7FFFFFFF) as integer
 }
 
 // A reproducible value in 0..1 for this seed and cell.  A hash, not a random: the same
@@ -613,12 +615,13 @@ pub struct TerrainRiver {
 }
 
 fn th_cellhash(seed: integer, a1: integer, a2: integer, b1: integer, b2: integer, ch: integer) -> float {
-  n = (a1 * 73856093) & 0x7FFFFFFF;
-  n = n ^ ((a2 * 19349663) & 0x7FFFFFFF);
-  n = n ^ ((b1 * 83492791) & 0x7FFFFFFF);
-  n = n ^ ((b2 * 1297357571) & 0x7FFFFFFF);
-  n = n ^ ((ch * 668265263) & 0x7FFFFFFF);
-  n = n ^ ((seed * 1597334677) & 0x7FFFFFFF);
+  // the products in 64 bits on every build, as `th_hash` works its own out
+  n: i64 = ((a1 as i64) * 73856093) & 0x7FFFFFFF;
+  n = n ^ (((a2 as i64) * 19349663) & 0x7FFFFFFF);
+  n = n ^ (((b1 as i64) * 83492791) & 0x7FFFFFFF);
+  n = n ^ (((b2 as i64) * 1297357571) & 0x7FFFFFFF);
+  n = n ^ (((ch as i64) * 668265263) & 0x7FFFFFFF);
+  n = n ^ (((seed as i64) * 1597334677) & 0x7FFFFFFF);
   n = n ^ (n >> 13);
   n = (n * 1274126177) & 0x7FFFFFFF;
   ((n ^ (n >> 16)) & 0x7FFFFFFF) as float / 2147483648.0

@@ -34,6 +34,15 @@ LAKE  = 1;
 PLAIN = 2;
 ROCK  = 3;
 
+// Whether `got` is `want`: within `tight` where a `float` is a double (0.0 asks for the very
+// value), and within a hundred thousandth of `want`'s size where it is a single (a 32-bit
+// program), which holds about seven digits.
+fn close_to(got: float, want: float, tight: float) -> boolean {
+  size = if want < 0.0 { -want } else { want };
+  room = if 1.0 + 0.000000000001 > 1.0 { tight } else { size * 0.00001 };
+  got - want <= room && want - got <= room
+}
+
 fn types4() -> vector<TerrainType> {
   ts: vector<TerrainType> = [];
   ts += [TerrainType { tt_key: "sea",   tt_rise: 0.0,   tt_steep: 0.0,  tt_wet: true }];
@@ -165,7 +174,7 @@ fn test_sampling_is_pure_but_the_record_depends_on_the_whole_map() {
          "cell (2,1) drains 5 tiles in the small map and 11 in the big one");
   assert(!(small.tr_wet[ia] ?? true) && (big.tr_wet[ib] ?? false),
          "which crosses tp_acc_min = 6, so the big map calls that cell water");
-  assert((small.tr_relief[ia] ?? 0.0) == 154.0 && (big.tr_relief[ib] ?? 0.0) == 0.0,
+  assert(close_to(small.tr_relief[ia] ?? 0.0, 154.0, 0.0) && (big.tr_relief[ib] ?? 0.0) == 0.0,
          "and a water cell contributes ZERO relief");
 
   // …and that reaches the fine surface, well inside both windows.
@@ -188,12 +197,12 @@ fn test_sampling_is_pure_but_the_record_depends_on_the_whole_map() {
   }
   assert(nsame + ndiff == 27, "27 interior samples");
   assert(ndiff == 24, "24 of them differ between the two extents, got {ndiff}");
-  assert(abs(worst - 15.103122697077197) < 1e-9, "by up to 15.1 m, got {worst}");
+  assert(close_to(worst, 15.103122697077197, 1e-9), "by up to 15.1 m, got {worst}");
 
   // The number that makes it concrete: the small map has no rivers at all, and
   // the big one has five — same content, same seed, same parameters.
   assert(len(terrain_rivers(small, ty, p)) == 0, "no course reaches tp_acc_min in the 5x5");
-  assert(len(terrain_rivers(big, ty, p)) == 5, "five do in the 8x8");
+  assert(len(terrain_rivers(big, ty, p)) == 5, "five do in the 8x8, got {len(terrain_rivers(big, ty, p))}");
 }
 
 // @HXT-003 — THE PASSES HAVE AN ORDER, AND HYDROLOGY REWRITES THE HEIGHTS YOU
@@ -258,7 +267,7 @@ fn test_relief_compounds_by_the_number_of_steep_neighbours() {
   // Cell (3,2) = 320 m, beside the filled lake at 110.05: max 209.95 with four
   // steep neighbours -> 209.95 * (0.6 + 4 * 0.2) = 293.93.
   b = terrain_idx(t, 3, 2);
-  assert(abs((t.tr_relief[b] ?? 0.0) - 293.93) < 1e-9,
+  assert(close_to(t.tr_relief[b] ?? 0.0, 293.93, 1e-9),
          "209.95 * 1.4 = 293.93, got {t.tr_relief[b] ?? 0.0}");
 
   // The lake itself, and the sea column, take none.
@@ -287,20 +296,20 @@ fn test_a_cell_centre_does_not_read_the_cells_own_height() {
   // The kernel weight of a neighbour at exactly one tile: (1 - 1/1.02^2)^2.
   w = 1.0 - (1.0 / (1.02 * 1.02) ?? 0.0);
   w = w * w;
-  assert(abs(w - 0.001507863550543432) < 1e-15, "the neighbour weight, got {w}");
+  assert(close_to(w, 0.001507863550543432, 1e-15), "the neighbour weight, got {w}");
 
   (cx, cy) = terrain_center(p, 2, 2);
   own = terrain_blend_h(t, p, cx, cy);
-  assert(abs(own - (100.0 / (1.0 + 6.0 * w) ?? 0.0)) < 1e-12,
+  assert(close_to(own, 100.0 / (1.0 + 6.0 * w) ?? 0.0, 1e-12),
          "its own centre reads 100/(1+6w) = 99.103, not 100 — got {own}");
   assert(own < 100.0 && own > 99.0, "a 0.9% dilution");
 
   // …and the neighbour picks up exactly what this cell lost.
   (nx1, ny1) = terrain_center(p, 3, 2);
   nb = terrain_blend_h(t, p, nx1, ny1);
-  assert(abs(nb - (100.0 * w / (1.0 + 6.0 * w) ?? 0.0)) < 1e-12,
+  assert(close_to(nb, 100.0 * w / (1.0 + 6.0 * w) ?? 0.0, 1e-12),
          "the neighbour's centre reads 100w/(1+6w) = 0.149, got {nb}");
-  assert(abs((own + 6.0 * nb) - 100.0) < 1e-9, "the seven readings account for the whole 100 m");
+  assert(close_to(own + 6.0 * nb, 100.0, 1e-9), "the seven readings account for the whole 100 m");
 }
 
 // @HXT-006 — OUTSIDE THE MAP THERE IS NO EDGE, ONLY A PLATEAU.  The kernel
@@ -323,7 +332,7 @@ fn test_outside_the_map_is_a_plateau_and_never_a_refusal() {
   assert(inside < 420.0, "at its own centre the blend is still diluted, got {inside}");
   for k in [1.0, 2.0, 4.0, 20.0] {
     out = terrain_blend_h(t, p, ex + k * TILE, ey);
-    assert(abs(out - 420.0) < 1e-9, "{k} tiles past the edge still reads 420 m, got {out}");
+    assert(close_to(out, 420.0, 1e-9), "{k} tiles past the edge still reads 420 m, got {out}");
   }
   // …flatter outside than inside: every cell the kernel finds is the same clamped one.
   far = terrain_blend_h(t, p, ex + 20.0 * TILE, ey);
