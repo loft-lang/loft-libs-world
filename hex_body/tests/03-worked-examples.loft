@@ -28,6 +28,13 @@ const W = 0.5;                 // the half-width every proxy example uses
 
 fn fabs3(x: float) -> float { if x < 0.0 { 0.0 - x } else { x } }
 
+// How far a reading may lie from what it should be: `tight` where a `float` is a double, and a
+// hundred thousandth of `size` — the size of the numbers that went into it — where it is a
+// single (a 32-bit program), which holds about seven digits.
+fn room(tight: float, size: float) -> float {
+  if 1.0 + 0.000000000001 > 1.0 { tight } else { size * 0.00001 }
+}
+
 // The fixture: an arm.  Bone 0 is 3 long from the origin; bone 1 hangs off its
 // tip and is 2 long.  Both are planar — the axis every 2-D rig leaves implicit.
 fn arm() -> Rig {
@@ -110,7 +117,7 @@ fn test_the_values_vector_is_positional_and_unchecked() {
   j = rig_joint(r, 1);
   assert(!joint_fits(j, 9.0), "9.0 turns does not fit a +-0.25 joint");
   (_e, _f, nx, ny) = rig_world_seg(r, [0.0, 9.0], 1);
-  assert(fabs3(nx - 5.0) < 1e-12 && fabs3(ny) < 1e-12,
+  assert(fabs3(nx - 5.0) < room(1e-12, 5.0) && fabs3(ny) < room(1e-12, 5.0),
          "yet its pose is the neutral one to the last ulp, got ({nx},{ny})");
 
   // The doorstep the caller owes: a refusal names an offer and a residual.
@@ -307,7 +314,8 @@ fn test_a_wheel_rolls_by_construction_not_by_tuning() {
     ska = wheel_skid(radius, acc, travel);
     if ska > worst_acc { worst_acc = ska; }
   }
-  assert(worst_derived < 1e-11, "7400 units of travel, derived: still machine dust ({worst_derived})");
+  // the journey ends at 7400, which is the size the skid is a rounding of
+  assert(worst_derived < room(1e-11, 7400.0), "7400 units of travel, derived: still machine dust ({worst_derived})");
   assert(worst_acc > worst_derived * 1000.0,
          "the same journey accumulated is over a thousand times worse ({worst_acc})");
 

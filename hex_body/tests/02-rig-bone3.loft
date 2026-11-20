@@ -19,6 +19,16 @@ fn fabs3(x: float) -> float { if x < 0.0 { 0.0 - x } else { x } }
 
 fn worse(a: float, b: float) -> float { if a > b { a } else { b } }
 
+// Whether a `float` is a double here.  In a 32-bit program it is a single: about seven digits.
+fn wide() -> boolean { 1.0 + 0.000000000001 > 1.0 }
+
+// How far a reading may lie from what it should be: `tight` where a `float` is a double, and a
+// hundred thousandth of `size` — the size of the numbers that went into it — where it is a
+// single.
+fn room(tight: float, size: float) -> float {
+  if wide() { tight } else { size * 0.00001 }
+}
+
 // The 0.1.0 fixture, verbatim from `01-hex-body.loft`.
 fn planar_arm() -> Rig {
   r = rig_new();
@@ -39,7 +49,17 @@ fn test_a_planar_rig_writes_the_bytes_zero_one_wrote() {
        + "\nbone 0 parent -1 at 0 0 len 1.5 lim -0.5 0.5"
        + "\nbone 1 parent 0 at 0.8660254037844386 0.25 len 0.37 lim -0.125 0.125";
   got = rig_write(planar_arm(), "arm");
-  assert(got == want, "a planar rig's bytes are unchanged across the version.\nwant: {want}\ngot:  {got}");
+  // ⚠ Where a `float` is a single the rig HOLDS seven digits, so the offset written is the
+  // number held; every other byte is the one 0.1.0 wrote.
+  held = if wide() { want } else { want.replace("0.8660254037844386", "0.8660254") };
+  assert(got == held, "a planar rig's bytes are unchanged across the version.\nwant: {held}\ngot:  {got}");
+
+  // ⚠ And the bytes 0.1.0 wrote are READ on every build.  A reader that checked a number's
+  // spelling at the width of its own `float` refused this rig whole in a 32-bit program.
+  back = rig_read(want);
+  assert(rig_count(back) == 2, "the bytes 0.1.0 wrote are read, got {rig_count(back)} bones");
+  assert(rig_eq(back, planar_arm()), "as the rig that wrote them");
+  assert(rig_write(back, "arm") == held, "and written again as this build writes it");
 }
 
 // ⚠⚠ A SPATIAL BONE CHANGES ITS RECORD TAG, and the reason is a measurement of
@@ -137,7 +157,8 @@ fn test_the_planar_pose_survives_the_third_dimension() {
     worst = worse(worst, worse(fabs3(qx - px), fabs3(qy - py)));
     assert(qz == 0.0, "bone {i} of a planar rig stays at z = 0");
   }
-  assert(worst < 0.000000000000001,
+  // the coordinates of this chain run to about 3 m
+  assert(worst < room(0.000000000000001, 3.0),
          "a planar chain agrees to within 1e-15 m, got {worst}");
 
   // ⚠ THE CONTROL: can this comparison produce a non-trivial reading at all?
@@ -155,9 +176,9 @@ fn test_a_lateral_hinge_leaves_the_plane() {
   r = rig_bone3(r, -1, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, -0.5, 0.5);
   (_, _, _, x, y, z) = rig_world_seg3(r, [0.25], 0);
   // a quarter turn about +y takes the bone's own +x to -z
-  assert(fabs3(x) < 0.000000000000001 && fabs3(y) < 0.000000000000001,
+  assert(fabs3(x) < room(0.000000000000001, 1.0) && fabs3(y) < room(0.000000000000001, 1.0),
          "a quarter turn about +y empties x and y: ({x}, {y})");
-  assert(fabs3(z + 1.0) < 0.000000000000001, "and puts the tip at z = -1, got {z}");
+  assert(fabs3(z + 1.0) < room(0.000000000000001, 1.0), "and puts the tip at z = -1, got {z}");
 
   // the control: the SAME rig about the PLANAR axis never leaves z = 0
   q = rig_new();
@@ -182,7 +203,7 @@ fn test_an_offset_in_z_lifts_the_bone() {
   // ⚠ The offset rides the PARENT's rotation, not its own — the same rule the
   // 2-D code follows, and a z offset under a planar parent is unmoved by it.
   (_, _, qz, _, _, _) = rig_world_seg3(r, [0.25, 0.0], 1);
-  assert(qz == 0.42, "turning the parent about +z leaves a z offset where it was: {qz}");
+  assert(fabs3(qz - 0.42) <= room(0.0, 0.42), "turning the parent about +z leaves a z offset where it was: {qz}");
 }
 
 // ⚠ The axis is stored AS GIVEN and normalised only at use — `hex_part`'s rule,
@@ -306,16 +327,16 @@ fn test_a_frames_basis_is_a_rotation() {
   c0 = f.fr_00 * f.fr_00 + f.fr_10 * f.fr_10 + f.fr_20 * f.fr_20;
   c1 = f.fr_01 * f.fr_01 + f.fr_11 * f.fr_11 + f.fr_21 * f.fr_21;
   c2 = f.fr_02 * f.fr_02 + f.fr_12 * f.fr_12 + f.fr_22 * f.fr_22;
-  assert(fabs3(c0 - 1.0) < 0.000000000001, "column 0 is unit: {c0}");
-  assert(fabs3(c1 - 1.0) < 0.000000000001, "column 1 is unit: {c1}");
-  assert(fabs3(c2 - 1.0) < 0.000000000001, "column 2 is unit: {c2}");
+  tol = room(0.000000000001, 1.0);
+  assert(fabs3(c0 - 1.0) < tol, "column 0 is unit: {c0}");
+  assert(fabs3(c1 - 1.0) < tol, "column 1 is unit: {c1}");
+  assert(fabs3(c2 - 1.0) < tol, "column 2 is unit: {c2}");
 
   // and they are mutually perpendicular
   d01 = f.fr_00 * f.fr_01 + f.fr_10 * f.fr_11 + f.fr_20 * f.fr_21;
   d02 = f.fr_00 * f.fr_02 + f.fr_10 * f.fr_12 + f.fr_20 * f.fr_22;
   d12 = f.fr_01 * f.fr_02 + f.fr_11 * f.fr_12 + f.fr_21 * f.fr_22;
-  assert(fabs3(d01) < 0.000000000001 && fabs3(d02) < 0.000000000001
-         && fabs3(d12) < 0.000000000001,
+  assert(fabs3(d01) < tol && fabs3(d02) < tol && fabs3(d12) < tol,
          "the columns are perpendicular: {d01}, {d02}, {d12}");
 
   // ⚠ RIGHT-handed: column0 x column1 = column2.  A mirrored basis is
@@ -323,9 +344,7 @@ fn test_a_frames_basis_is_a_rotation() {
   cx = f.fr_10 * f.fr_21 - f.fr_20 * f.fr_11;
   cy = f.fr_20 * f.fr_01 - f.fr_00 * f.fr_21;
   cz = f.fr_00 * f.fr_11 - f.fr_10 * f.fr_01;
-  assert(fabs3(cx - f.fr_02) < 0.000000000001
-         && fabs3(cy - f.fr_12) < 0.000000000001
-         && fabs3(cz - f.fr_22) < 0.000000000001,
+  assert(fabs3(cx - f.fr_02) < tol && fabs3(cy - f.fr_12) < tol && fabs3(cz - f.fr_22) < tol,
          "and right-handed: ({cx},{cy},{cz}) vs ({f.fr_02},{f.fr_12},{f.fr_22})");
 }
 
@@ -340,14 +359,13 @@ fn test_a_point_off_the_axis_swings_where_trigonometry_says() {
 
   // a point 1 m FORWARD of the hinge, shut
   (sx, sy, sz) = rig_world_point3(r, [0.0, 0.0], 1, 0.0, 1.0, 0.0);
-  assert(fabs3(sx) < 0.000000000001 && fabs3(sy - 1.0) < 0.000000000001
-         && fabs3(sz - 1.0) < 0.000000000001,
+  tol = room(0.000000000001, 2.0);
+  assert(fabs3(sx) < tol && fabs3(sy - 1.0) < tol && fabs3(sz - 1.0) < tol,
          "shut, it is 1 m forward at the hinge's height: ({sx},{sy},{sz})");
 
   // a quarter turn about +x takes +y to +z
   (ox, oy, oz) = rig_world_point3(r, [0.0, 0.25], 1, 0.0, 1.0, 0.0);
-  assert(fabs3(ox) < 0.000000000001 && fabs3(oy) < 0.000000000001
-         && fabs3(oz - 2.0) < 0.000000000001,
+  assert(fabs3(ox) < tol && fabs3(oy) < tol && fabs3(oz - 2.0) < tol,
          "a quarter turn stands it straight up, 1 m above the hinge: ({ox},{oy},{oz})");
 
   // ⚠ TURNS, NOT DEGREES — the assertion that can tell them apart.  At 0.25
