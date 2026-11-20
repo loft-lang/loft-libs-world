@@ -16,7 +16,26 @@ fn box(w: integer, d: integer, reach: integer) -> HexSet {
   cells
 }
 
-fn near(a: float, b: float) -> boolean { a - b < 0.000000001 && b - a < 0.000000001 }
+// The smallest step a `float` of this build can take at 1: about 2.2e-16 where it has 64 bits,
+// 1.2e-7 where it has 32 (a 32-bit program).
+fn step_at_one() -> float {
+  e = 1.0;
+  while 1.0 + e * 0.5 > 1.0 { e = e * 0.5; }
+  e
+}
+
+// Whether two values are the same as far as this build's `float` can tell: within a thousand
+// millionth, or within 64 of its steps at their size where that is wider — which it is in a
+// 32-bit program, where a float holds about seven digits.
+fn near(a: float, b: float) -> boolean {
+  size = if a < 0.0 { -a } else { a };
+  other = if b < 0.0 { -b } else { b };
+  if other > size { size = other; }
+  if size < 1.0 { size = 1.0; }
+  room = 64.0 * step_at_one() * size;
+  if room < 0.000000001 { room = 0.000000001; }
+  a - b < room && b - a < room
+}
 
 fn main() {
   g = ground_new(-4, -4, 9, 9, 1.5, 3);
