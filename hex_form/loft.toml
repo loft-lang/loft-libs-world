@@ -1,6 +1,6 @@
 [package]
 name    = "hex_form"
-version = "0.1.9"
+version = "0.1.10"
 loft    = ">=2026.10.0"
 
 api_compatible_with  = "0.1.2"   # DECLARED BREAK: not a drop-in for 0.1.0 — see below.
@@ -8,6 +8,7 @@ api_compatible_with  = "0.1.2"   # DECLARED BREAK: not a drop-in for 0.1.0 — s
                                  # floor moves because a drop-in must also read what the
                                  # older release stored, and that is what changed.
 data_compatible_with = "0.1.2"   # DECLARED BREAK: hex_field's `EdgeSet` gained a field, so
+width32 = true   # its tests pass in a 32-bit program (loft --width 32); the library CI runs them there
                                  # `EdgeSet` / `HexDoc` / `Stencil` reshape through the
                                  # dependency and a store written by 0.1.0 is read at the
                                  # wrong offsets.

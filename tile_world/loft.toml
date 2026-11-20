@@ -1,6 +1,6 @@
 [package]
 name    = "tile_world"
-version = "0.14.1"
+version = "0.14.2"
 loft    = ">=2026.10.0"
 repository = "loft-libs-world"
 description = "An unbounded, layered square-grid world, and the routines that answer questions about it: paths, sight and light"
@@ -13,6 +13,7 @@ categories  = ["game", "world"]
 # and 0.9.0 are not drop-ins (`loft compat floor`); the registry keeps them installable.
 api_compatible_with  = "0.14.0"  # oldest own release this is a drop-in for
 data_compatible_with = "0.14.0"  # oldest own release whose stored data this reads
+width32 = true   # its tests pass in a 32-bit program (loft --width 32); the library CI runs them there
 
 [library]
 entry = "src/tile_world.loft"

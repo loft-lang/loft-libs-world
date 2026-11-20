@@ -9,12 +9,19 @@
 use hex_field::*;
 use hex_grid::*;
 
+// How far two positions may lie apart and be the same: a thousand millionth where a `float` is
+// a double, a hundred thousandth where it is a single (a 32-bit program) — a hex step is 0.5
+// or more, so either tells a wrong row from a right one.
+fn same_place() -> float {
+  if 1.0 + 0.000000000001 > 1.0 { 0.000000001 } else { 0.00001 }
+}
+
 fn test_the_lattice_map_is_hex_grids_world_position() {
   for r in -5..5 { for q in -5..5 {
     (x, y) = hex_grid::hex_to_px(q, r);
-    assert(abs((lattice_k(q, r) as float) * 0.8660254037844386 - x) < 0.000000001,
+    assert(abs((lattice_k(q, r) as float) * 0.8660254037844386 - x) < same_place(),
            "x of ({q}, {r}): lattice {lattice_k(q, r)} against hex_grid {x}");
-    assert(abs((lattice_m(q, r) as float) * 0.5 - y) < 0.000000001,
+    assert(abs((lattice_m(q, r) as float) * 0.5 - y) < same_place(),
            "y of ({q}, {r}): lattice {lattice_m(q, r)} against hex_grid {y}");
   } }
 }

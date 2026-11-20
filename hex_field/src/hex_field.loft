@@ -364,14 +364,18 @@ pub fn hex_dist(q1: integer, r1: integer, q2: integer, r2: integer) -> integer {
 // Example: @HXL-005
 pub fn form_circle(w: integer, radius: float) -> HexSet {
   s = hexset_new(w);
-  lim = radius * radius;
+  // A centre is (k·√3/2, m/2), so four times its squared distance is the whole number
+  // 3k² + m²: the cell's side of the comparison is exact, and only the radius is a float.
+  // The room beside it is what a radius given as n·√3 is off by: a thousand millionth where
+  // a `float` is a double, two millionths of the limit where it is a single (a 32-bit
+  // program) — a whole number apart from its neighbour either way.
+  lim = 4.0 * radius * radius;
+  room = if 1.0 + 0.000000000001 > 1.0 { 0.000000004 } else { lim * 0.000002 };
   for r in s.hs_r0..s.hs_r0 + s.hs_h {
     for q in s.hs_q0..s.hs_q0 + s.hs_w {
       k = lattice_k(q, r);
       m = lattice_m(q, r);
-      x = (k as float) * 0.8660254037844386;
-      y = (m as float) * 0.5;
-      if x * x + y * y <= lim + 0.000000001 { hexset_set(s, q, r, true); }
+      if ((3 * k * k + m * m) as float) <= lim + room { hexset_set(s, q, r, true); }
     }
   }
   s
@@ -920,7 +924,9 @@ pub fn doc_write_all(
     f += ((n * 8) as i32);
     for q in 0..w {
       for r in 0..h {
-        f += height_get(hz, hexset_q0(s) + q, hexset_r0(s) + r);
+        // a height is 8 bytes in the file on every build (`f64`): in a 32-bit program a
+        // `float` is 4, and a file written there could not be read anywhere else
+        f += (height_get(hz, hexset_q0(s) + q, hexset_r0(s) + r) as f64);
       }
     }
   }
@@ -1045,7 +1051,7 @@ pub fn doc_read(path: text) -> HexDoc {
       if blen != n * 8 { d.doc_code = HXF_BAD_SECTION; return d; }
       for q in 0..w {
         for r in 0..h {
-          hv = f#read as float;
+          hv = (f#read as f64) as float;
           height_set(d.doc_heights, q0 + q, r0 + r, hv);
         }
       }
