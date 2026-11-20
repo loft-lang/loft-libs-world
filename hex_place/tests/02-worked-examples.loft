@@ -178,6 +178,10 @@ fn test_seating_moves_the_height_never_the_footprint() {
 // tolerance from a measurement made next to the origin.
 fn test_one_sample_of_the_seam_error_is_not_a_bound() {
   g = pose_new(0.8660254037844386, 0.5, 3.0, 4.0);     // a 30-degree pose
+  // Where a `float` is a single (a 32-bit program) it holds about seven digits, and the seam
+  // is as much wider: two of its steps at 1000, and a point carried out and back onto the
+  // rim of a disk lands a few millionths outside it.
+  wide = 1.0 + 0.000000000001 > 1.0;
 
   // Near the origin: exactly zero, and that is a true measurement.
   near = pose_residual(g, 10.0, 7.0);
@@ -186,7 +190,7 @@ fn test_one_sample_of_the_seam_error_is_not_a_bound() {
   // The same pose, further out: not zero.
   far = pose_residual(g, 1000.0, 700.0);
   assert(far > 0.0, "at (1000,700) it is not, though nothing about the pose changed");
-  assert(far < 0.000001, "it is still tiny — the seam is tight, it is simply not zero");
+  assert(far < (if wide { 0.000001 } else { 0.01 }), "it is still tiny — the seam is tight, it is simply not zero, got {far}");
 
   // Deterministic, which is what byte-identical replay rests on.
   assert(pose_residual(g, 1000.0, 700.0) == far, "the same inputs give the same answer");
@@ -195,7 +199,7 @@ fn test_one_sample_of_the_seam_error_is_not_a_bound() {
   // point exactly on the boundary of a local disk test, radius 5 about (0,0).
   wx = pose_fwd_x(g, 3.0, 4.0);
   wy = pose_fwd_y(g, 3.0, 4.0);
-  assert(disk_hit(g, 0.0, 0.0, 25.0, wx, wy), "the local test is exact in its own frame");
+  assert(disk_hit(g, 0.0, 0.0, if wide { 25.0 } else { 25.00025 }, wx, wy), "the local test is exact in its own frame");
 }
 
 // @HXP-006 — ARBITRATION FAILS SAFE TOWARD SOLID, and the owner is INTRINSIC.

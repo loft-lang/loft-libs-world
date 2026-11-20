@@ -10,6 +10,13 @@ use hex_body::*;
 
 fn fabs2(x: float) -> float { if x < 0.0 { 0.0 - x } else { x } }
 
+// How far a reading may lie from what it should be: `tight` where a `float` is a double, and a
+// hundred thousandth of `size` — the size of the numbers that went into it — where it is a
+// single (a 32-bit program), which holds about seven digits.
+fn room(tight: float, size: float) -> float {
+  if 1.0 + 0.000000000001 > 1.0 { tight } else { size * 0.00001 }
+}
+
 fn main() {
   (x, y) = pose_of(0.25, 1.0, 0.0);                  // quarter turn of (1,0) -> ~(0,1)
   assert(fabs2(x) < 0.0001 && y > 0.9999, "a quarter turn takes (1,0) to (0,1)");
@@ -33,7 +40,8 @@ fn test_a_wheel_rolls_without_slip() {
     sk = wheel_skid(r, wheel_value(travel, r, 0.0), travel);
     if sk > worst { worst = sk; }
   }
-  assert(worst < 0.000000000001, "a derived wheel value does not slip beyond machine eps");
+  // the furthest travel here is 7.4, which is the size the skid is a rounding of
+  assert(worst < room(0.000000000001, 7.4), "a derived wheel value does not slip beyond machine eps, got {worst}");
   // control: spin off-travel and it skids by whole units.
   off = wheel_skid(r, wheel_value(10.0, r, 0.0), 3.0);
   assert(off > 1.0, "an off-travel spin skids");

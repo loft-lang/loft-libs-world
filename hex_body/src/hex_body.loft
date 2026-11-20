@@ -312,9 +312,15 @@ fn rig_word_is_int(line: text, i: integer) -> boolean {
   v = w as integer ?? 0;
   "{v}" == w
 }
+//
+// A float's spelling is checked as a DOUBLE on every build (`f64`).  In a 32-bit program a
+// `float` is a single: checked as one, `0.8660254037844386` re-spells as `0.8660254`, and a
+// rig a 64-bit program wrote was refused whole.  The number is then HELD as a `float`, so it
+// reads there to the seven digits a single has; what a 32-bit program writes is a short
+// spelling, which is a double's spelling too.
 fn rig_word_is_float(line: text, i: integer) -> boolean {
   w = rig_word(line, i);
-  v = w as float ?? 0.0;
+  v = w as f64 ?? (0.0 as f64);
   "{v}" == w
 }
 

@@ -1,6 +1,6 @@
 [package]
 name    = "hex_body"
-version = "0.3.6"
+version = "0.3.7"
 loft    = ">=2026.8.0"
 
 # 0.2.0 adds the third dimension: `rig_bone3` with an explicit revolute axis and
@@ -50,6 +50,7 @@ loft    = ">=2026.8.0"
 # the point.
 api_compatible_with  = "0.2.0"   # oldest own release this is a drop-in for
 data_compatible_with = "0.1.0"   # oldest own release whose stored data this reads
+width32 = true   # its tests pass in a 32-bit program (loft --width 32); the library CI runs them there
 [library]
 entry = "src/hex_body.loft"
 

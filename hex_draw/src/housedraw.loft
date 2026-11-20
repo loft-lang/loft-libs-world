@@ -37,7 +37,6 @@ use hex_way::*;
 use hex_roof::*;
 use hex_grid::*;
 
-const EPS = 0.000000001;
 
 // Opening materials — values in the SAME vocabulary as the wall materials, because they
 // share the one slot.  A door overrides `solid`; a window does not (it overrides opacity,
@@ -73,18 +72,27 @@ pub const OPEN_GAP    = 3;
 
 // ── 1. THE FLOOR ────────────────────────────────────────────────────────────
 //
-// The massing is filled FIRST and walled second.  Comparisons are inclusive (<= bound
-// + eps) so the fill never loses a column of cells to the structural tie: along u every
-// cell-to-side distance is an exact multiple of sqrt(3)/2, which is exactly the default
-// halfwidth, so a strict comparison sits on the last bit of a float for a whole column.
+// The massing is filled FIRST and walled second.  The comparison is inclusive, so the fill
+// never loses a column of cells to the structural tie: along u every cell-to-side distance is
+// an exact multiple of sqrt(3)/2, which is exactly the default halfwidth, so a comparison of
+// floats sits on the last bit of a float for a whole column.
+//
+// So it is made in whole numbers.  A cell's centre in the plan's frame is (k * sqrt(3)/2,
+// m / 2) for whole k and m, and the plan is `wid` by `dep` steps: each is read off its float
+// by rounding to the nearest, which a single's seven digits carry as surely as a double's
+// sixteen, and `plan_holds` answers exactly.  An inclusive comparison of the floats
+// themselves (`<= bound + 0.000000001`) lost cells where a `float` is a single: a 1 x 9 plan
+// turned 60 degrees filled 13 cells for 17.
 pub fn draw_floor(p: Plan, cells: HexSet, types: Labels, floor_type: integer) -> integer {
-  hw = plan_hw(p);
-  hd = plan_hd(p);
+  wid = (round(plan_hw(p) / 0.8660254037844386) ?? 0.0) as integer;
+  dep = (round(plan_hd(p) / 0.8660254037844386) ?? 0.0) as integer;
   n = 0;
   for fr in hexset_r0(cells)..hexset_r0(cells) + hexset_h(cells) {
     for fq in hexset_q0(cells)..hexset_q0(cells) + hexset_w(cells) {
       (lu, lv) = plan_to_local(p, cell_x(fq, fr), cell_y(fq, fr));
-      if fabs(lu) <= hw + EPS && fabs(lv) <= hd + EPS {
+      k = (round(lu / 0.8660254037844386) ?? 0.0) as integer;
+      m = (round(lv * 2.0) ?? 0.0) as integer;
+      if plan_holds(wid, dep, k, m) {
         hexset_set(cells, fq, fr, true);
         label_set(types, fq, fr, floor_type);
         n = n + 1;
